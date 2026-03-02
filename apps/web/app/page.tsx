@@ -32,7 +32,7 @@ export default function LoginPage() {
       localStorage.setItem("user", JSON.stringify(data.user));
       localStorage.setItem("stores", JSON.stringify(data.stores));
 
-      window.location.href = "/dashboard";
+      window.location.href = "/select-holding";
     } catch (err) {
       setError("Connection error (is API running on :3001?)");
     }
