@@ -3,13 +3,17 @@ export function getToken(): string | null {
   return localStorage.getItem("accessToken");
 }
 
-export function requireTokenOrRedirect() {
+export function requireTokenOrRedirect(): string | null {
   const token = getToken();
-  if (!token) window.location.href = "/";
+  if (!token) {
+    if (typeof window !== "undefined") window.location.href = "/";
+    return null;
+  }
   return token;
 }
 
 export function logout() {
+  if (typeof window === "undefined") return;
   localStorage.removeItem("accessToken");
   localStorage.removeItem("user");
   localStorage.removeItem("stores");

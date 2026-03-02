@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { logout, requireTokenOrRedirect } from "../lib/auth";
+import { logout, requireTokenOrRedirect } from "../../lib/auth";
 
 type StoreRow = {
   storeId: string;
-  storeName: string;
-  storeCode: string;
   holdingId: string;
-  roleKey: string;
+  storeCode: string;
+  storeName: string;
   status: string;
+  roleKey: string;
 };
 
 export default function SelectStorePage() {
@@ -18,27 +18,42 @@ export default function SelectStorePage() {
 
   useEffect(() => {
     const token = requireTokenOrRedirect();
-    const holdingId = localStorage.getItem("selectedHoldingId");
+    if (!token) return;
 
+    const holdingId = localStorage.getItem("selectedHoldingId");
     if (!holdingId) {
       window.location.href = "/select-holding";
       return;
     }
 
-    fetch(`http://localhost:3001/stores?holdingId=${holdingId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((d) => setStores(d.stores || []))
-      .catch(() => setError("No se pudo cargar stores"));
+    (async () => {
+      try {
+        const res = await fetch(
+          `http://localhost:3001/stores?holdingId=${encodeURIComponent(holdingId)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        const data = await res.json();
+        if (!res.ok) return setError(data.error || "Error loading stores");
+
+        setStores(data.stores || []);
+      } catch {
+        setError("Connection error (API on :3001?)");
+      }
+    })();
   }, []);
 
+  function chooseStore(storeId: string) {
+    localStorage.setItem("selectedStoreId", storeId);
+    window.location.href = "/dashboard";
+  }
+
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
-      <div className="bg-white w-full max-w-lg rounded-2xl shadow p-6">
-        <div className="flex items-center justify-between mb-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-100 p-6">
+      <div className="bg-white p-8 rounded-2xl shadow-md w-full max-w-xl">
+        <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-bold">Selecciona Tienda (Store)</h1>
-          <button onClick={logout} className="text-sm underline text-gray-600">
+          <button className="text-sm underline" onClick={logout}>
             Logout
           </button>
         </div>
@@ -49,32 +64,35 @@ export default function SelectStorePage() {
           </div>
         )}
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {stores.map((s) => (
             <button
               key={s.storeId}
-              className="w-full text-left border rounded-xl p-4 hover:bg-gray-50"
-              onClick={() => {
-                localStorage.setItem("selectedStoreId", s.storeId);
-                window.location.href = "/dashboard";
-              }}
+              onClick={() => chooseStore(s.storeId)}
+              className="w-full text-left border p-4 rounded-xl hover:bg-gray-50"
             >
               <div className="font-semibold">
                 {s.storeName} ({s.storeCode})
               </div>
-              <div className="text-sm text-gray-500">
-                Role: {s.roleKey} • Status: {s.status}
+              <div className="text-xs text-gray-500">
+                Rol: {s.roleKey} · Status: {s.status}
               </div>
             </button>
           ))}
+
+          {stores.length === 0 && !error && (
+            <div className="text-sm text-gray-500">No hay stores visibles.</div>
+          )}
         </div>
 
-        <button
-          className="mt-4 text-sm underline"
-          onClick={() => (window.location.href = "/select-holding")}
-        >
-          ← Cambiar holding
-        </button>
+        <div className="mt-6">
+          <button
+            className="text-sm underline"
+            onClick={() => (window.location.href = "/select-holding")}
+          >
+            ← Volver a holdings
+          </button>
+        </div>
       </div>
     </div>
   );
