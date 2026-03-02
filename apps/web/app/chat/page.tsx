@@ -110,6 +110,7 @@ export default function ChatPage() {
     if (linkedEntityType === "purchase_order") return `/store/purchases?q=${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "return_case") return `/store/returns?q=${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "product") return `/store/products?q=${encodeURIComponent(linkedEntityId)}`;
+    if (linkedEntityType === "support_ticket") return `/store/support/${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "team_task") return "/store/tasks";
     return null;
   }

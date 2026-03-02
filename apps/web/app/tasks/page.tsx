@@ -85,6 +85,7 @@ export default function TasksPage() {
     if (linkedEntityType === "product") return `/store/products?q=${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "team_task") return "/store/tasks";
     if (linkedEntityType === "chat_message" || linkedEntityType === "chat_channel") return "/store/chat";
+    if (linkedEntityType === "support_ticket") return `/store/support/${encodeURIComponent(linkedEntityId)}`;
     return null;
   }
 

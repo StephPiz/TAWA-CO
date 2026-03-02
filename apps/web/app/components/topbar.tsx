@@ -39,6 +39,7 @@ export default function Topbar({ title, storeName }: Props) {
     if (linkedEntityType === "return_case") return `/store/returns?q=${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "product") return `/store/products?q=${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "chat_message" || linkedEntityType === "chat_channel") return "/store/chat";
+    if (linkedEntityType === "support_ticket") return `/store/support/${encodeURIComponent(linkedEntityId)}`;
     if (linkedEntityType === "team_task") return "/store/tasks";
     return "/store/tasks";
   }
@@ -180,6 +181,11 @@ export default function Topbar({ title, storeName }: Props) {
                 {t("suppliers")}
               </button>
             ) : null}
+            {permissions.customersRead ? (
+              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/customers")}>
+                {t("customers")}
+              </button>
+            ) : null}
             {permissions.financeRead ? (
               <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/purchases")}>
                 {t("purchases")}
@@ -221,6 +227,11 @@ export default function Topbar({ title, storeName }: Props) {
             <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/chat")}>
               {t("chat")}
             </button>
+            {permissions.supportWrite ? (
+              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/support")}>
+                {t("support")}
+              </button>
+            ) : null}
             <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/settings")}>
               {t("settings")}
             </button>

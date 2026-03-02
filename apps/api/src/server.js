@@ -111,6 +111,20 @@ async function canManageTasks(userId, storeId, roleKey) {
   return hasPermission(userId, storeId, "tasks.write");
 }
 
+async function canReadCustomers(userId, storeId, roleKey) {
+  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  const [ordersWrite, tasksWrite] = await Promise.all([
+    hasPermission(userId, storeId, "orders.write"),
+    hasPermission(userId, storeId, "tasks.write"),
+  ]);
+  return Boolean(ordersWrite || tasksWrite);
+}
+
+async function canManageSupport(userId, storeId, roleKey) {
+  if (["admin", "admin_ste", "owner", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  return hasPermission(userId, storeId, "tasks.write");
+}
+
 async function canUseChat(userId, storeId, roleKey) {
   if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
   return hasPermission(userId, storeId, "tasks.write");
@@ -185,6 +199,105 @@ const PURCHASE_ORDER_STATUSES = new Set([
 ]);
 const THREE_PL_LEG_STATUSES = new Set(["planned", "in_transit", "delivered", "delayed"]);
 const PRESENCE_STATUSES = new Set(["online", "away", "offline"]);
+const SUPPORT_TICKET_STATUSES = new Set(["open", "in_progress", "waiting_customer", "resolved", "closed"]);
+const SUPPORT_TICKET_PRIORITIES = new Set(["low", "medium", "high", "urgent"]);
+const SUPPORT_OPEN_STATUSES = new Set(["open", "in_progress", "waiting_customer"]);
+
+function addHours(date, hours) {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function getSupportSlaHours(priority) {
+  const p = String(priority || "medium");
+  if (p === "urgent") return { firstResponse: 1, resolution: 24 };
+  if (p === "high") return { firstResponse: 4, resolution: 48 };
+  if (p === "low") return { firstResponse: 24, resolution: 168 };
+  return { firstResponse: 12, resolution: 96 };
+}
+
+function computeSupportSlaDates(priority, baseDate) {
+  const start = baseDate instanceof Date ? baseDate : new Date();
+  const hours = getSupportSlaHours(priority);
+  return {
+    slaFirstResponseDueAt: addHours(start, hours.firstResponse),
+    slaResolutionDueAt: addHours(start, hours.resolution),
+  };
+}
+
+function isSupportTerminalStatus(status) {
+  return ["resolved", "closed"].includes(String(status || ""));
+}
+
+async function syncSupportSlaBreaches(storeId, actorUserId = null) {
+  const now = new Date();
+  const breachedTickets = await prisma.supportTicket.findMany({
+    where: {
+      storeId,
+      status: { in: Array.from(SUPPORT_OPEN_STATUSES) },
+      slaResolutionDueAt: { not: null, lt: now },
+      slaBreached: false,
+    },
+    select: {
+      id: true,
+      title: true,
+      assignedToUserId: true,
+    },
+    take: 300,
+  });
+
+  for (const t of breachedTickets) {
+    const updated = await prisma.supportTicket.update({
+      where: { id: t.id },
+      data: { slaBreached: true, slaBreachedAt: now },
+      select: { id: true, slaBreachNotifiedAt: true, assignedToUserId: true, title: true },
+    });
+
+    if (!updated.slaBreachNotifiedAt) {
+      await createNotificationSafe({
+        storeId,
+        userId: updated.assignedToUserId || null,
+        type: "system",
+        severity: "critical",
+        title: `SLA vencido: ${updated.title}`,
+        body: "El ticket superó el tiempo objetivo de resolución.",
+        linkedEntityType: "support_ticket",
+        linkedEntityId: updated.id,
+      });
+
+      await prisma.supportTicket.update({
+        where: { id: updated.id },
+        data: { slaBreachNotifiedAt: now },
+      });
+    }
+
+    const existingEscalationTask = await prisma.teamTask.findFirst({
+      where: {
+        storeId,
+        linkedEntityType: "support_ticket",
+        linkedEntityId: updated.id,
+        status: { in: ["open", "in_progress", "blocked"] },
+      },
+      select: { id: true },
+    });
+
+    if (!existingEscalationTask) {
+      await prisma.teamTask.create({
+        data: {
+          storeId,
+          title: `[SLA] Escalar ticket: ${updated.title}`,
+          description: "Ticket con SLA vencido. Revisar prioridad, respuesta y resolución inmediata.",
+          status: "open",
+          priority: "high",
+          dueAt: addHours(now, 4),
+          linkedEntityType: "support_ticket",
+          linkedEntityId: updated.id,
+          assignedToUserId: updated.assignedToUserId || null,
+          createdByUserId: actorUserId || null,
+        },
+      });
+    }
+  }
+}
 
 async function nextInvoiceNumber(tx, storeId) {
   const store = await tx.store.findUnique({
@@ -511,13 +624,15 @@ app.get("/stores/:storeId/permissions", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
 
-    const [canSensitive, canCatalogWrite, canOrdersWrite, canPayoutsWrite, canInvoicesWrite, canTasksWrite] = await Promise.all([
+    const [canSensitive, canCatalogWrite, canOrdersWrite, canPayoutsWrite, canInvoicesWrite, canTasksWrite, canCustomersRead, canSupportWrite] = await Promise.all([
       canReadSensitive(userId, storeId, membership.roleKey),
       canManageCatalog(userId, storeId, membership.roleKey),
       canManageOrders(userId, storeId, membership.roleKey),
       canManagePayouts(userId, storeId, membership.roleKey),
       canManageInvoices(userId, storeId, membership.roleKey),
       canManageTasks(userId, storeId, membership.roleKey),
+      canReadCustomers(userId, storeId, membership.roleKey),
+      canManageSupport(userId, storeId, membership.roleKey),
     ]);
 
     return res.json({
@@ -538,6 +653,8 @@ app.get("/stores/:storeId/permissions", requireAuth, async (req, res) => {
         financeRead: canSensitive,
         suppliersRead: canSensitive,
         tasksWrite: canTasksWrite,
+        customersRead: canCustomersRead,
+        supportWrite: canSupportWrite,
       },
     });
   } catch (err) {
@@ -1498,6 +1615,690 @@ app.get("/stores/:storeId/team", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("GET /stores/:storeId/team error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/customers", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const q = String(req.query.q || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canRead = await canReadCustomers(userId, storeId, membership.roleKey);
+    if (!canRead) return res.status(403).json({ error: "No permission to read customers" });
+
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    const customers = await prisma.customer.findMany({
+      where: {
+        storeId,
+        ...(q
+          ? {
+              OR: [
+                { email: { contains: q, mode: "insensitive" } },
+                { fullName: { contains: q, mode: "insensitive" } },
+                { country: { contains: q, mode: "insensitive" } },
+                { city: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        orders: {
+          select: {
+            id: true,
+            orderNumber: true,
+            orderedAt: true,
+            grossAmountEurFrozen: true,
+            netProfitEur: true,
+          },
+          orderBy: { orderedAt: "desc" },
+          take: 30,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    });
+
+    return res.json({
+      customers: customers.map((c) => {
+        const totalOrders = c.orders.length;
+        const totalRevenueEur = roundMoney(c.orders.reduce((sum, o) => sum + numberOrZero(o.grossAmountEurFrozen), 0));
+        const totalProfitEur = roundMoney(c.orders.reduce((sum, o) => sum + numberOrZero(o.netProfitEur), 0));
+        return {
+          id: c.id,
+          email: c.email,
+          fullName: c.fullName,
+          country: c.country,
+          city: c.city,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+          totalOrders,
+          totalRevenueEur: canSensitive ? totalRevenueEur : null,
+          totalProfitEur: canSensitive ? totalProfitEur : null,
+          lastOrderAt: c.orders[0]?.orderedAt || null,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error("GET /customers error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/customers/:customerId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { customerId } = req.params;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canRead = await canReadCustomers(userId, storeId, membership.roleKey);
+    if (!canRead) return res.status(403).json({ error: "No permission to read customers" });
+
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, storeId },
+      include: {
+        orders: {
+          include: {
+            items: {
+              select: {
+                id: true,
+                title: true,
+                quantity: true,
+                revenueEurFrozen: true,
+                cogsEurFrozen: true,
+                product: { select: { id: true, ean: true, brand: true, model: true } },
+              },
+            },
+            returns: {
+              select: {
+                id: true,
+                decision: true,
+                status: true,
+                quantity: true,
+                returnCostEur: true,
+                createdAt: true,
+              },
+            },
+          },
+          orderBy: { orderedAt: "desc" },
+          take: 200,
+        },
+        tickets: {
+          include: {
+            assignedTo: { select: { id: true, fullName: true, email: true } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        },
+      },
+    });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const summary = {
+      totalOrders: customer.orders.length,
+      totalRevenueEur: canSensitive
+        ? roundMoney(customer.orders.reduce((sum, o) => sum + numberOrZero(o.grossAmountEurFrozen), 0))
+        : null,
+      totalProfitEur: canSensitive
+        ? roundMoney(customer.orders.reduce((sum, o) => sum + numberOrZero(o.netProfitEur), 0))
+        : null,
+      totalReturns: customer.orders.reduce((sum, o) => sum + o.returns.length, 0),
+      openTickets: customer.tickets.filter((t) => !["resolved", "closed"].includes(t.status)).length,
+    };
+
+    return res.json({
+      customer: {
+        id: customer.id,
+        email: customer.email,
+        fullName: customer.fullName,
+        country: customer.country,
+        city: customer.city,
+        createdAt: customer.createdAt,
+        updatedAt: customer.updatedAt,
+      },
+      summary,
+      orders: customer.orders.map((o) => ({
+        ...o,
+        grossAmountOriginal: canSensitive ? normalizeMoney(o.grossAmountOriginal) : null,
+        grossFxToEur: canSensitive ? normalizeMoney(o.grossFxToEur) : null,
+        grossAmountEurFrozen: canSensitive ? normalizeMoney(o.grossAmountEurFrozen) : null,
+        feesEur: canSensitive ? normalizeMoney(o.feesEur) : null,
+        cpaEur: canSensitive ? normalizeMoney(o.cpaEur) : null,
+        shippingCostEur: canSensitive ? normalizeMoney(o.shippingCostEur) : null,
+        packagingCostEur: canSensitive ? normalizeMoney(o.packagingCostEur) : null,
+        returnCostEur: canSensitive ? normalizeMoney(o.returnCostEur) : null,
+        cogsEur: canSensitive ? normalizeMoney(o.cogsEur) : null,
+        netProfitEur: canSensitive ? normalizeMoney(o.netProfitEur) : null,
+        items: o.items.map((it) => ({
+          ...it,
+          revenueEurFrozen: canSensitive ? normalizeMoney(it.revenueEurFrozen) : null,
+          cogsEurFrozen: canSensitive ? normalizeMoney(it.cogsEurFrozen) : null,
+        })),
+        returns: o.returns.map((r) => ({
+          ...r,
+          returnCostEur: canSensitive ? normalizeMoney(r.returnCostEur) : null,
+        })),
+      })),
+      tickets: customer.tickets,
+    });
+  } catch (err) {
+    console.error("GET /customers/:customerId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/support/tickets", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const status = String(req.query.status || "").trim();
+    const priority = String(req.query.priority || "").trim();
+    const q = String(req.query.q || "").trim();
+    const assignedToMe = String(req.query.assignedToMe || "").trim() === "1";
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to read support tickets" });
+
+    await syncSupportSlaBreaches(storeId, userId);
+
+    if (status && !SUPPORT_TICKET_STATUSES.has(status)) return res.status(400).json({ error: "Invalid status" });
+    if (priority && !SUPPORT_TICKET_PRIORITIES.has(priority)) return res.status(400).json({ error: "Invalid priority" });
+
+    const tickets = await prisma.supportTicket.findMany({
+      where: {
+        storeId,
+        ...(status ? { status } : {}),
+        ...(priority ? { priority } : {}),
+        ...(assignedToMe ? { assignedToUserId: userId } : {}),
+        ...(q
+          ? {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { description: { contains: q, mode: "insensitive" } },
+                { reason: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        customer: { select: { id: true, fullName: true, email: true } },
+        order: { select: { id: true, orderNumber: true } },
+        assignedTo: { select: { id: true, fullName: true, email: true } },
+        createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+      orderBy: [{ status: "asc" }, { priority: "desc" }, { createdAt: "desc" }],
+      take: 300,
+    });
+
+    return res.json({ tickets });
+  } catch (err) {
+    console.error("GET /support/tickets error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/support/metrics", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to read support metrics" });
+
+    await syncSupportSlaBreaches(storeId, userId);
+
+    const tickets = await prisma.supportTicket.findMany({
+      where: { storeId },
+      select: {
+        id: true,
+        status: true,
+        priority: true,
+        createdAt: true,
+        firstResponseAt: true,
+        resolvedAt: true,
+        closedAt: true,
+        slaBreached: true,
+      },
+      take: 1000,
+      orderBy: { createdAt: "desc" },
+    });
+
+    const openCount = tickets.filter((t) => SUPPORT_OPEN_STATUSES.has(t.status)).length;
+    const breachedOpenCount = tickets.filter((t) => SUPPORT_OPEN_STATUSES.has(t.status) && t.slaBreached).length;
+    const resolvedCount = tickets.filter((t) => ["resolved", "closed"].includes(t.status)).length;
+
+    const firstResponseHours = tickets
+      .filter((t) => t.firstResponseAt)
+      .map((t) => (new Date(t.firstResponseAt).getTime() - new Date(t.createdAt).getTime()) / (1000 * 60 * 60))
+      .filter((h) => Number.isFinite(h) && h >= 0);
+    const resolutionHours = tickets
+      .map((t) => {
+        const end = t.resolvedAt || t.closedAt;
+        if (!end) return null;
+        return (new Date(end).getTime() - new Date(t.createdAt).getTime()) / (1000 * 60 * 60);
+      })
+      .filter((h) => h !== null && Number.isFinite(h) && h >= 0);
+
+    const avgFirstResponseHours = firstResponseHours.length
+      ? roundMoney(firstResponseHours.reduce((a, b) => a + b, 0) / firstResponseHours.length)
+      : 0;
+    const avgResolutionHours = resolutionHours.length
+      ? roundMoney(resolutionHours.reduce((a, b) => a + b, 0) / resolutionHours.length)
+      : 0;
+
+    const byStatus = {};
+    const byPriority = {};
+    for (const t of tickets) {
+      byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+      byPriority[t.priority] = (byPriority[t.priority] || 0) + 1;
+    }
+
+    return res.json({
+      metrics: {
+        total: tickets.length,
+        openCount,
+        breachedOpenCount,
+        resolvedCount,
+        avgFirstResponseHours,
+        avgResolutionHours,
+        byStatus,
+        byPriority,
+      },
+    });
+  } catch (err) {
+    console.error("GET /support/metrics error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/support/tickets/export", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const status = String(req.query.status || "").trim();
+    const priority = String(req.query.priority || "").trim();
+    const q = String(req.query.q || "").trim();
+    const assignedToMe = String(req.query.assignedToMe || "").trim() === "1";
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to export support tickets" });
+
+    if (status && !SUPPORT_TICKET_STATUSES.has(status)) return res.status(400).json({ error: "Invalid status" });
+    if (priority && !SUPPORT_TICKET_PRIORITIES.has(priority)) return res.status(400).json({ error: "Invalid priority" });
+
+    const rows = await prisma.supportTicket.findMany({
+      where: {
+        storeId,
+        ...(status ? { status } : {}),
+        ...(priority ? { priority } : {}),
+        ...(assignedToMe ? { assignedToUserId: userId } : {}),
+        ...(q
+          ? {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { description: { contains: q, mode: "insensitive" } },
+                { reason: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        customer: { select: { fullName: true, email: true } },
+        order: { select: { orderNumber: true } },
+        assignedTo: { select: { fullName: true, email: true } },
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: 2000,
+    });
+
+    const escapeCsv = (v) => {
+      const s = String(v ?? "");
+      if (s.includes(",") || s.includes("\"") || s.includes("\n")) {
+        return `"${s.replace(/\"/g, "\"\"")}"`;
+      }
+      return s;
+    };
+
+    const header = [
+      "id",
+      "title",
+      "status",
+      "priority",
+      "channel",
+      "reason",
+      "sla_breached",
+      "sla_resolution_due_at",
+      "customer",
+      "order_number",
+      "assigned_to",
+      "created_at",
+    ];
+    const lines = [header.join(",")];
+    for (const t of rows) {
+      lines.push(
+        [
+          t.id,
+          t.title,
+          t.status,
+          t.priority,
+          t.channel || "",
+          t.reason || "",
+          t.slaBreached ? "1" : "0",
+          t.slaResolutionDueAt ? t.slaResolutionDueAt.toISOString() : "",
+          t.customer?.fullName || t.customer?.email || "",
+          t.order?.orderNumber || "",
+          t.assignedTo?.fullName || t.assignedTo?.email || "",
+          t.createdAt.toISOString(),
+        ]
+          .map(escapeCsv)
+          .join(",")
+      );
+    }
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=\"support_tickets_${stamp}.csv\"`);
+    return res.send(lines.join("\n"));
+  } catch (err) {
+    console.error("GET /support/tickets/export error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/support/tickets/:ticketId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { ticketId } = req.params;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to read support tickets" });
+
+    await syncSupportSlaBreaches(storeId, userId);
+
+    const ticket = await prisma.supportTicket.findFirst({
+      where: { id: ticketId, storeId },
+      include: {
+        customer: { select: { id: true, fullName: true, email: true, country: true, city: true } },
+        order: { select: { id: true, orderNumber: true, status: true, paymentStatus: true, orderedAt: true } },
+        assignedTo: { select: { id: true, fullName: true, email: true } },
+        createdBy: { select: { id: true, fullName: true, email: true } },
+        notes: {
+          include: {
+            user: { select: { id: true, fullName: true, email: true } },
+          },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+
+    const timeline = [
+      { type: "created", at: ticket.createdAt, label: "Ticket creado" },
+      ...(ticket.firstResponseAt ? [{ type: "first_response", at: ticket.firstResponseAt, label: "Primera respuesta registrada" }] : []),
+      ...(ticket.slaBreachedAt ? [{ type: "sla_breached", at: ticket.slaBreachedAt, label: "SLA vencido" }] : []),
+      ...(ticket.resolvedAt ? [{ type: "resolved", at: ticket.resolvedAt, label: "Ticket resuelto" }] : []),
+      ...(ticket.closedAt ? [{ type: "closed", at: ticket.closedAt, label: "Ticket cerrado" }] : []),
+      ...ticket.notes.map((n) => ({
+        type: "note",
+        at: n.createdAt,
+        label: `Nota interna por ${n.user?.fullName || "usuario"}`,
+        noteId: n.id,
+      })),
+    ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+
+    return res.json({ ticket, timeline });
+  } catch (err) {
+    console.error("GET /support/tickets/:ticketId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/support/tickets", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, customerId, orderId, title, description, channel, reason, priority, assignedToUserId, dueAt } = req.body || {};
+    if (!storeId || !title) return res.status(400).json({ error: "Missing storeId/title" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to create support tickets" });
+
+    const normalizedPriority = priority || "medium";
+    if (!SUPPORT_TICKET_PRIORITIES.has(normalizedPriority)) return res.status(400).json({ error: "Invalid priority" });
+
+    if (customerId) {
+      const customer = await prisma.customer.findFirst({ where: { id: customerId, storeId }, select: { id: true } });
+      if (!customer) return res.status(400).json({ error: "Invalid customerId for store" });
+    }
+    if (orderId) {
+      const order = await prisma.salesOrder.findFirst({ where: { id: orderId, storeId }, select: { id: true } });
+      if (!order) return res.status(400).json({ error: "Invalid orderId for store" });
+    }
+    if (assignedToUserId) {
+      const assignee = await prisma.userStoreMembership.findFirst({ where: { storeId, userId: assignedToUserId }, select: { userId: true } });
+      if (!assignee) return res.status(400).json({ error: "Invalid assignedToUserId for store" });
+    }
+
+    const parsedDueAt = dueAt ? parseDateInput(dueAt) : null;
+    if (dueAt && !parsedDueAt) return res.status(400).json({ error: "Invalid dueAt" });
+    const slaDates = computeSupportSlaDates(normalizedPriority, new Date());
+
+    const ticket = await prisma.supportTicket.create({
+      data: {
+        storeId,
+        customerId: customerId || null,
+        orderId: orderId || null,
+        title: String(title).trim(),
+        description: description || null,
+        channel: channel || null,
+        reason: reason || null,
+        priority: normalizedPriority,
+        dueAt: parsedDueAt,
+        slaFirstResponseDueAt: slaDates.slaFirstResponseDueAt,
+        slaResolutionDueAt: slaDates.slaResolutionDueAt,
+        slaBreached: false,
+        slaBreachedAt: null,
+        slaBreachNotifiedAt: null,
+        assignedToUserId: assignedToUserId || null,
+        createdByUserId: userId,
+      },
+      include: {
+        customer: { select: { id: true, fullName: true, email: true } },
+        order: { select: { id: true, orderNumber: true } },
+        assignedTo: { select: { id: true, fullName: true, email: true } },
+        createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    if (ticket.assignedTo?.id && ticket.assignedTo.id !== userId) {
+      await createNotificationSafe({
+        storeId,
+        userId: ticket.assignedTo.id,
+        type: "system",
+        severity: ticket.priority === "urgent" || ticket.priority === "high" ? "warning" : "info",
+        title: `Nuevo ticket asignado: ${ticket.title}`,
+        body: ticket.description || null,
+        linkedEntityType: "support_ticket",
+        linkedEntityId: ticket.id,
+        createdByUserId: userId,
+      });
+    }
+
+    return res.status(201).json({ ticket });
+  } catch (err) {
+    console.error("POST /support/tickets error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/support/tickets/:ticketId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { ticketId } = req.params;
+    const { storeId, status, priority, assignedToUserId, dueAt, resolutionNote, firstResponseAt } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to update support tickets" });
+
+    const existing = await prisma.supportTicket.findFirst({
+      where: { id: ticketId, storeId },
+      select: { id: true, status: true, createdAt: true, firstResponseAt: true, slaResolutionDueAt: true, assignedToUserId: true, title: true },
+    });
+    if (!existing) return res.status(404).json({ error: "Ticket not found" });
+
+    if (status && !SUPPORT_TICKET_STATUSES.has(String(status))) return res.status(400).json({ error: "Invalid status" });
+    if (priority && !SUPPORT_TICKET_PRIORITIES.has(String(priority))) return res.status(400).json({ error: "Invalid priority" });
+
+    let assigneeId = undefined;
+    if (assignedToUserId !== undefined) {
+      if (!assignedToUserId) {
+        assigneeId = null;
+      } else {
+        const assignee = await prisma.userStoreMembership.findFirst({
+          where: { storeId, userId: assignedToUserId },
+          select: { userId: true },
+        });
+        if (!assignee) return res.status(400).json({ error: "Invalid assignedToUserId for store" });
+        assigneeId = assignee.userId;
+      }
+    }
+
+    const parsedDueAt = dueAt === undefined ? undefined : dueAt ? parseDateInput(dueAt) : null;
+    if (dueAt && !parsedDueAt) return res.status(400).json({ error: "Invalid dueAt" });
+    const parsedFirstResponseAt =
+      firstResponseAt === undefined ? undefined : firstResponseAt ? parseDateInput(firstResponseAt) : null;
+    if (firstResponseAt && !parsedFirstResponseAt) return res.status(400).json({ error: "Invalid firstResponseAt" });
+
+    const nextStatus = status || existing.status;
+    const nextPriority = priority || undefined;
+    const nextFirstResponseAt =
+      parsedFirstResponseAt !== undefined
+        ? parsedFirstResponseAt
+        : existing.firstResponseAt || (nextStatus !== "open" ? new Date() : undefined);
+
+    const priorityForSla = nextPriority || undefined;
+    const recomputedSla = priorityForSla ? computeSupportSlaDates(priorityForSla, existing.createdAt) : null;
+    const resolutionDueAt = recomputedSla ? recomputedSla.slaResolutionDueAt : existing.slaResolutionDueAt;
+    const now = new Date();
+    const shouldBeBreached = Boolean(
+      !isSupportTerminalStatus(nextStatus) && resolutionDueAt && new Date(resolutionDueAt).getTime() < now.getTime()
+    );
+    const ticket = await prisma.supportTicket.update({
+      where: { id: ticketId },
+      data: {
+        ...(status ? { status } : {}),
+        ...(priority ? { priority } : {}),
+        ...(assignedToUserId !== undefined ? { assignedToUserId: assigneeId } : {}),
+        ...(parsedDueAt !== undefined ? { dueAt: parsedDueAt } : {}),
+        ...(resolutionNote !== undefined ? { resolutionNote: resolutionNote || null } : {}),
+        ...(nextFirstResponseAt !== undefined ? { firstResponseAt: nextFirstResponseAt } : {}),
+        ...(recomputedSla ? { slaFirstResponseDueAt: recomputedSla.slaFirstResponseDueAt, slaResolutionDueAt: recomputedSla.slaResolutionDueAt } : {}),
+        ...(shouldBeBreached ? { slaBreached: true, slaBreachedAt: now } : {}),
+        ...(isSupportTerminalStatus(nextStatus) ? { slaBreached: existing.slaBreached || shouldBeBreached } : {}),
+        ...(nextStatus === "resolved" ? { resolvedAt: new Date() } : {}),
+        ...(nextStatus === "closed" ? { closedAt: new Date() } : {}),
+      },
+      include: {
+        customer: { select: { id: true, fullName: true, email: true } },
+        order: { select: { id: true, orderNumber: true } },
+        assignedTo: { select: { id: true, fullName: true, email: true } },
+        createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    if (shouldBeBreached && !existing.assignedToUserId) {
+      await createNotificationSafe({
+        storeId,
+        type: "system",
+        severity: "critical",
+        title: `SLA vencido: ${existing.title}`,
+        body: "El ticket superó el tiempo objetivo de resolución.",
+        linkedEntityType: "support_ticket",
+        linkedEntityId: existing.id,
+        createdByUserId: userId,
+      });
+    }
+
+    return res.json({ ticket });
+  } catch (err) {
+    console.error("PATCH /support/tickets/:ticketId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/support/tickets/:ticketId/notes", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { ticketId } = req.params;
+    const { storeId, body } = req.body || {};
+    if (!storeId || !body || String(body).trim().length < 2) {
+      return res.status(400).json({ error: "Missing storeId/body" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageSupport(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to write support notes" });
+
+    const ticket = await prisma.supportTicket.findFirst({
+      where: { id: ticketId, storeId },
+      select: { id: true, title: true, assignedToUserId: true },
+    });
+    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+
+    const note = await prisma.supportTicketNote.create({
+      data: {
+        ticketId: ticket.id,
+        userId,
+        body: String(body).trim(),
+      },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    if (ticket.assignedToUserId && ticket.assignedToUserId !== userId) {
+      await createNotificationSafe({
+        storeId,
+        userId: ticket.assignedToUserId,
+        type: "system",
+        severity: "info",
+        title: `Nueva nota en ticket: ${ticket.title}`,
+        body: String(body).trim().slice(0, 180),
+        linkedEntityType: "support_ticket",
+        linkedEntityId: ticket.id,
+        createdByUserId: userId,
+      });
+    }
+
+    return res.status(201).json({ note });
+  } catch (err) {
+    console.error("POST /support/tickets/:ticketId/notes error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });

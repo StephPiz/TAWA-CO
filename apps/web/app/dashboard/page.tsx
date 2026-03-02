@@ -76,7 +76,7 @@ export default function DashboardPage() {
           <p className="text-sm text-gray-700">Holding: {holdingName || "-"}</p>
           <p className="text-sm text-gray-700 mb-3">Usuario: {userName || "-"}</p>
           <p className="text-sm text-gray-700 mb-4">
-            Fase 4 activa: coordinación de equipo con tareas internas, junto al flujo operativo y financiero de fases previas.
+            Fase 5 activa: clientes y soporte (tickets/quejas), junto al flujo operativo, financiero y coordinación interna de fases previas.
           </p>
           <div className="flex gap-2 flex-wrap">
             <button className="px-4 py-2 rounded bg-black text-white" onClick={() => goTo("/store/inventory")}>
@@ -109,11 +109,17 @@ export default function DashboardPage() {
             <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/returns")}>
               Ir a Devoluciones
             </button>
+            <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/customers")}>
+              Ir a Clientes
+            </button>
             <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/tasks")}>
               Ir a Tareas
             </button>
             <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/chat")}>
               Ir a Chat
+            </button>
+            <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/support")}>
+              Ir a Soporte
             </button>
             <button className="px-4 py-2 rounded border" onClick={() => goTo("/store/settings")}>
               Ir a Configuración
