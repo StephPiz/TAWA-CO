@@ -134,7 +134,14 @@ async function main() {
 
   const channelShopify = await prisma.salesChannel.upsert({
     where: { storeId_code: { storeId: store.id, code: "SHOPIFY-ES" } },
-    update: { name: "Shopify ES", type: "shopify", status: "active", feePercent: "2.9000" },
+    update: {
+      name: "Shopify ES",
+      type: "shopify",
+      status: "active",
+      feePercent: "2.9000",
+      countryCode: "ES",
+      currencyCode: "EUR",
+    },
     create: {
       storeId: store.id,
       code: "SHOPIFY-ES",
@@ -143,12 +150,21 @@ async function main() {
       status: "active",
       feePercent: "2.9000",
       payoutTerms: "15 days post-delivery",
+      countryCode: "ES",
+      currencyCode: "EUR",
     },
   });
 
   const channelIdealoDE = await prisma.salesChannel.upsert({
     where: { storeId_code: { storeId: store.id, code: "IDEALO-DE" } },
-    update: { name: "Idealo DE", type: "idealo", status: "active", feePercent: "7.5000" },
+    update: {
+      name: "Idealo DE",
+      type: "idealo",
+      status: "active",
+      feePercent: "7.5000",
+      countryCode: "DE",
+      currencyCode: "EUR",
+    },
     create: {
       storeId: store.id,
       code: "IDEALO-DE",
@@ -157,6 +173,8 @@ async function main() {
       status: "active",
       feePercent: "7.5000",
       payoutTerms: "20 business days",
+      countryCode: "DE",
+      currencyCode: "EUR",
     },
   });
 
@@ -215,6 +233,7 @@ async function main() {
     ["suppliers.read", "Read supplier data"],
     ["products.write", "Create/update products"],
     ["orders.write", "Create/update orders"],
+    ["purchases.write", "Create/update purchases and suppliers"],
     ["payouts.write", "Create payouts and reconciliation"],
     ["invoices.write", "Create invoices"],
   ];
@@ -242,12 +261,42 @@ async function main() {
     },
   });
 
+  const supplier = await prisma.supplier.upsert({
+    where: { storeId_code: { storeId: store.id, code: "SUP-TR-001" } },
+    update: {
+      name: "Turkiye Watches Hub",
+      contactName: "Mert A.",
+      contactEmail: "ops@turkiyehub.example",
+      city: "Istanbul",
+      country: "TR",
+      defaultCurrencyCode: "TRY",
+      paymentMethod: "Wire",
+      catalogUrl: "https://suppliers.example/turkiye-hub",
+      isActive: true,
+    },
+    create: {
+      storeId: store.id,
+      code: "SUP-TR-001",
+      name: "Turkiye Watches Hub",
+      contactName: "Mert A.",
+      contactEmail: "ops@turkiyehub.example",
+      city: "Istanbul",
+      country: "TR",
+      defaultCurrencyCode: "TRY",
+      paymentMethod: "Wire",
+      catalogUrl: "https://suppliers.example/turkiye-hub",
+      isActive: true,
+    },
+  });
+
   const product = await prisma.product.upsert({
     where: { storeId_ean: { storeId: store.id, ean: "8435601200001" } },
     update: {
       type: "watch",
       brand: "Armani",
       model: "AR2434",
+      modelRef: "AR2434",
+      category: "watch",
       name: "Armani AR2434",
       status: "active",
       isInternalEan: false,
@@ -259,10 +308,75 @@ async function main() {
       type: "watch",
       brand: "Armani",
       model: "AR2434",
+      modelRef: "AR2434",
+      category: "watch",
       name: "Armani AR2434",
       status: "active",
       isInternalEan: false,
       internalDescription: "Reloj para canal premium",
+    },
+  });
+
+  await prisma.productImage.upsert({
+    where: { id: "seed-image-armani-main" },
+    update: {
+      productId: product.id,
+      imageUrl: "https://picsum.photos/seed/armani2434/600/600",
+      isPrimary: true,
+      sortOrder: 0,
+    },
+    create: {
+      id: "seed-image-armani-main",
+      productId: product.id,
+      imageUrl: "https://picsum.photos/seed/armani2434/600/600",
+      isPrimary: true,
+      sortOrder: 0,
+    },
+  });
+
+  await prisma.channelProductLink.upsert({
+    where: { productId_salesChannelId: { productId: product.id, salesChannelId: channelShopify.id } },
+    update: {
+      productUrl: "https://shopify.example/products/ar2434",
+      externalProductId: "shopify-ar2434",
+      status: "active",
+    },
+    create: {
+      productId: product.id,
+      salesChannelId: channelShopify.id,
+      productUrl: "https://shopify.example/products/ar2434",
+      externalProductId: "shopify-ar2434",
+      status: "active",
+    },
+  });
+
+  await prisma.productChannelPrice.create({
+    data: {
+      productId: product.id,
+      salesChannelId: channelShopify.id,
+      priceAmount: "199.00",
+      currencyCode: "EUR",
+      isActive: true,
+      effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      effectiveTo: null,
+    },
+  }).catch(() => {});
+
+  await prisma.channelProductText.upsert({
+    where: {
+      productId_salesChannelId_locale: {
+        productId: product.id,
+        salesChannelId: channelShopify.id,
+        locale: "es",
+      },
+    },
+    update: { title: "Armani AR2434 - Shopify", description: "Texto canal ES" },
+    create: {
+      productId: product.id,
+      salesChannelId: channelShopify.id,
+      locale: "es",
+      title: "Armani AR2434 - Shopify",
+      description: "Texto canal ES",
     },
   });
 
@@ -464,7 +578,7 @@ async function main() {
     },
   });
 
-  await prisma.salesOrderItem.upsert({
+  const orderItem = await prisma.salesOrderItem.upsert({
     where: { id: "seed-order-item-1168-1" },
     update: {
       storeId: store.id,
@@ -492,6 +606,33 @@ async function main() {
       unitPriceEurFrozen: "209.00",
       revenueEurFrozen: "209.00",
       cogsEurFrozen: "110.40",
+    },
+  });
+
+  await prisma.backorderLine.upsert({
+    where: { id: "seed-backorder-1168-1" },
+    update: {
+      storeId: store.id,
+      orderId: order.id,
+      orderItemId: orderItem.id,
+      productId: product.id,
+      requestedQty: 2,
+      fulfilledQty: 1,
+      missingQty: 1,
+      status: "open",
+      note: "Seed backorder sample",
+    },
+    create: {
+      id: "seed-backorder-1168-1",
+      storeId: store.id,
+      orderId: order.id,
+      orderItemId: orderItem.id,
+      productId: product.id,
+      requestedQty: 2,
+      fulfilledQty: 1,
+      missingQty: 1,
+      status: "open",
+      note: "Seed backorder sample",
     },
   });
 
@@ -566,6 +707,179 @@ async function main() {
       billingAddress: "Berlin",
       billingCountry: "DE",
       notes: "Seed invoice",
+    },
+  });
+
+  await prisma.returnCase.upsert({
+    where: { id: "seed-return-1168-1" },
+    update: {
+      storeId: store.id,
+      orderId: order.id,
+      productId: product.id,
+      trackingCode: "RET-TRACK-1168",
+      reason: "Cliente cambio de opinion",
+      labelPayer: "store",
+      conditionState: "opened",
+      packagingRecovered: true,
+      decision: "restock",
+      status: "processed",
+      quantity: 1,
+      returnCostEur: "4.50",
+      warehouseId: warehouseES.id,
+      processedByUserId: admin.id,
+      processedAt: new Date("2026-03-02T00:00:00.000Z"),
+    },
+    create: {
+      id: "seed-return-1168-1",
+      storeId: store.id,
+      orderId: order.id,
+      productId: product.id,
+      trackingCode: "RET-TRACK-1168",
+      reason: "Cliente cambio de opinion",
+      labelPayer: "store",
+      conditionState: "opened",
+      packagingRecovered: true,
+      decision: "restock",
+      status: "processed",
+      quantity: 1,
+      returnCostEur: "4.50",
+      warehouseId: warehouseES.id,
+      processedByUserId: admin.id,
+      processedAt: new Date("2026-03-02T00:00:00.000Z"),
+    },
+  });
+
+  const purchase = await prisma.purchaseOrder.upsert({
+    where: { storeId_poNumber: { storeId: store.id, poNumber: "PO-2026-0001" } },
+    update: {
+      supplierId: supplier.id,
+      status: "tracking_received",
+      orderedAt: new Date("2026-03-01T10:00:00.000Z"),
+      expectedAt: new Date("2026-03-12T10:00:00.000Z"),
+      trackingCode: "TRK-PO-2026-0001",
+      trackingUrl: "https://track.example/PO-2026-0001",
+      totalAmountEur: "110.40",
+      note: "Seed PO for Fase 3",
+      createdByUserId: admin.id,
+    },
+    create: {
+      storeId: store.id,
+      supplierId: supplier.id,
+      poNumber: "PO-2026-0001",
+      status: "tracking_received",
+      orderedAt: new Date("2026-03-01T10:00:00.000Z"),
+      expectedAt: new Date("2026-03-12T10:00:00.000Z"),
+      trackingCode: "TRK-PO-2026-0001",
+      trackingUrl: "https://track.example/PO-2026-0001",
+      totalAmountEur: "110.40",
+      note: "Seed PO for Fase 3",
+      createdByUserId: admin.id,
+    },
+  });
+
+  await prisma.purchaseOrderItem.upsert({
+    where: { id: "seed-po-item-0001-1" },
+    update: {
+      storeId: store.id,
+      purchaseOrderId: purchase.id,
+      productId: product.id,
+      title: "Armani AR2434",
+      ean: product.ean,
+      quantityOrdered: 1,
+      quantityReceived: 0,
+      unitCostOriginal: "1200.00",
+      currencyCode: "TRY",
+      fxToEur: "0.092000",
+      unitCostEurFrozen: "110.4000",
+      totalCostEur: "110.40",
+    },
+    create: {
+      id: "seed-po-item-0001-1",
+      storeId: store.id,
+      purchaseOrderId: purchase.id,
+      productId: product.id,
+      title: "Armani AR2434",
+      ean: product.ean,
+      quantityOrdered: 1,
+      quantityReceived: 0,
+      unitCostOriginal: "1200.00",
+      currencyCode: "TRY",
+      fxToEur: "0.092000",
+      unitCostEurFrozen: "110.4000",
+      totalCostEur: "110.40",
+    },
+  });
+
+  await prisma.purchaseOrderPayment.upsert({
+    where: { id: "seed-po-payment-0001-1" },
+    update: {
+      storeId: store.id,
+      purchaseOrderId: purchase.id,
+      paidAt: new Date("2026-03-02T08:00:00.000Z"),
+      currencyCode: "USD",
+      amountOriginal: "118.00",
+      fxToEur: "0.935000",
+      amountEurFrozen: "110.33",
+      note: "Advance payment",
+      createdByUserId: admin.id,
+    },
+    create: {
+      id: "seed-po-payment-0001-1",
+      storeId: store.id,
+      purchaseOrderId: purchase.id,
+      paidAt: new Date("2026-03-02T08:00:00.000Z"),
+      currencyCode: "USD",
+      amountOriginal: "118.00",
+      fxToEur: "0.935000",
+      amountEurFrozen: "110.33",
+      note: "Advance payment",
+      createdByUserId: admin.id,
+    },
+  });
+
+  const shipment3pl = await prisma.threePlShipment.upsert({
+    where: { storeId_referenceCode: { storeId: store.id, referenceCode: "3PL-2026-0001" } },
+    update: {
+      purchaseOrderId: purchase.id,
+      providerName: "GlobalTransit 3PL",
+      note: "TR -> ES route",
+      createdByUserId: admin.id,
+    },
+    create: {
+      storeId: store.id,
+      purchaseOrderId: purchase.id,
+      providerName: "GlobalTransit 3PL",
+      referenceCode: "3PL-2026-0001",
+      note: "TR -> ES route",
+      createdByUserId: admin.id,
+    },
+  });
+
+  await prisma.threePlLeg.upsert({
+    where: { shipmentId_legOrder: { shipmentId: shipment3pl.id, legOrder: 1 } },
+    update: {
+      originLabel: "Istanbul Supplier",
+      destinationLabel: "3PL Madrid",
+      trackingCode: "LEG1-TR-ES-0001",
+      trackingUrl: "https://track.example/LEG1-TR-ES-0001",
+      costCurrencyCode: "EUR",
+      costOriginal: "26.00",
+      fxToEur: "1.000000",
+      costEurFrozen: "26.00",
+      status: "in_transit",
+    },
+    create: {
+      shipmentId: shipment3pl.id,
+      legOrder: 1,
+      originLabel: "Istanbul Supplier",
+      destinationLabel: "3PL Madrid",
+      trackingCode: "LEG1-TR-ES-0001",
+      trackingUrl: "https://track.example/LEG1-TR-ES-0001",
+      costCurrencyCode: "EUR",
+      costOriginal: "26.00",
+      fxToEur: "1.000000",
+      costEurFrozen: "26.00",
+      status: "in_transit",
     },
   });
 

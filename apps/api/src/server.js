@@ -3,6 +3,16 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { PrismaClient } = require("@prisma/client");
+const {
+  ORDER_STATUS_FLOW,
+  PAYMENT_STATUS_FLOW,
+  isPositiveNumber,
+  isNonNegativeNumber,
+  parseDateInput,
+  parseCurrencyCode,
+  isAllowedTransition,
+  buildInvoicePdfBuffer,
+} = require("./finance-utils");
 
 const prisma = new PrismaClient();
 const app = express();
@@ -86,6 +96,16 @@ async function canManageInvoices(userId, storeId, roleKey) {
   return hasPermission(userId, storeId, "invoices.write");
 }
 
+async function canManageReturns(userId, storeId, roleKey) {
+  if (["admin", "admin_ste", "owner", "warehouse", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  return hasPermission(userId, storeId, "inventory.write");
+}
+
+async function canManagePurchases(userId, storeId, roleKey) {
+  if (["admin", "admin_ste", "owner", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  return hasPermission(userId, storeId, "purchases.write");
+}
+
 function normalizeMoney(value) {
   if (value === null || value === undefined) return null;
   const n = Number(value);
@@ -101,46 +121,33 @@ function roundMoney(value) {
   return Number((Number(value || 0)).toFixed(2));
 }
 
-const ORDER_STATUSES = new Set(["pending", "paid", "packed", "shipped", "delivered", "returned", "cancelled"]);
-const PAYMENT_STATUSES = new Set(["unpaid", "partially_paid", "paid"]);
-const ORDER_STATUS_FLOW = {
-  pending: new Set(["paid", "cancelled"]),
-  paid: new Set(["packed", "cancelled", "returned"]),
-  packed: new Set(["shipped", "cancelled", "returned"]),
-  shipped: new Set(["delivered", "returned"]),
-  delivered: new Set(["returned"]),
-  returned: new Set([]),
-  cancelled: new Set([]),
-};
-const PAYMENT_STATUS_FLOW = {
-  unpaid: new Set(["partially_paid", "paid"]),
-  partially_paid: new Set(["paid"]),
-  paid: new Set([]),
-};
-
-function isPositiveNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0;
+function parseDateRange(query) {
+  const from = query?.dateFrom ? parseDateInput(query.dateFrom) : null;
+  const to = query?.dateTo ? parseDateInput(query.dateTo) : null;
+  const toEnd = to ? new Date(to.getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+  return {
+    from,
+    to: toEnd,
+  };
 }
 
-function isNonNegativeNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0;
-}
-
-function parseDateInput(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function parseCurrencyCode(value) {
-  const code = String(value || "")
-    .trim()
-    .toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) return null;
-  return code;
-}
+const ORDER_STATUSES = new Set(Object.keys(ORDER_STATUS_FLOW));
+const PAYMENT_STATUSES = new Set(Object.keys(PAYMENT_STATUS_FLOW));
+const PURCHASE_ORDER_STATUSES = new Set([
+  "draft",
+  "sent",
+  "priced",
+  "paid",
+  "preparing",
+  "checklist",
+  "tracking_received",
+  "in_transit",
+  "received",
+  "verified",
+  "closed",
+  "incident",
+]);
+const THREE_PL_LEG_STATUSES = new Set(["planned", "in_transit", "delivered", "delayed"]);
 
 async function nextInvoiceNumber(tx, storeId) {
   const store = await tx.store.findUnique({
@@ -189,6 +196,101 @@ async function findProductByScan(storeId, scanCode) {
 
   if (!alias) return null;
   return { product: alias.product, via: "alias", alias: alias.ean };
+}
+
+async function consumeProductFifo(tx, params) {
+  const {
+    storeId,
+    productId,
+    quantity,
+    userId,
+    referenceType,
+    referenceId,
+    reason,
+    warehouseId = null,
+    allowPartial = false,
+  } = params;
+
+  const lots = await tx.inventoryLot.findMany({
+    where: {
+      storeId,
+      productId,
+      quantityAvailable: { gt: 0 },
+      status: "available",
+      ...(warehouseId ? { warehouseId } : {}),
+    },
+    orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
+  });
+
+  const requestedQty = Number(quantity);
+  const totalAvailable = lots.reduce((sum, lot) => sum + Number(lot.quantityAvailable), 0);
+  if (!allowPartial && totalAvailable < requestedQty) {
+    return {
+      ok: false,
+      available: totalAvailable,
+      requested: requestedQty,
+      consumedQty: 0,
+      remaining: requestedQty,
+      cogs: 0,
+      consumedLots: [],
+    };
+  }
+
+  let remaining = requestedQty;
+  let cogs = 0;
+  const consumedLots = [];
+
+  for (const lot of lots) {
+    if (remaining <= 0) break;
+    const current = Number(lot.quantityAvailable);
+    if (current <= 0) continue;
+
+    const used = Math.min(current, remaining);
+    remaining -= used;
+
+    const updated = await tx.inventoryLot.update({
+      where: { id: lot.id },
+      data: { quantityAvailable: current - used },
+    });
+
+    const movement = await tx.inventoryMovement.create({
+      data: {
+        storeId,
+        productId,
+        lotId: lot.id,
+        warehouseId: lot.warehouseId,
+        movementType: "sale_out",
+        quantity: -used,
+        unitCostEurFrozen: lot.unitCostEurFrozen,
+        referenceType: referenceType || "order",
+        referenceId: referenceId || null,
+        reason: reason || "Stock out",
+        createdByUserId: userId,
+      },
+    });
+
+    const lineCost = roundMoney(numberOrZero(lot.unitCostEurFrozen) * used);
+    cogs += lineCost;
+    consumedLots.push({
+      lotId: lot.id,
+      lotCode: lot.lotCode,
+      consumed: used,
+      before: current,
+      after: Number(updated.quantityAvailable),
+      unitCostEurFrozen: normalizeMoney(lot.unitCostEurFrozen),
+      movementId: movement.id,
+    });
+  }
+
+  return {
+    ok: remaining === 0,
+    available: totalAvailable,
+    requested: requestedQty,
+    consumedQty: requestedQty - remaining,
+    remaining,
+    cogs: roundMoney(cogs),
+    consumedLots,
+  };
 }
 
 app.get("/health", (_req, res) => {
@@ -391,6 +493,10 @@ app.get("/stores/:storeId/permissions", requireAuth, async (req, res) => {
         ordersWrite: canOrdersWrite,
         payoutsWrite: canPayoutsWrite,
         invoicesWrite: canInvoicesWrite,
+        returnsWrite: ["admin", "admin_ste", "owner", "warehouse", "ops"].includes(
+          String(membership.roleKey).toLowerCase()
+        ),
+        analyticsRead: canSensitive,
         financeRead: canSensitive,
         suppliersRead: canSensitive,
       },
@@ -516,7 +622,7 @@ app.post("/stores/:storeId/channels", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
     const { storeId } = req.params;
-    const { code, name, type, status, feePercent, cpaFixed, payoutTerms } = req.body || {};
+    const { code, name, type, status, feePercent, cpaFixed, payoutTerms, countryCode, currencyCode } = req.body || {};
 
     if (!code || !name || !type) return res.status(400).json({ error: "Missing code, name or type" });
     const membership = await getStoreMembership(userId, storeId);
@@ -524,6 +630,11 @@ app.post("/stores/:storeId/channels", requireAuth, async (req, res) => {
 
     const canWrite = await canManageCatalog(userId, storeId, membership.roleKey);
     if (!canWrite) return res.status(403).json({ error: "No permission to manage channels" });
+
+    const parsedCurrency = currencyCode ? parseCurrencyCode(currencyCode) : null;
+    if (currencyCode && !parsedCurrency) {
+      return res.status(400).json({ error: "Invalid currencyCode format (expected ISO-4217 like EUR)" });
+    }
 
     const channel = await prisma.salesChannel.create({
       data: {
@@ -535,6 +646,8 @@ app.post("/stores/:storeId/channels", requireAuth, async (req, res) => {
         feePercent: feePercent ?? null,
         cpaFixed: cpaFixed ?? null,
         payoutTerms: payoutTerms || null,
+        countryCode: countryCode ? String(countryCode).trim().toUpperCase() : null,
+        currencyCode: parsedCurrency,
       },
     });
 
@@ -542,6 +655,514 @@ app.post("/stores/:storeId/channels", requireAuth, async (req, res) => {
   } catch (err) {
     if (err?.code === "P2002") return res.status(409).json({ error: "Channel code already exists" });
     console.error("POST /stores/:storeId/channels error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/suppliers", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const q = String(req.query.q || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read suppliers" });
+
+    const suppliers = await prisma.supplier.findMany({
+      where: {
+        storeId,
+        ...(q
+          ? {
+              OR: [
+                { code: { contains: q, mode: "insensitive" } },
+                { name: { contains: q, mode: "insensitive" } },
+                { country: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      take: 300,
+    });
+
+    return res.json({ suppliers });
+  } catch (err) {
+    console.error("GET /suppliers error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/suppliers", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const {
+      storeId,
+      code,
+      name,
+      contactName,
+      contactEmail,
+      city,
+      country,
+      defaultCurrencyCode,
+      paymentMethod,
+      catalogUrl,
+      vacationNote,
+      isActive,
+    } = req.body || {};
+
+    if (!storeId || !code || !name) return res.status(400).json({ error: "Missing storeId/code/name" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage suppliers" });
+
+    const parsedCurrency = defaultCurrencyCode ? parseCurrencyCode(defaultCurrencyCode) : null;
+    if (defaultCurrencyCode && !parsedCurrency) {
+      return res.status(400).json({ error: "Invalid defaultCurrencyCode format" });
+    }
+
+    const supplier = await prisma.supplier.create({
+      data: {
+        storeId,
+        code: String(code).trim(),
+        name: String(name).trim(),
+        contactName: contactName || null,
+        contactEmail: contactEmail || null,
+        city: city || null,
+        country: country || null,
+        defaultCurrencyCode: parsedCurrency || null,
+        paymentMethod: paymentMethod || null,
+        catalogUrl: catalogUrl || null,
+        vacationNote: vacationNote || null,
+        isActive: isActive !== undefined ? Boolean(isActive) : true,
+      },
+    });
+
+    return res.status(201).json({ supplier });
+  } catch (err) {
+    if (err?.code === "P2002") return res.status(409).json({ error: "Supplier code already exists" });
+    console.error("POST /suppliers error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/purchases", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const status = String(req.query.status || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read purchases" });
+
+    const purchases = await prisma.purchaseOrder.findMany({
+      where: { storeId, ...(status ? { status } : {}) },
+      include: {
+        supplier: { select: { id: true, code: true, name: true } },
+        items: { select: { id: true, title: true, quantityOrdered: true, totalCostEur: true } },
+      },
+      orderBy: { orderedAt: "desc" },
+      take: 200,
+    });
+
+    return res.json({
+      purchases: purchases.map((po) => ({
+        ...po,
+        totalAmountEur: normalizeMoney(po.totalAmountEur),
+        items: po.items.map((it) => ({ ...it, totalCostEur: normalizeMoney(it.totalCostEur) })),
+      })),
+    });
+  } catch (err) {
+    console.error("GET /purchases error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/purchases", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, supplierId, poNumber, orderedAt, expectedAt, note, items } = req.body || {};
+    if (!storeId || !supplierId || !poNumber) {
+      return res.status(400).json({ error: "Missing storeId/supplierId/poNumber" });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Purchase must include items" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, storeId }, select: { id: true } });
+    if (!supplier) return res.status(400).json({ error: "Invalid supplierId for store" });
+
+    const parsedOrderedAt = orderedAt ? parseDateInput(orderedAt) : new Date();
+    const parsedExpectedAt = expectedAt ? parseDateInput(expectedAt) : null;
+    if (!parsedOrderedAt || (expectedAt && !parsedExpectedAt)) return res.status(400).json({ error: "Invalid date values" });
+
+    for (const item of items) {
+      if (!item.title || !Number.isInteger(Number(item.quantityOrdered)) || Number(item.quantityOrdered) <= 0) {
+        return res.status(400).json({ error: "Each item must include title and positive integer quantityOrdered" });
+      }
+      if (!isPositiveNumber(item.unitCostOriginal) || !isPositiveNumber(item.fxToEur)) {
+        return res.status(400).json({ error: "Each item needs positive unitCostOriginal and fxToEur" });
+      }
+      if (!parseCurrencyCode(item.currencyCode || "")) {
+        return res.status(400).json({ error: "Each item needs valid currencyCode" });
+      }
+    }
+
+    const purchase = await prisma.$transaction(async (tx) => {
+      const po = await tx.purchaseOrder.create({
+        data: {
+          storeId,
+          supplierId,
+          poNumber: String(poNumber).trim(),
+          status: "draft",
+          orderedAt: parsedOrderedAt,
+          expectedAt: parsedExpectedAt,
+          note: note || null,
+          createdByUserId: userId,
+        },
+      });
+
+      let totalEur = 0;
+      for (const item of items) {
+        const qty = Number(item.quantityOrdered);
+        const unitOriginal = Number(item.unitCostOriginal);
+        const fx = Number(item.fxToEur);
+        const unitEur = Number((unitOriginal * fx).toFixed(4));
+        const totalCostEur = Number((unitEur * qty).toFixed(2));
+        totalEur += totalCostEur;
+
+        await tx.purchaseOrderItem.create({
+          data: {
+            storeId,
+            purchaseOrderId: po.id,
+            productId: item.productId || null,
+            title: String(item.title).trim(),
+            ean: item.ean || null,
+            quantityOrdered: qty,
+            quantityReceived: 0,
+            unitCostOriginal: String(unitOriginal),
+            currencyCode: parseCurrencyCode(item.currencyCode),
+            fxToEur: String(fx),
+            unitCostEurFrozen: String(unitEur),
+            totalCostEur: String(totalCostEur),
+          },
+        });
+      }
+
+      return tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: { totalAmountEur: String(Number(totalEur.toFixed(2))) },
+        include: {
+          supplier: { select: { id: true, code: true, name: true } },
+          items: true,
+        },
+      });
+    });
+
+    return res.status(201).json({
+      purchase: {
+        ...purchase,
+        totalAmountEur: normalizeMoney(purchase.totalAmountEur),
+        items: purchase.items.map((it) => ({
+          ...it,
+          unitCostOriginal: normalizeMoney(it.unitCostOriginal),
+          fxToEur: normalizeMoney(it.fxToEur),
+          unitCostEurFrozen: normalizeMoney(it.unitCostEurFrozen),
+          totalCostEur: normalizeMoney(it.totalCostEur),
+        })),
+      },
+    });
+  } catch (err) {
+    if (err?.code === "P2002") return res.status(409).json({ error: "PO number already exists" });
+    console.error("POST /purchases error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      include: {
+        supplier: true,
+        items: true,
+        payments: true,
+        shipments3pl: { include: { legs: { orderBy: { legOrder: "asc" } } } },
+      },
+    });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    return res.json({
+      purchase: {
+        ...purchase,
+        totalAmountEur: normalizeMoney(purchase.totalAmountEur),
+        items: purchase.items.map((it) => ({
+          ...it,
+          unitCostOriginal: normalizeMoney(it.unitCostOriginal),
+          fxToEur: normalizeMoney(it.fxToEur),
+          unitCostEurFrozen: normalizeMoney(it.unitCostEurFrozen),
+          totalCostEur: normalizeMoney(it.totalCostEur),
+        })),
+        payments: purchase.payments.map((p) => ({
+          ...p,
+          amountOriginal: normalizeMoney(p.amountOriginal),
+          fxToEur: normalizeMoney(p.fxToEur),
+          amountEurFrozen: normalizeMoney(p.amountEurFrozen),
+        })),
+      },
+    });
+  } catch (err) {
+    console.error("GET /purchases/:purchaseId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/purchases/:purchaseId/status", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const { storeId, status } = req.body || {};
+    if (!storeId || !status) return res.status(400).json({ error: "Missing storeId/status" });
+    if (!PURCHASE_ORDER_STATUSES.has(String(status))) return res.status(400).json({ error: "Invalid purchase status" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const updated = await prisma.purchaseOrder.updateMany({
+      where: { id: purchaseId, storeId },
+      data: { status },
+    });
+    if (updated.count === 0) return res.status(404).json({ error: "Purchase not found" });
+
+    const purchase = await prisma.purchaseOrder.findUnique({ where: { id: purchaseId } });
+    return res.json({ purchase: { ...purchase, totalAmountEur: normalizeMoney(purchase.totalAmountEur) } });
+  } catch (err) {
+    console.error("PATCH /purchases/:purchaseId/status error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/purchases/:purchaseId/payments", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const { storeId, paidAt, currencyCode, amountOriginal, fxToEur, note } = req.body || {};
+    if (!storeId || !currencyCode || !amountOriginal || !fxToEur) {
+      return res.status(400).json({ error: "Missing payment fields" });
+    }
+    if (!isPositiveNumber(amountOriginal) || !isPositiveNumber(fxToEur)) {
+      return res.status(400).json({ error: "amountOriginal/fxToEur must be positive" });
+    }
+    const parsedCurrency = parseCurrencyCode(currencyCode);
+    if (!parsedCurrency) return res.status(400).json({ error: "Invalid currencyCode" });
+    const parsedPaidAt = paidAt ? parseDateInput(paidAt) : new Date();
+    if (!parsedPaidAt) return res.status(400).json({ error: "Invalid paidAt" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({ where: { id: purchaseId, storeId }, select: { id: true } });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    const amountEurFrozen = Number((Number(amountOriginal) * Number(fxToEur)).toFixed(2));
+    const payment = await prisma.purchaseOrderPayment.create({
+      data: {
+        storeId,
+        purchaseOrderId: purchaseId,
+        paidAt: parsedPaidAt,
+        currencyCode: parsedCurrency,
+        amountOriginal: String(amountOriginal),
+        fxToEur: String(fxToEur),
+        amountEurFrozen: String(amountEurFrozen),
+        note: note || null,
+        createdByUserId: userId,
+      },
+    });
+
+    return res.status(201).json({
+      payment: {
+        ...payment,
+        amountOriginal: normalizeMoney(payment.amountOriginal),
+        fxToEur: normalizeMoney(payment.fxToEur),
+        amountEurFrozen: normalizeMoney(payment.amountEurFrozen),
+      },
+    });
+  } catch (err) {
+    console.error("POST /purchases/:purchaseId/payments error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/three-pl", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read 3PL" });
+
+    const shipments = await prisma.threePlShipment.findMany({
+      where: { storeId },
+      include: {
+        purchaseOrder: { select: { id: true, poNumber: true } },
+        legs: { orderBy: { legOrder: "asc" } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+
+    return res.json({
+      shipments: shipments.map((s) => ({
+        ...s,
+        legs: s.legs.map((l) => ({
+          ...l,
+          costOriginal: normalizeMoney(l.costOriginal),
+          fxToEur: normalizeMoney(l.fxToEur),
+          costEurFrozen: normalizeMoney(l.costEurFrozen),
+        })),
+      })),
+    });
+  } catch (err) {
+    console.error("GET /three-pl error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/three-pl", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, purchaseOrderId, providerName, referenceCode, note } = req.body || {};
+    if (!storeId || !providerName || !referenceCode) {
+      return res.status(400).json({ error: "Missing storeId/providerName/referenceCode" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage 3PL" });
+
+    if (purchaseOrderId) {
+      const po = await prisma.purchaseOrder.findFirst({ where: { id: purchaseOrderId, storeId }, select: { id: true } });
+      if (!po) return res.status(400).json({ error: "Invalid purchaseOrderId for store" });
+    }
+
+    const shipment = await prisma.threePlShipment.create({
+      data: {
+        storeId,
+        purchaseOrderId: purchaseOrderId || null,
+        providerName: String(providerName).trim(),
+        referenceCode: String(referenceCode).trim(),
+        note: note || null,
+        createdByUserId: userId,
+      },
+    });
+
+    return res.status(201).json({ shipment });
+  } catch (err) {
+    if (err?.code === "P2002") return res.status(409).json({ error: "3PL reference already exists" });
+    console.error("POST /three-pl error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/three-pl/:shipmentId/legs", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { shipmentId } = req.params;
+    const {
+      storeId,
+      legOrder,
+      originLabel,
+      destinationLabel,
+      trackingCode,
+      trackingUrl,
+      costCurrencyCode,
+      costOriginal,
+      fxToEur,
+      status,
+      departedAt,
+      deliveredAt,
+    } = req.body || {};
+
+    if (!storeId || !legOrder || !originLabel || !destinationLabel) {
+      return res.status(400).json({ error: "Missing leg fields" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage 3PL" });
+
+    const shipment = await prisma.threePlShipment.findFirst({ where: { id: shipmentId, storeId }, select: { id: true } });
+    if (!shipment) return res.status(404).json({ error: "Shipment not found" });
+    if (status && !THREE_PL_LEG_STATUSES.has(String(status))) return res.status(400).json({ error: "Invalid 3PL leg status" });
+
+    const parsedCurrency = costCurrencyCode ? parseCurrencyCode(costCurrencyCode) : null;
+    if (costCurrencyCode && !parsedCurrency) return res.status(400).json({ error: "Invalid costCurrencyCode" });
+    if ((costOriginal !== undefined || fxToEur !== undefined) && (!isPositiveNumber(costOriginal) || !isPositiveNumber(fxToEur))) {
+      return res.status(400).json({ error: "costOriginal and fxToEur must be positive when provided" });
+    }
+    const costEurFrozen =
+      costOriginal !== undefined && fxToEur !== undefined ? Number((Number(costOriginal) * Number(fxToEur)).toFixed(2)) : null;
+
+    const leg = await prisma.threePlLeg.create({
+      data: {
+        shipmentId,
+        legOrder: Number(legOrder),
+        originLabel: String(originLabel).trim(),
+        destinationLabel: String(destinationLabel).trim(),
+        trackingCode: trackingCode || null,
+        trackingUrl: trackingUrl || null,
+        costCurrencyCode: parsedCurrency || null,
+        costOriginal: costOriginal !== undefined ? String(costOriginal) : null,
+        fxToEur: fxToEur !== undefined ? String(fxToEur) : null,
+        costEurFrozen: costEurFrozen !== null ? String(costEurFrozen) : null,
+        status: status || "planned",
+        departedAt: departedAt ? parseDateInput(departedAt) : null,
+        deliveredAt: deliveredAt ? parseDateInput(deliveredAt) : null,
+      },
+    });
+
+    return res.status(201).json({
+      leg: {
+        ...leg,
+        costOriginal: normalizeMoney(leg.costOriginal),
+        fxToEur: normalizeMoney(leg.fxToEur),
+        costEurFrozen: normalizeMoney(leg.costEurFrozen),
+      },
+    });
+  } catch (err) {
+    if (err?.code === "P2002") return res.status(409).json({ error: "Leg order already exists for shipment" });
+    console.error("POST /three-pl/:shipmentId/legs error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
@@ -696,6 +1317,8 @@ app.get("/products", requireAuth, async (req, res) => {
         type: true,
         brand: true,
         model: true,
+        modelRef: true,
+        category: true,
         name: true,
         status: true,
         mainImageUrl: true,
@@ -751,11 +1374,14 @@ app.post("/products", requireAuth, async (req, res) => {
       type,
       brand,
       model,
+      modelRef,
+      category,
       name,
       status,
       internalDescription,
       attributes,
       mainImageUrl,
+      images,
     } = req.body || {};
 
     if (!storeId || !brand || !model) {
@@ -780,6 +1406,8 @@ app.post("/products", requireAuth, async (req, res) => {
         type: type || "other",
         brand,
         model,
+        modelRef: modelRef || null,
+        category: category || null,
         name: finalName,
         status: status || "active",
         isInternalEan,
@@ -788,6 +1416,19 @@ app.post("/products", requireAuth, async (req, res) => {
         mainImageUrl: mainImageUrl || null,
       },
     });
+
+    if (Array.isArray(images) && images.length > 0) {
+      await prisma.productImage.createMany({
+        data: images
+          .filter((img) => img?.imageUrl)
+          .map((img, idx) => ({
+            productId: product.id,
+            imageUrl: String(img.imageUrl).trim(),
+            isPrimary: Boolean(img.isPrimary) || idx === 0,
+            sortOrder: Number.isInteger(Number(img.sortOrder)) ? Number(img.sortOrder) : idx,
+          })),
+      });
+    }
 
     return res.status(201).json({ product });
   } catch (err) {
@@ -803,7 +1444,22 @@ app.put("/products/:productId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
     const { productId } = req.params;
-    const { storeId, ean, sku, type, brand, model, name, status, internalDescription, attributes, mainImageUrl } =
+    const {
+      storeId,
+      ean,
+      sku,
+      type,
+      brand,
+      model,
+      modelRef,
+      category,
+      name,
+      status,
+      internalDescription,
+      attributes,
+      mainImageUrl,
+      images,
+    } =
       req.body || {};
 
     if (!storeId) return res.status(400).json({ error: "Missing storeId" });
@@ -824,6 +1480,8 @@ app.put("/products/:productId", requireAuth, async (req, res) => {
         type: type || existing.type,
         brand: brand || existing.brand,
         model: model || existing.model,
+        modelRef: modelRef ?? null,
+        category: category ?? null,
         name: name || `${brand || existing.brand} ${model || existing.model}`,
         status: status || existing.status,
         internalDescription: internalDescription ?? null,
@@ -831,6 +1489,21 @@ app.put("/products/:productId", requireAuth, async (req, res) => {
         mainImageUrl: mainImageUrl ?? null,
       },
     });
+
+    if (Array.isArray(images)) {
+      await prisma.$transaction(async (tx) => {
+        await tx.productImage.deleteMany({ where: { productId } });
+        const rows = images
+          .filter((img) => img?.imageUrl)
+          .map((img, idx) => ({
+            productId,
+            imageUrl: String(img.imageUrl).trim(),
+            isPrimary: Boolean(img.isPrimary) || idx === 0,
+            sortOrder: Number.isInteger(Number(img.sortOrder)) ? Number(img.sortOrder) : idx,
+          }));
+        if (rows.length > 0) await tx.productImage.createMany({ data: rows });
+      });
+    }
 
     return res.json({ product });
   } catch (err) {
@@ -913,38 +1586,103 @@ app.put("/products/:productId/channel/:channelId", requireAuth, async (req, res)
 
     const [product, channel] = await Promise.all([
       prisma.product.findFirst({ where: { id: productId, storeId }, select: { id: true } }),
-      prisma.salesChannel.findFirst({ where: { id: channelId, storeId }, select: { id: true } }),
+      prisma.salesChannel.findFirst({
+        where: { id: channelId, storeId },
+        select: { id: true, currencyCode: true },
+      }),
     ]);
     if (!product || !channel) return res.status(404).json({ error: "Product or channel not found" });
 
     const fx = priceFxToEur ? Number(priceFxToEur) : null;
     const price = priceOriginal ? Number(priceOriginal) : null;
     const frozen = price !== null && fx !== null ? Number((price * fx).toFixed(2)) : null;
+    const parsedPriceCurrency =
+      priceCurrencyCode ? parseCurrencyCode(priceCurrencyCode) : parseCurrencyCode(channel.currencyCode || "EUR");
+    if (priceOriginal !== undefined && !isPositiveNumber(priceOriginal)) {
+      return res.status(400).json({ error: "priceOriginal must be positive when provided" });
+    }
+    if (priceFxToEur !== undefined && !isPositiveNumber(priceFxToEur)) {
+      return res.status(400).json({ error: "priceFxToEur must be positive when provided" });
+    }
 
-    const listing = await prisma.productChannel.upsert({
-      where: { productId_channelId: { productId, channelId } },
-      update: {
-        listingStatus: listingStatus || "active",
-        publicName: publicName || null,
-        channelEan: channelEan || null,
-        listingUrl: listingUrl || null,
-        priceOriginal: price !== null ? String(price) : null,
-        priceCurrencyCode: priceCurrencyCode || null,
-        priceFxToEur: fx !== null ? String(fx) : null,
-        priceEurFrozen: frozen !== null ? String(frozen) : null,
-      },
-      create: {
-        productId,
-        channelId,
-        listingStatus: listingStatus || "active",
-        publicName: publicName || null,
-        channelEan: channelEan || null,
-        listingUrl: listingUrl || null,
-        priceOriginal: price !== null ? String(price) : null,
-        priceCurrencyCode: priceCurrencyCode || null,
-        priceFxToEur: fx !== null ? String(fx) : null,
-        priceEurFrozen: frozen !== null ? String(frozen) : null,
-      },
+    const listing = await prisma.$transaction(async (tx) => {
+      const baseListing = await tx.productChannel.upsert({
+        where: { productId_channelId: { productId, channelId } },
+        update: {
+          listingStatus: listingStatus || "active",
+          publicName: publicName || null,
+          channelEan: channelEan || null,
+          listingUrl: listingUrl || null,
+          priceOriginal: price !== null ? String(price) : null,
+          priceCurrencyCode: parsedPriceCurrency || null,
+          priceFxToEur: fx !== null ? String(fx) : null,
+          priceEurFrozen: frozen !== null ? String(frozen) : null,
+        },
+        create: {
+          productId,
+          channelId,
+          listingStatus: listingStatus || "active",
+          publicName: publicName || null,
+          channelEan: channelEan || null,
+          listingUrl: listingUrl || null,
+          priceOriginal: price !== null ? String(price) : null,
+          priceCurrencyCode: parsedPriceCurrency || null,
+          priceFxToEur: fx !== null ? String(fx) : null,
+          priceEurFrozen: frozen !== null ? String(frozen) : null,
+        },
+      });
+
+      await tx.channelProductLink.upsert({
+        where: { productId_salesChannelId: { productId, salesChannelId: channelId } },
+        update: {
+          productUrl: listingUrl || null,
+          externalProductId: channelEan || null,
+          status: listingStatus || "active",
+        },
+        create: {
+          productId,
+          salesChannelId: channelId,
+          productUrl: listingUrl || null,
+          externalProductId: channelEan || null,
+          status: listingStatus || "active",
+        },
+      });
+
+      if (price !== null) {
+        await tx.productChannelPrice.create({
+          data: {
+            productId,
+            salesChannelId: channelId,
+            priceAmount: String(price),
+            currencyCode: parsedPriceCurrency || "EUR",
+            isActive: true,
+            effectiveFrom: new Date(),
+            effectiveTo: null,
+          },
+        });
+      }
+
+      if (publicName) {
+        await tx.channelProductText.upsert({
+          where: {
+            productId_salesChannelId_locale: {
+              productId,
+              salesChannelId: channelId,
+              locale: "es",
+            },
+          },
+          update: { title: publicName, description: null },
+          create: {
+            productId,
+            salesChannelId: channelId,
+            locale: "es",
+            title: publicName,
+            description: null,
+          },
+        });
+      }
+
+      return baseListing;
     });
 
     return res.json({ listing });
@@ -994,6 +1732,29 @@ app.put("/products/:productId/texts", requireAuth, async (req, res) => {
         description: description || null,
       },
     });
+
+    if (channelId) {
+      await prisma.channelProductText.upsert({
+        where: {
+          productId_salesChannelId_locale: {
+            productId,
+            salesChannelId: channelId,
+            locale: String(locale).trim().toLowerCase(),
+          },
+        },
+        update: {
+          title: String(publicName).trim(),
+          description: description || null,
+        },
+        create: {
+          productId,
+          salesChannelId: channelId,
+          locale: String(locale).trim().toLowerCase(),
+          title: String(publicName).trim(),
+          description: description || null,
+        },
+      });
+    }
 
     return res.json({ text });
   } catch (err) {
@@ -1105,77 +1866,21 @@ app.post("/inventory/out", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
 
-    const result = await prisma.$transaction(async (tx) => {
-      const lots = await tx.inventoryLot.findMany({
-        where: {
-          storeId,
-          productId,
-          warehouseId,
-          quantityAvailable: { gt: 0 },
-          status: "available",
-        },
-        orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
-      });
+    const result = await prisma.$transaction(async (tx) =>
+      consumeProductFifo(tx, {
+        storeId,
+        productId,
+        quantity: qtyNeeded,
+        userId,
+        warehouseId,
+        referenceType: referenceType || "order",
+        referenceId: referenceId || null,
+        reason: reason || "Sale / picking",
+      })
+    );
 
-      const totalAvailable = lots.reduce((sum, l) => sum + Number(l.quantityAvailable), 0);
-      if (totalAvailable < qtyNeeded) {
-        return {
-          error: {
-            code: "INSUFFICIENT_STOCK",
-            available: totalAvailable,
-            requested: qtyNeeded,
-          },
-        };
-      }
-
-      let remaining = qtyNeeded;
-      const consumedLots = [];
-
-      for (const lot of lots) {
-        if (remaining <= 0) break;
-        const current = Number(lot.quantityAvailable);
-        if (current <= 0) continue;
-
-        const used = Math.min(current, remaining);
-        remaining -= used;
-
-        const updated = await tx.inventoryLot.update({
-          where: { id: lot.id },
-          data: { quantityAvailable: current - used },
-        });
-
-        const movement = await tx.inventoryMovement.create({
-          data: {
-            storeId,
-            productId,
-            lotId: lot.id,
-            warehouseId,
-            movementType: "sale_out",
-            quantity: -used,
-            unitCostEurFrozen: lot.unitCostEurFrozen,
-            referenceType: referenceType || "order",
-            referenceId: referenceId || null,
-            reason: reason || "Sale / picking",
-            createdByUserId: userId,
-          },
-        });
-
-        consumedLots.push({
-          lotId: lot.id,
-          lotCode: lot.lotCode,
-          consumed: used,
-          before: current,
-          after: Number(updated.quantityAvailable),
-          unitCostEurFrozen: normalizeMoney(lot.unitCostEurFrozen),
-          movementId: movement.id,
-        });
-      }
-
-      return { consumedLots };
-    });
-
-    if (result.error) {
-      return res.status(409).json({ error: result.error.code, ...result.error });
+    if (!result.ok) {
+      return res.status(409).json({ error: "INSUFFICIENT_STOCK", available: result.available, requested: result.requested });
     }
 
     return res.json({ ok: true, consumedLots: result.consumedLots });
@@ -1214,6 +1919,10 @@ app.get("/orders", requireAuth, async (req, res) => {
         customer: { select: { id: true, fullName: true, email: true, country: true } },
         items: { select: { id: true, quantity: true, title: true, revenueEurFrozen: true } },
         invoice: { select: { id: true, invoiceNumber: true } },
+        backorders: {
+          where: { status: "open" },
+          select: { id: true, productId: true, missingQty: true, status: true },
+        },
       },
       orderBy: { orderedAt: "desc" },
       take: 200,
@@ -1236,6 +1945,7 @@ app.get("/orders", requireAuth, async (req, res) => {
           ...it,
           revenueEurFrozen: canSensitive ? normalizeMoney(it.revenueEurFrozen) : null,
         })),
+        backorders: o.backorders,
       })),
     });
   } catch (err) {
@@ -1267,6 +1977,7 @@ app.get("/orders", requireAuth, async (req, res) => {
       paymentStatus,
       orderedAt,
       items,
+      allowBackorder,
     } = req.body || {};
 
     if (!storeId || !orderNumber || !platform || !currencyCode || !grossAmountOriginal || !grossFxToEur) {
@@ -1395,6 +2106,7 @@ app.get("/orders", requireAuth, async (req, res) => {
 
       let totalCogs = 0;
       let totalRevenue = 0;
+      let hasBackorder = false;
 
       for (const rawItem of items) {
         const quantity = Number(rawItem.quantity || 1);
@@ -1405,6 +2117,7 @@ app.get("/orders", requireAuth, async (req, res) => {
 
         let productId = rawItem.productId || null;
         let cogsLine = 0;
+        let backorderMissing = 0;
 
         if (!productId && rawItem.productEan) {
           const byScan = await findProductByScan(storeId, rawItem.productEan);
@@ -1420,52 +2133,29 @@ app.get("/orders", requireAuth, async (req, res) => {
         }
 
         if (productId) {
-          const availableLots = await tx.inventoryLot.findMany({
-            where: { storeId, productId, quantityAvailable: { gt: 0 }, status: "available" },
-            orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
+          const stockResult = await consumeProductFifo(tx, {
+            storeId,
+            productId,
+            quantity,
+            userId,
+            referenceType: "sales_order",
+            referenceId: createdOrder.id,
+            reason: `Order ${createdOrder.orderNumber}`,
+            allowPartial: Boolean(allowBackorder),
           });
 
-          let remaining = quantity;
-          for (const lot of availableLots) {
-            if (remaining <= 0) break;
-            const avail = Number(lot.quantityAvailable);
-            if (avail <= 0) continue;
-            const used = Math.min(avail, remaining);
-            remaining -= used;
-
-            await tx.inventoryLot.update({
-              where: { id: lot.id },
-              data: { quantityAvailable: avail - used },
-            });
-
-            await tx.inventoryMovement.create({
-              data: {
-                storeId,
-                productId,
-                lotId: lot.id,
-                warehouseId: lot.warehouseId,
-                movementType: "sale_out",
-                quantity: -used,
-                unitCostEurFrozen: lot.unitCostEurFrozen,
-                referenceType: "sales_order",
-                referenceId: createdOrder.id,
-                reason: `Order ${createdOrder.orderNumber}`,
-                createdByUserId: userId,
-              },
-            });
-
-            cogsLine += roundMoney(numberOrZero(lot.unitCostEurFrozen) * used);
-          }
-
-          if (remaining > 0) {
+          if (!Boolean(allowBackorder) && !stockResult.ok) {
             throw new Error("INSUFFICIENT_STOCK_FOR_ORDER_ITEM");
           }
+
+          cogsLine = roundMoney(stockResult.cogs);
+          backorderMissing = Number(stockResult.remaining || 0);
         }
 
         totalRevenue += revenueEur;
         totalCogs += cogsLine;
 
-        await tx.salesOrderItem.create({
+        const createdItem = await tx.salesOrderItem.create({
           data: {
             storeId,
             orderId: createdOrder.id,
@@ -1480,6 +2170,23 @@ app.get("/orders", requireAuth, async (req, res) => {
             cogsEurFrozen: String(cogsLine),
           },
         });
+
+        if (productId && backorderMissing > 0) {
+          hasBackorder = true;
+          await tx.backorderLine.create({
+            data: {
+              storeId,
+              orderId: createdOrder.id,
+              orderItemId: createdItem.id,
+              productId,
+              requestedQty: quantity,
+              fulfilledQty: quantity - backorderMissing,
+              missingQty: backorderMissing,
+              status: "open",
+              note: `Auto backorder from order ${createdOrder.orderNumber}`,
+            },
+          });
+        }
       }
 
       const netProfit = roundMoney(grossEurFrozen - fees - cpa - shipping - packaging - returns - totalCogs);
@@ -1493,9 +2200,11 @@ app.get("/orders", requireAuth, async (req, res) => {
         data: {
           cogsEur: String(totalCogs),
           netProfitEur: String(netProfit),
+          status: hasBackorder ? "backorder" : status || "pending",
         },
         include: {
           items: true,
+          backorders: true,
           sourceChannel: { select: { id: true, code: true, name: true } },
           customer: { select: { id: true, fullName: true, email: true, country: true } },
         },
@@ -1547,8 +2256,7 @@ app.patch("/orders/:orderId/status", requireAuth, async (req, res) => {
     if (!order) return res.status(404).json({ error: "Order not found" });
 
     if (status && status !== order.status) {
-      const allowedNext = ORDER_STATUS_FLOW[String(order.status)] || new Set();
-      if (!allowedNext.has(String(status))) {
+      if (!isAllowedTransition(order.status, status, ORDER_STATUS_FLOW)) {
         return res.status(409).json({
           error: "Invalid order status transition",
           from: order.status,
@@ -1558,8 +2266,7 @@ app.patch("/orders/:orderId/status", requireAuth, async (req, res) => {
     }
 
     if (paymentStatus && paymentStatus !== order.paymentStatus) {
-      const allowedNext = PAYMENT_STATUS_FLOW[String(order.paymentStatus)] || new Set();
-      if (!allowedNext.has(String(paymentStatus))) {
+      if (!isAllowedTransition(order.paymentStatus, paymentStatus, PAYMENT_STATUS_FLOW)) {
         return res.status(409).json({
           error: "Invalid payment status transition",
           from: order.paymentStatus,
@@ -1579,6 +2286,588 @@ app.patch("/orders/:orderId/status", requireAuth, async (req, res) => {
     return res.json({ order: updated });
   } catch (err) {
     console.error("PATCH /orders/:orderId/status error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/backorders", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const status = String(req.query.status || "open").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWriteOrders = await canManageOrders(userId, storeId, membership.roleKey);
+    if (!canWriteOrders) return res.status(403).json({ error: "No permission to manage orders" });
+
+    const backorders = await prisma.backorderLine.findMany({
+      where: { storeId, ...(status ? { status } : {}) },
+      include: {
+        order: { select: { id: true, orderNumber: true, status: true } },
+        product: { select: { id: true, ean: true, brand: true, model: true } },
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: 300,
+    });
+
+    return res.json({ backorders });
+  } catch (err) {
+    console.error("GET /backorders error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/backorders/:backorderId/fulfill", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { backorderId } = req.params;
+    const { storeId, fulfillQty, warehouseId } = req.body || {};
+
+    if (!storeId || !Number.isInteger(Number(fulfillQty)) || Number(fulfillQty) <= 0) {
+      return res.status(400).json({ error: "Missing storeId or invalid fulfillQty" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWriteOrders = await canManageOrders(userId, storeId, membership.roleKey);
+    if (!canWriteOrders) return res.status(403).json({ error: "No permission to manage orders" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const line = await tx.backorderLine.findFirst({
+        where: { id: backorderId, storeId },
+        include: { order: { select: { id: true, orderNumber: true, status: true } } },
+      });
+      if (!line) return { error: { code: "NOT_FOUND" } };
+      if (line.status !== "open") return { error: { code: "BACKORDER_NOT_OPEN" } };
+
+      const openQty = Number(line.missingQty) - Number(line.fulfilledQty);
+      const qty = Number(fulfillQty);
+      if (qty > openQty) {
+        return { error: { code: "FULFILL_QTY_EXCEEDS_OPEN", openQty, requested: qty } };
+      }
+
+      const stockResult = await consumeProductFifo(tx, {
+        storeId,
+        productId: line.productId,
+        quantity: qty,
+        userId,
+        warehouseId: warehouseId || null,
+        referenceType: "backorder_fulfillment",
+        referenceId: line.id,
+        reason: `Backorder ${line.id} fulfillment`,
+      });
+
+      if (!stockResult.ok) {
+        return {
+          error: {
+            code: "INSUFFICIENT_STOCK",
+            available: stockResult.available,
+            requested: stockResult.requested,
+          },
+        };
+      }
+
+      const nextFulfilled = Number(line.fulfilledQty) + qty;
+      const nextStatus = nextFulfilled >= Number(line.missingQty) ? "fulfilled" : "open";
+
+      const updatedLine = await tx.backorderLine.update({
+        where: { id: line.id },
+        data: {
+          fulfilledQty: nextFulfilled,
+          status: nextStatus,
+        },
+      });
+
+      if (nextStatus === "fulfilled") {
+        const openCount = await tx.backorderLine.count({
+          where: { orderId: line.orderId, status: "open" },
+        });
+        if (openCount === 0 && line.order.status === "backorder") {
+          await tx.salesOrder.update({
+            where: { id: line.orderId },
+            data: { status: "paid" },
+          });
+        }
+      }
+
+      return { line: updatedLine, consumedLots: stockResult.consumedLots };
+    });
+
+    if (result.error) {
+      if (result.error.code === "NOT_FOUND") return res.status(404).json({ error: "Backorder not found" });
+      if (result.error.code === "BACKORDER_NOT_OPEN") return res.status(409).json({ error: "Backorder is not open" });
+      if (result.error.code === "FULFILL_QTY_EXCEEDS_OPEN") return res.status(409).json({ error: "fulfillQty exceeds open qty", ...result.error });
+      if (result.error.code === "INSUFFICIENT_STOCK") return res.status(409).json({ error: "INSUFFICIENT_STOCK", ...result.error });
+    }
+
+    return res.json({ backorder: result.line, consumedLots: result.consumedLots });
+  } catch (err) {
+    console.error("PATCH /backorders/:backorderId/fulfill error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/inventory/alerts/low-stock", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const warehouseId = String(req.query.warehouseId || "").trim();
+    const thresholdRaw = Number(req.query.threshold || 2);
+    const threshold = Number.isFinite(thresholdRaw) ? Math.max(0, Math.floor(thresholdRaw)) : 2;
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const products = await prisma.product.findMany({
+      where: { storeId, status: "active" },
+      select: { id: true, ean: true, brand: true, model: true, name: true },
+      orderBy: [{ brand: "asc" }, { model: "asc" }],
+      take: 500,
+    });
+
+    const lots = await prisma.inventoryLot.groupBy({
+      by: ["productId"],
+      where: {
+        storeId,
+        quantityAvailable: { gt: 0 },
+        status: "available",
+        ...(warehouseId ? { warehouseId } : {}),
+      },
+      _sum: { quantityAvailable: true },
+    });
+
+    const stockByProduct = new Map(lots.map((l) => [l.productId, Number(l._sum.quantityAvailable || 0)]));
+    const alerts = products
+      .map((p) => {
+        const stock = stockByProduct.get(p.id) || 0;
+        return {
+          productId: p.id,
+          ean: p.ean,
+          brand: p.brand,
+          model: p.model,
+          name: p.name,
+          currentStock: stock,
+          threshold,
+          severity: stock === 0 ? "critical" : "low",
+        };
+      })
+      .filter((a) => a.currentStock <= threshold)
+      .slice(0, 200);
+
+    return res.json({ alerts });
+  } catch (err) {
+    console.error("GET /inventory/alerts/low-stock error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/analytics/summary", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+
+    const range = parseDateRange(req.query);
+    const orderWhere = {
+      storeId,
+      ...(range.from || range.to
+        ? {
+            orderedAt: {
+              ...(range.from ? { gte: range.from } : {}),
+              ...(range.to ? { lte: range.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const payoutWhere = {
+      storeId,
+      ...(range.from || range.to
+        ? {
+            payoutDate: {
+              ...(range.from ? { gte: range.from } : {}),
+              ...(range.to ? { lte: range.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const returnWhere = {
+      storeId,
+      ...(range.from || range.to
+        ? {
+            createdAt: {
+              ...(range.from ? { gte: range.from } : {}),
+              ...(range.to ? { lte: range.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [orders, payouts, returns, lots] = await Promise.all([
+      prisma.salesOrder.findMany({
+        where: orderWhere,
+        select: { grossAmountEurFrozen: true, netProfitEur: true, cogsEur: true },
+      }),
+      prisma.payout.findMany({
+        where: payoutWhere,
+        include: { matches: { select: { amountEur: true } } },
+      }),
+      prisma.returnCase.findMany({
+        where: returnWhere,
+        select: { returnCostEur: true, status: true },
+      }),
+      prisma.inventoryLot.findMany({
+        where: { storeId, quantityAvailable: { gt: 0 } },
+        select: { quantityAvailable: true, unitCostEurFrozen: true },
+      }),
+    ]);
+
+    const salesRevenueEur = roundMoney(orders.reduce((s, o) => s + numberOrZero(o.grossAmountEurFrozen), 0));
+    const salesProfitEur = roundMoney(orders.reduce((s, o) => s + numberOrZero(o.netProfitEur), 0));
+    const salesCogsEur = roundMoney(orders.reduce((s, o) => s + numberOrZero(o.cogsEur), 0));
+
+    const payoutGrossEur = roundMoney(payouts.reduce((s, p) => s + numberOrZero(p.amountEurFrozen), 0));
+    const payoutNetExpectedEur = roundMoney(
+      payouts.reduce((s, p) => s + numberOrZero(p.amountEurFrozen) - numberOrZero(p.feesEur) + numberOrZero(p.adjustmentsEur), 0)
+    );
+    const payoutReconciledEur = roundMoney(
+      payouts.reduce((s, p) => s + p.matches.reduce((m, row) => m + numberOrZero(row.amountEur), 0), 0)
+    );
+
+    const returnCostEur = roundMoney(returns.reduce((s, r) => s + numberOrZero(r.returnCostEur), 0));
+    const inventoryValueEur = roundMoney(
+      lots.reduce((s, l) => s + numberOrZero(l.unitCostEurFrozen) * Number(l.quantityAvailable || 0), 0)
+    );
+
+    return res.json({
+      range: { dateFrom: range.from, dateTo: range.to },
+      sales: {
+        ordersCount: orders.length,
+        revenueEur: salesRevenueEur,
+        cogsEur: salesCogsEur,
+        profitEur: salesProfitEur,
+      },
+      payouts: {
+        payoutsCount: payouts.length,
+        grossEur: payoutGrossEur,
+        netExpectedEur: payoutNetExpectedEur,
+        reconciledEur: payoutReconciledEur,
+        discrepancyEur: roundMoney(payoutNetExpectedEur - payoutReconciledEur),
+      },
+      returns: {
+        casesCount: returns.length,
+        totalCostEur: returnCostEur,
+      },
+      inventory: {
+        stockLots: lots.length,
+        valueEur: inventoryValueEur,
+      },
+    });
+  } catch (err) {
+    console.error("GET /analytics/summary error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/analytics/channels", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+
+    const range = parseDateRange(req.query);
+    const orders = await prisma.salesOrder.findMany({
+      where: {
+        storeId,
+        ...(range.from || range.to
+          ? {
+              orderedAt: {
+                ...(range.from ? { gte: range.from } : {}),
+                ...(range.to ? { lte: range.to } : {}),
+              },
+            }
+          : {}),
+      },
+      include: { sourceChannel: { select: { id: true, code: true, name: true } } },
+    });
+
+    const byChannel = new Map();
+    for (const o of orders) {
+      const key = o.sourceChannelId || "manual";
+      const entry = byChannel.get(key) || {
+        channelId: o.sourceChannelId || null,
+        channelCode: o.sourceChannel?.code || "MANUAL",
+        channelName: o.sourceChannel?.name || o.sourceLabel || "Manual/Unknown",
+        orders: 0,
+        revenueEur: 0,
+        profitEur: 0,
+        returns: 0,
+      };
+      entry.orders += 1;
+      entry.revenueEur += numberOrZero(o.grossAmountEurFrozen);
+      entry.profitEur += numberOrZero(o.netProfitEur);
+      if (o.status === "returned") entry.returns += 1;
+      byChannel.set(key, entry);
+    }
+
+    return res.json({
+      channels: Array.from(byChannel.values())
+        .map((r) => ({
+          ...r,
+          revenueEur: roundMoney(r.revenueEur),
+          profitEur: roundMoney(r.profitEur),
+          returnRatePct: r.orders ? roundMoney((r.returns / r.orders) * 100) : 0,
+        }))
+        .sort((a, b) => b.revenueEur - a.revenueEur),
+    });
+  } catch (err) {
+    console.error("GET /analytics/channels error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/analytics/countries", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+
+    const range = parseDateRange(req.query);
+    const orders = await prisma.salesOrder.findMany({
+      where: {
+        storeId,
+        ...(range.from || range.to
+          ? {
+              orderedAt: {
+                ...(range.from ? { gte: range.from } : {}),
+                ...(range.to ? { lte: range.to } : {}),
+              },
+            }
+          : {}),
+      },
+      select: { customerCountryCode: true, grossAmountEurFrozen: true, netProfitEur: true, status: true },
+    });
+
+    const byCountry = new Map();
+    for (const o of orders) {
+      const code = (o.customerCountryCode || "UN").toUpperCase();
+      const entry = byCountry.get(code) || { countryCode: code, orders: 0, revenueEur: 0, profitEur: 0, returns: 0 };
+      entry.orders += 1;
+      entry.revenueEur += numberOrZero(o.grossAmountEurFrozen);
+      entry.profitEur += numberOrZero(o.netProfitEur);
+      if (o.status === "returned") entry.returns += 1;
+      byCountry.set(code, entry);
+    }
+
+    return res.json({
+      countries: Array.from(byCountry.values())
+        .map((r) => ({
+          ...r,
+          revenueEur: roundMoney(r.revenueEur),
+          profitEur: roundMoney(r.profitEur),
+          returnRatePct: r.orders ? roundMoney((r.returns / r.orders) * 100) : 0,
+        }))
+        .sort((a, b) => b.revenueEur - a.revenueEur),
+    });
+  } catch (err) {
+    console.error("GET /analytics/countries error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/returns", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const status = String(req.query.status || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    const returns = await prisma.returnCase.findMany({
+      where: { storeId, ...(status ? { status } : {}) },
+      include: {
+        order: { select: { id: true, orderNumber: true } },
+        product: { select: { id: true, ean: true, brand: true, model: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
+        processedBy: { select: { id: true, fullName: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+
+    return res.json({
+      returns: returns.map((r) => ({
+        ...r,
+        returnCostEur: canSensitive ? normalizeMoney(r.returnCostEur) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("GET /returns error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/returns", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const {
+      storeId,
+      orderId,
+      productId,
+      trackingCode,
+      reason,
+      labelPayer,
+      conditionState,
+      packagingRecovered,
+      decision,
+      quantity,
+      returnCostEur,
+      warehouseId,
+    } = req.body || {};
+
+    if (!storeId || !decision || !quantity) {
+      return res.status(400).json({ error: "Missing storeId, decision or quantity" });
+    }
+    if (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0) {
+      return res.status(400).json({ error: "quantity must be a positive integer" });
+    }
+    if (!["restock", "discount", "repair", "scrap"].includes(String(decision))) {
+      return res.status(400).json({ error: "Invalid decision" });
+    }
+    if (returnCostEur !== undefined && !isNonNegativeNumber(returnCostEur)) {
+      return res.status(400).json({ error: "returnCostEur must be non-negative" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageReturns(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage returns" });
+
+    if (decision === "restock" && !warehouseId) {
+      return res.status(400).json({ error: "warehouseId is required for restock returns" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const order = orderId
+        ? await tx.salesOrder.findFirst({ where: { id: orderId, storeId }, select: { id: true, returnCostEur: true, netProfitEur: true, status: true } })
+        : null;
+      if (orderId && !order) throw new Error("ORDER_NOT_FOUND");
+
+      const product = productId
+        ? await tx.product.findFirst({ where: { id: productId, storeId }, select: { id: true, ean: true } })
+        : null;
+      if (productId && !product) throw new Error("PRODUCT_NOT_FOUND");
+
+      const warehouse = warehouseId
+        ? await tx.warehouse.findFirst({ where: { id: warehouseId, storeId }, select: { id: true, code: true } })
+        : null;
+      if (warehouseId && !warehouse) throw new Error("WAREHOUSE_NOT_FOUND");
+
+      const returnCase = await tx.returnCase.create({
+        data: {
+          storeId,
+          orderId: orderId || null,
+          productId: productId || null,
+          trackingCode: trackingCode || null,
+          reason: reason || null,
+          labelPayer: labelPayer || null,
+          conditionState: conditionState || null,
+          packagingRecovered: Boolean(packagingRecovered),
+          decision,
+          status: "processed",
+          quantity: Number(quantity),
+          returnCostEur: String(numberOrZero(returnCostEur)),
+          warehouseId: warehouseId || null,
+          processedByUserId: userId,
+          processedAt: new Date(),
+        },
+      });
+
+      if (order) {
+        const extra = numberOrZero(returnCostEur);
+        const currentReturn = numberOrZero(order.returnCostEur);
+        const currentProfit = numberOrZero(order.netProfitEur);
+        await tx.salesOrder.update({
+          where: { id: order.id },
+          data: {
+            returnCostEur: String(roundMoney(currentReturn + extra)),
+            netProfitEur: String(roundMoney(currentProfit - extra)),
+            status: decision === "restock" || decision === "discount" || decision === "repair" || decision === "scrap" ? "returned" : order.status,
+          },
+        });
+      }
+
+      if (decision === "restock" && product && warehouse) {
+        const lot = await tx.inventoryLot.create({
+          data: {
+            storeId,
+            productId: product.id,
+            warehouseId: warehouse.id,
+            lotCode: `RET-${new Date().toISOString().slice(0, 10)}-${Date.now()}`,
+            sourceType: "return_restock",
+            status: "available",
+            supplierName: "Return",
+            purchasedAt: null,
+            receivedAt: new Date(),
+            quantityReceived: Number(quantity),
+            quantityAvailable: Number(quantity),
+            unitCostOriginal: "0",
+            costCurrencyCode: "EUR",
+            fxToEur: "1",
+            unitCostEurFrozen: "0",
+            note: `Restock from return ${returnCase.id}`,
+          },
+        });
+
+        await tx.inventoryMovement.create({
+          data: {
+            storeId,
+            productId: product.id,
+            lotId: lot.id,
+            warehouseId: warehouse.id,
+            movementType: "return_in",
+            quantity: Number(quantity),
+            unitCostEurFrozen: "0",
+            referenceType: "return_case",
+            referenceId: returnCase.id,
+            reason: "Return restock",
+            createdByUserId: userId,
+          },
+        });
+      }
+
+      return returnCase;
+    });
+
+    return res.status(201).json({ returnCase: result });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg === "ORDER_NOT_FOUND") return res.status(404).json({ error: "Order not found for this store" });
+    if (msg === "PRODUCT_NOT_FOUND") return res.status(404).json({ error: "Product not found for this store" });
+    if (msg === "WAREHOUSE_NOT_FOUND") return res.status(404).json({ error: "Warehouse not found for this store" });
+    console.error("POST /returns error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
@@ -1925,11 +3214,12 @@ app.get("/invoices", requireAuth, async (req, res) => {
   }
 });
 
-  app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
+app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
     const { invoiceId } = req.params;
     const storeId = String(req.query.storeId || "").trim();
+    const format = String(req.query.format || "html").trim().toLowerCase();
     if (!storeId) return res.status(400).json({ error: "Missing storeId" });
 
     const membership = await getStoreMembership(userId, storeId);
@@ -1942,6 +3232,17 @@ app.get("/invoices", requireAuth, async (req, res) => {
       include: { order: true, store: true },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    if (format === "pdf") {
+      const pdfBuffer = buildInvoicePdfBuffer({
+        invoice,
+        storeName: invoice.store.name,
+        orderNumber: invoice.order.orderNumber,
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${invoice.invoiceNumber}.pdf"`);
+      return res.send(pdfBuffer);
+    }
 
     const html = `<!doctype html>
 <html>
@@ -1995,8 +3296,16 @@ app.get("/products/:productId", requireAuth, async (req, res) => {
       where: { id: productId, storeId },
       include: {
         eanAliases: true,
+        images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }] },
         listings: { include: { channel: true } },
         texts: true,
+        channelLinks: { include: { salesChannel: true } },
+        channelPrices: {
+          where: { isActive: true },
+          include: { salesChannel: true },
+          orderBy: { createdAt: "desc" },
+        },
+        channelTexts: { include: { salesChannel: true }, orderBy: [{ locale: "asc" }] },
         lots: {
           include: {
             warehouse: { select: { id: true, code: true, name: true } },

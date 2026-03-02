@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Topbar from "../components/topbar";
 import { requireTokenOrRedirect } from "../lib/auth";
+import { useStorePermissions } from "../lib/access";
 
 const API_BASE = "http://localhost:3001";
 
@@ -18,8 +19,7 @@ type Invoice = {
 type Order = { id: string; orderNumber: string };
 
 export default function InvoicesPage() {
-  const [storeId, setStoreId] = useState("");
-  const [storeName, setStoreName] = useState("");
+  const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
@@ -49,27 +49,12 @@ export default function InvoicesPage() {
   }
 
   useEffect(() => {
-    const token = requireTokenOrRedirect();
-    if (!token) return;
-
-    (async () => {
-      const selectedStoreId = localStorage.getItem("selectedStoreId");
-      if (!selectedStoreId) return;
-
-      let nextStoreName = "";
-      try {
-        const storesRaw = localStorage.getItem("stores");
-        if (storesRaw) {
-          const stores = JSON.parse(storesRaw) as { storeId: string; storeName: string }[];
-          nextStoreName = stores.find((s) => s.storeId === selectedStoreId)?.storeName || "";
-        }
-      } catch {}
-
-      setStoreId(selectedStoreId);
-      setStoreName(nextStoreName);
-      await loadAll(selectedStoreId);
-    })();
-  }, []);
+    if (loading) return;
+    if (!storeId || !permissions.financeRead) return;
+    queueMicrotask(() => {
+      void loadAll(storeId);
+    });
+  }, [loading, storeId, permissions.financeRead]);
 
   async function createInvoice(e: React.FormEvent) {
     e.preventDefault();
@@ -88,8 +73,26 @@ export default function InvoicesPage() {
   function openDoc(invoiceId: string) {
     const token = requireTokenOrRedirect();
     if (!token || !storeId) return;
-    const url = `${API_BASE}/invoices/${invoiceId}/document?storeId=${encodeURIComponent(storeId)}`;
+    const url = `${API_BASE}/invoices/${invoiceId}/document?storeId=${encodeURIComponent(
+      storeId
+    )}&format=pdf`;
     window.open(url, "_blank");
+  }
+
+  if (loading) {
+    return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
+  }
+
+  if (permissionsError) {
+    return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  }
+
+  if (!permissions.financeRead) {
+    return (
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="max-w-3xl mx-auto bg-white p-4 rounded-2xl shadow-md">No autorizado para Facturas.</div>
+      </div>
+    );
   }
 
   return (

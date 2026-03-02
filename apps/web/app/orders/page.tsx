@@ -8,6 +8,7 @@ const API_BASE = "http://localhost:3001";
 
 type Product = { id: string; ean: string; brand: string; model: string; name: string };
 type Channel = { id: string; code: string; name: string };
+type Warehouse = { id: string; code: string; name: string };
 type Order = {
   id: string;
   orderNumber: string;
@@ -18,6 +19,23 @@ type Order = {
   grossAmountEurFrozen: number;
   netProfitEur: number;
   orderedAt: string;
+  backorders?: { id: string; productId: string; missingQty: number; status: string }[];
+};
+type Backorder = {
+  id: string;
+  status: string;
+  missingQty: number;
+  fulfilledQty: number;
+  order: { orderNumber: string };
+  product: { brand: string; model: string };
+};
+type StockAlert = {
+  productId: string;
+  brand: string;
+  model: string;
+  currentStock: number;
+  threshold: number;
+  severity: string;
 };
 
 export default function OrdersPage() {
@@ -26,7 +44,11 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [backorders, setBackorders] = useState<Backorder[]>([]);
+  const [stockAlerts, setStockAlerts] = useState<StockAlert[]>([]);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
 
   const [orderNumber, setOrderNumber] = useState("");
@@ -36,6 +58,10 @@ export default function OrdersPage() {
   const [amount, setAmount] = useState("209");
   const [productId, setProductId] = useState("");
   const [qty, setQty] = useState("1");
+  const [allowBackorder, setAllowBackorder] = useState(false);
+  const [fulfillQtyByBackorder, setFulfillQtyByBackorder] = useState<Record<string, string>>({});
+  const [fulfillingBackorderId, setFulfillingBackorderId] = useState("");
+  const [fulfillWarehouseId, setFulfillWarehouseId] = useState("");
 
   async function loadAll(currentStoreId: string) {
     const token = requireTokenOrRedirect();
@@ -43,7 +69,7 @@ export default function OrdersPage() {
     setLoading(true);
     setError("");
     try {
-      const [ordersRes, productsRes, bootstrapRes] = await Promise.all([
+      const [ordersRes, productsRes, bootstrapRes, backordersRes, alertsRes] = await Promise.all([
         fetch(`${API_BASE}/orders?storeId=${encodeURIComponent(currentStoreId)}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
@@ -53,14 +79,27 @@ export default function OrdersPage() {
         fetch(`${API_BASE}/stores/${currentStoreId}/bootstrap`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        fetch(`${API_BASE}/backorders?storeId=${encodeURIComponent(currentStoreId)}&status=open`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/inventory/alerts/low-stock?storeId=${encodeURIComponent(currentStoreId)}&threshold=2`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
       const ordersData = await ordersRes.json();
       const productsData = await productsRes.json();
       const bootstrapData = await bootstrapRes.json();
+      const backordersData = await backordersRes.json();
+      const alertsData = await alertsRes.json();
 
       if (ordersRes.ok) setOrders(ordersData.orders || []);
       if (productsRes.ok) setProducts(productsData.products || []);
-      if (bootstrapRes.ok) setChannels(bootstrapData.channels || []);
+      if (bootstrapRes.ok) {
+        setChannels(bootstrapData.channels || []);
+        setWarehouses(bootstrapData.warehouses || []);
+      }
+      if (backordersRes.ok) setBackorders(backordersData.backorders || []);
+      if (alertsRes.ok) setStockAlerts(alertsData.alerts || []);
 
       if (!ordersRes.ok) setError(ordersData.error || "Error loading orders");
     } catch {
@@ -113,6 +152,7 @@ export default function OrdersPage() {
         returnCostEur: "0",
         status: "paid",
         paymentStatus: "paid",
+        allowBackorder,
         items: [
           {
             productId,
@@ -127,8 +167,51 @@ export default function OrdersPage() {
     });
     const data = await res.json();
     if (!res.ok) return setError(data.error || "Cannot create order");
+    if (data.order?.status === "backorder") {
+      setInfo("Pedido creado con backorder abierto por falta de stock.");
+    } else {
+      setInfo("");
+    }
     setOrderNumber("");
     await loadAll(storeId);
+  }
+
+  async function fulfillBackorder(backorder: Backorder) {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId) return;
+
+    const openQty = Math.max(Number(backorder.missingQty || 0) - Number(backorder.fulfilledQty || 0), 0);
+    const rawQty = fulfillQtyByBackorder[backorder.id];
+    const fulfillQty = Number(rawQty || openQty || 0);
+    if (!Number.isInteger(fulfillQty) || fulfillQty <= 0) {
+      setError("Cantidad de cumplimiento invalida");
+      return;
+    }
+
+    setFulfillingBackorderId(backorder.id);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/backorders/${backorder.id}/fulfill`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          fulfillQty,
+          warehouseId: fulfillWarehouseId || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo cumplir backorder");
+        return;
+      }
+      setInfo(`Backorder ${backorder.order.orderNumber} actualizado.`);
+      await loadAll(storeId);
+    } catch {
+      setError("Connection error");
+    } finally {
+      setFulfillingBackorderId("");
+    }
   }
 
   return (
@@ -136,6 +219,7 @@ export default function OrdersPage() {
       <div className="max-w-7xl mx-auto space-y-4">
         <Topbar title="Pedidos / Ventas" storeName={storeName} />
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
+        {info ? <div className="bg-amber-100 text-amber-800 p-3 rounded">{info}</div> : null}
 
         <div className="bg-white p-4 rounded-2xl shadow-md">
           <h2 className="font-semibold mb-3">Nuevo pedido</h2>
@@ -172,6 +256,10 @@ export default function OrdersPage() {
                 Crear
               </button>
             </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={allowBackorder} onChange={(e) => setAllowBackorder(e.target.checked)} />
+              Permitir backorder
+            </label>
           </form>
         </div>
 
@@ -216,6 +304,72 @@ export default function OrdersPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="bg-white p-4 rounded-2xl shadow-md">
+            <h2 className="font-semibold mb-2">Backorders abiertos</h2>
+            <div className="mb-2">
+              <select
+                className="border rounded px-3 py-2 text-sm"
+                value={fulfillWarehouseId}
+                onChange={(e) => setFulfillWarehouseId(e.target.value)}
+              >
+                <option value="">FIFO global (sin filtrar almacén)</option>
+                {warehouses.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.code} - {w.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="text-sm space-y-1">
+              {backorders.length === 0 ? (
+                <div className="text-gray-500">Sin backorders abiertos</div>
+              ) : (
+                backorders.map((b) => (
+                  <div key={b.id} className="border rounded p-2 flex items-center gap-2">
+                    <div className="flex-1">
+                      {b.order.orderNumber} | {b.product.brand} {b.product.model} | faltan{" "}
+                      {Math.max(Number(b.missingQty || 0) - Number(b.fulfilledQty || 0), 0)}
+                    </div>
+                    <input
+                      className="border rounded px-2 py-1 w-20"
+                      value={fulfillQtyByBackorder[b.id] ?? ""}
+                      placeholder="qty"
+                      onChange={(e) =>
+                        setFulfillQtyByBackorder((prev) => ({
+                          ...prev,
+                          [b.id]: e.target.value,
+                        }))
+                      }
+                    />
+                    <button
+                      className="rounded bg-black text-white px-2 py-1 disabled:opacity-50"
+                      onClick={() => fulfillBackorder(b)}
+                      disabled={fulfillingBackorderId === b.id}
+                    >
+                      {fulfillingBackorderId === b.id ? "..." : "Cumplir"}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-2xl shadow-md">
+            <h2 className="font-semibold mb-2">Alertas stock bajo</h2>
+            <div className="text-sm space-y-1">
+              {stockAlerts.length === 0 ? (
+                <div className="text-gray-500">Sin alertas</div>
+              ) : (
+                stockAlerts.map((a) => (
+                  <div key={a.productId}>
+                    {a.brand} {a.model}: {a.currentStock} (umbral {a.threshold})
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

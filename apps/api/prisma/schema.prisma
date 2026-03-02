@@ -92,6 +92,7 @@ enum ChannelListingStatus {
 enum OrderStatus {
   pending
   paid
+  backorder
   packed
   shipped
   delivered
@@ -109,6 +110,46 @@ enum InvoiceStatus {
   draft
   issued
   cancelled
+}
+
+enum ReturnStatus {
+  pending_review
+  processed
+}
+
+enum ReturnDecision {
+  restock
+  discount
+  repair
+  scrap
+}
+
+enum BackorderStatus {
+  open
+  fulfilled
+  cancelled
+}
+
+enum PurchaseOrderStatus {
+  draft
+  sent
+  priced
+  paid
+  preparing
+  checklist
+  tracking_received
+  in_transit
+  received
+  verified
+  closed
+  incident
+}
+
+enum ThreePlLegStatus {
+  planned
+  in_transit
+  delivered
+  delayed
 }
 
 model HoldingCompany {
@@ -139,23 +180,30 @@ model Store {
 
   holding HoldingCompany @relation(fields: [holdingId], references: [id])
 
-  products         Product[]
-  eanAliases       EanAlias[]
-  warehouses       Warehouse[]
-  channels         SalesChannel[]
-  memberships      UserStoreMembership[]
-  userPermissions  UserPermission[]
-  inventoryLots    InventoryLot[]
-  movements        InventoryMovement[]
-  storeCurrencies  StoreCurrency[]
-  fxRates          FxRate[]
-  productOverrides ProductText[]
-  customers        Customer[]
-  salesOrders      SalesOrder[]
-  salesOrderItems  SalesOrderItem[]
-  payouts          Payout[]
-  payoutMatches    PayoutOrderMatch[]
-  invoices         Invoice[]
+  products          Product[]
+  eanAliases        EanAlias[]
+  warehouses        Warehouse[]
+  channels          SalesChannel[]
+  memberships       UserStoreMembership[]
+  userPermissions   UserPermission[]
+  inventoryLots     InventoryLot[]
+  movements         InventoryMovement[]
+  storeCurrencies   StoreCurrency[]
+  fxRates           FxRate[]
+  productOverrides  ProductText[]
+  customers         Customer[]
+  salesOrders       SalesOrder[]
+  salesOrderItems   SalesOrderItem[]
+  payouts           Payout[]
+  payoutMatches     PayoutOrderMatch[]
+  invoices          Invoice[]
+  returns           ReturnCase[]
+  backorders        BackorderLine[]
+  suppliers         Supplier[]
+  purchaseOrders    PurchaseOrder[]
+  purchasePayments  PurchaseOrderPayment[]
+  threePlShipments  ThreePlShipment[]
+  PurchaseOrderItem PurchaseOrderItem[]
 
   @@unique([holdingId, code])
   @@map("stores")
@@ -175,16 +223,25 @@ model Product {
   internalDescription String?
   attributes          Json?
   mainImageUrl        String?
+  modelRef            String?
+  category            String?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
 
-  store      Store               @relation(fields: [storeId], references: [id])
-  eanAliases EanAlias[]
-  listings   ProductChannel[]
-  texts      ProductText[]
-  lots       InventoryLot[]
-  movements  InventoryMovement[]
-  orderItems SalesOrderItem[]
+  store         Store                 @relation(fields: [storeId], references: [id])
+  eanAliases    EanAlias[]
+  images        ProductImage[]
+  listings      ProductChannel[]
+  texts         ProductText[]
+  lots          InventoryLot[]
+  movements     InventoryMovement[]
+  orderItems    SalesOrderItem[]
+  channelLinks  ChannelProductLink[]
+  channelPrices ProductChannelPrice[]
+  channelTexts  ChannelProductText[]
+  returns       ReturnCase[]
+  backorders    BackorderLine[]
+  purchaseItems PurchaseOrderItem[]
 
   @@unique([storeId, ean])
   @@index([storeId, brand, model])
@@ -209,26 +266,99 @@ model EanAlias {
 }
 
 model SalesChannel {
-  id          String        @id @default(cuid())
-  storeId     String
-  code        String
-  name        String
-  type        ChannelType
-  status      ChannelStatus @default(active)
-  feePercent  Decimal?      @db.Decimal(8, 4)
-  cpaFixed    Decimal?      @db.Decimal(14, 2)
-  payoutTerms String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id           String        @id @default(cuid())
+  storeId      String
+  code         String
+  name         String
+  type         ChannelType
+  status       ChannelStatus @default(active)
+  feePercent   Decimal?      @db.Decimal(8, 4)
+  cpaFixed     Decimal?      @db.Decimal(14, 2)
+  payoutTerms  String?
+  countryCode  String?
+  currencyCode String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
-  store    Store            @relation(fields: [storeId], references: [id])
-  products ProductChannel[]
-  texts    ProductText[]
-  orders   SalesOrder[]
-  payouts  Payout[]
+  store         Store                 @relation(fields: [storeId], references: [id])
+  products      ProductChannel[]
+  texts         ProductText[]
+  orders        SalesOrder[]
+  payouts       Payout[]
+  productLinks  ChannelProductLink[]
+  productPrices ProductChannelPrice[]
+  productTexts  ChannelProductText[]
 
   @@unique([storeId, code])
   @@map("sales_channels")
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  imageUrl  String
+  isPrimary Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@map("product_images")
+}
+
+model ChannelProductLink {
+  id                String   @id @default(cuid())
+  productId         String
+  salesChannelId    String
+  productUrl        String?
+  externalProductId String?
+  status            String   @default("active")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesChannel SalesChannel @relation(fields: [salesChannelId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, salesChannelId])
+  @@map("channel_product_links")
+}
+
+model ProductChannelPrice {
+  id             String    @id @default(cuid())
+  productId      String
+  salesChannelId String
+  priceAmount    Decimal   @db.Decimal(14, 2)
+  currencyCode   String
+  isActive       Boolean   @default(true)
+  effectiveFrom  DateTime?
+  effectiveTo    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesChannel SalesChannel @relation(fields: [salesChannelId], references: [id], onDelete: Cascade)
+
+  @@index([productId, salesChannelId, isActive])
+  @@map("product_channel_prices")
+}
+
+model ChannelProductText {
+  id             String   @id @default(cuid())
+  productId      String
+  salesChannelId String
+  locale         String
+  title          String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesChannel SalesChannel @relation(fields: [salesChannelId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, salesChannelId, locale])
+  @@index([salesChannelId, locale])
+  @@map("channel_product_texts")
 }
 
 model ProductChannel {
@@ -289,6 +419,7 @@ model Warehouse {
   locations WarehouseLocation[]
   lots      InventoryLot[]
   movements InventoryMovement[]
+  returns   ReturnCase[]
 
   @@unique([storeId, code])
   @@map("warehouses")
@@ -430,6 +561,8 @@ model SalesOrder {
   items         SalesOrderItem[]
   payoutMatches PayoutOrderMatch[]
   invoice       Invoice?
+  returns       ReturnCase[]
+  backorders    BackorderLine[]
 
   @@unique([storeId, orderNumber])
   @@index([storeId, orderedAt])
@@ -452,13 +585,186 @@ model SalesOrderItem {
   cogsEurFrozen      Decimal  @default(0) @db.Decimal(14, 2)
   createdAt          DateTime @default(now())
 
-  store   Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  order   SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  store      Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order      SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product    Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  backorders BackorderLine[]
 
   @@index([storeId, orderId])
   @@index([storeId, productId])
   @@map("sales_order_items")
+}
+
+model BackorderLine {
+  id           String          @id @default(cuid())
+  storeId      String
+  orderId      String
+  orderItemId  String?
+  productId    String
+  requestedQty Int
+  fulfilledQty Int             @default(0)
+  missingQty   Int
+  status       BackorderStatus @default(open)
+  note         String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  store     Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order     SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem SalesOrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status, createdAt])
+  @@index([storeId, productId, status])
+  @@map("backorder_lines")
+}
+
+model Supplier {
+  id                  String   @id @default(cuid())
+  storeId             String
+  code                String
+  name                String
+  contactName         String?
+  contactEmail        String?
+  city                String?
+  country             String?
+  defaultCurrencyCode String?
+  paymentMethod       String?
+  catalogUrl          String?
+  vacationNote        String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  store          Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([storeId, code])
+  @@index([storeId, isActive])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id              String              @id @default(cuid())
+  storeId         String
+  supplierId      String
+  poNumber        String
+  status          PurchaseOrderStatus @default(draft)
+  orderedAt       DateTime            @default(now())
+  expectedAt      DateTime?
+  receivedAt      DateTime?
+  trackingCode    String?
+  trackingUrl     String?
+  totalAmountEur  Decimal             @default(0) @db.Decimal(14, 2)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  store        Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  supplier     Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy    User?                  @relation("PurchaseOrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items        PurchaseOrderItem[]
+  payments     PurchaseOrderPayment[]
+  shipments3pl ThreePlShipment[]
+
+  @@unique([storeId, poNumber])
+  @@index([storeId, status, orderedAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                String   @id @default(cuid())
+  storeId           String
+  purchaseOrderId   String
+  productId         String?
+  title             String
+  ean               String?
+  quantityOrdered   Int
+  quantityReceived  Int      @default(0)
+  unitCostOriginal  Decimal  @db.Decimal(14, 4)
+  currencyCode      String
+  fxToEur           Decimal  @db.Decimal(14, 6)
+  unitCostEurFrozen Decimal  @db.Decimal(14, 4)
+  totalCostEur      Decimal  @db.Decimal(14, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, purchaseOrderId])
+  @@index([storeId, productId])
+  @@map("purchase_order_items")
+}
+
+model PurchaseOrderPayment {
+  id              String   @id @default(cuid())
+  storeId         String
+  purchaseOrderId String
+  paidAt          DateTime @default(now())
+  currencyCode    String
+  amountOriginal  Decimal  @db.Decimal(14, 2)
+  fxToEur         Decimal  @db.Decimal(14, 6)
+  amountEurFrozen Decimal  @db.Decimal(14, 2)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  createdBy     User?         @relation("PurchasePaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, paidAt])
+  @@index([storeId, purchaseOrderId])
+  @@map("purchase_order_payments")
+}
+
+model ThreePlShipment {
+  id              String   @id @default(cuid())
+  storeId         String
+  purchaseOrderId String?
+  providerName    String
+  referenceCode   String
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  store         Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  createdBy     User?          @relation("ThreePlCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  legs          ThreePlLeg[]
+
+  @@unique([storeId, referenceCode])
+  @@index([storeId, createdAt])
+  @@map("three_pl_shipments")
+}
+
+model ThreePlLeg {
+  id               String           @id @default(cuid())
+  shipmentId       String
+  legOrder         Int
+  originLabel      String
+  destinationLabel String
+  trackingCode     String?
+  trackingUrl      String?
+  costCurrencyCode String?
+  costOriginal     Decimal?         @db.Decimal(14, 2)
+  fxToEur          Decimal?         @db.Decimal(14, 6)
+  costEurFrozen    Decimal?         @db.Decimal(14, 2)
+  status           ThreePlLegStatus @default(planned)
+  departedAt       DateTime?
+  deliveredAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  shipment ThreePlShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([shipmentId, legOrder])
+  @@index([shipmentId, status])
+  @@map("three_pl_legs")
 }
 
 model Payout {
@@ -530,6 +836,36 @@ model Invoice {
   @@map("invoices")
 }
 
+model ReturnCase {
+  id                 String         @id @default(cuid())
+  storeId            String
+  orderId            String?
+  productId          String?
+  trackingCode       String?
+  reason             String?
+  labelPayer         String?
+  conditionState     String?
+  packagingRecovered Boolean        @default(false)
+  decision           ReturnDecision @default(restock)
+  status             ReturnStatus   @default(pending_review)
+  quantity           Int            @default(1)
+  returnCostEur      Decimal        @default(0) @db.Decimal(14, 2)
+  warehouseId        String?
+  processedByUserId  String?
+  createdAt          DateTime       @default(now())
+  processedAt        DateTime?
+
+  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order       SalesOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  product     Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  warehouse   Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  processedBy User?       @relation(fields: [processedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, status])
+  @@map("return_cases")
+}
+
 model StoreCurrency {
   id           String   @id @default(cuid())
   storeId      String
@@ -577,6 +913,10 @@ model User {
   permissions      UserPermission[]
   refreshTokens    RefreshToken[]
   createdMovements InventoryMovement[]
+  processedReturns ReturnCase[]
+  purchaseOrders   PurchaseOrder[]        @relation("PurchaseOrderCreatedBy")
+  purchasePayments PurchaseOrderPayment[] @relation("PurchasePaymentCreatedBy")
+  threePlShipments ThreePlShipment[]      @relation("ThreePlCreatedBy")
 
   @@map("users")
 }

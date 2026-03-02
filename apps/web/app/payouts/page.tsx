@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { requireTokenOrRedirect } from "../lib/auth";
 import Topbar from "../components/topbar";
+import { useStorePermissions } from "../lib/access";
 
 const API_BASE = "http://localhost:3001";
 
@@ -21,8 +22,7 @@ type Order = { id: string; orderNumber: string; grossAmountEurFrozen: number };
 type Channel = { id: string; name: string };
 
 export default function PayoutsPage() {
-  const [storeId, setStoreId] = useState("");
-  const [storeName, setStoreName] = useState("");
+  const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -66,27 +66,28 @@ export default function PayoutsPage() {
   }
 
   useEffect(() => {
-    const token = requireTokenOrRedirect();
-    if (!token) return;
+    if (loading) return;
+    if (!storeId || !permissions.financeRead) return;
+    queueMicrotask(() => {
+      void loadAll(storeId);
+    });
+  }, [loading, storeId, permissions.financeRead]);
 
-    (async () => {
-      const selectedStoreId = localStorage.getItem("selectedStoreId");
-      if (!selectedStoreId) return;
+  if (loading) {
+    return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
+  }
 
-      let nextStoreName = "";
-      try {
-        const storesRaw = localStorage.getItem("stores");
-        if (storesRaw) {
-          const stores = JSON.parse(storesRaw) as { storeId: string; storeName: string }[];
-          nextStoreName = stores.find((s) => s.storeId === selectedStoreId)?.storeName || "";
-        }
-      } catch {}
+  if (permissionsError) {
+    return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  }
 
-      setStoreId(selectedStoreId);
-      setStoreName(nextStoreName);
-      await loadAll(selectedStoreId);
-    })();
-  }, []);
+  if (!permissions.financeRead) {
+    return (
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="max-w-3xl mx-auto bg-white p-4 rounded-2xl shadow-md">No autorizado para Payouts.</div>
+      </div>
+    );
+  }
 
   async function createPayout(e: React.FormEvent) {
     e.preventDefault();
