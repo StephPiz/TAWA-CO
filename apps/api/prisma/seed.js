@@ -1,4 +1,5 @@
 const { PrismaClient } = require("@prisma/client");
+const bcrypt = require("bcryptjs");
 
 const prisma = new PrismaClient();
 
@@ -20,9 +21,35 @@ async function main() {
     },
   });
 
+  const passwordHash = await bcrypt.hash("Admin123!", 10);
+
+  const admin = await prisma.user.upsert({
+    where: { email: "admin@demarca.local" },
+    update: {
+      passwordHash,
+      fullName: "Admin DEMARCA",
+      preferredLocale: "es",
+      isActive: true,
+    },
+    create: {
+      email: "admin@demarca.local",
+      passwordHash,
+      fullName: "Admin DEMARCA",
+      preferredLocale: "es",
+      isActive: true,
+    },
+  });
+
+  await prisma.userStoreMembership.upsert({
+    where: { userId_storeId: { userId: admin.id, storeId: store.id } },
+    update: { roleKey: "admin" },
+    create: { userId: admin.id, storeId: store.id, roleKey: "admin" },
+  });
+
   console.log("✅ Seed OK");
   console.log("Holding:", holding.name);
   console.log("Store:", store.name);
+  console.log("Admin:", admin.email, "password: Admin123!");
 }
 
 main()

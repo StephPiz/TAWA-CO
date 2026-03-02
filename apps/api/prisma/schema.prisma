@@ -110,6 +110,9 @@ model Store {
   warehouses Warehouse[]
   channels   SalesChannel[]
 
+  memberships     UserStoreMembership[]
+  userPermissions UserPermission[]
+
   @@unique([holdingId, code])
   @@map("stores")
 }
@@ -145,7 +148,7 @@ model Warehouse {
 }
 
 model SalesChannel {
-  id      String @id @default(cuid())
+  id      String      @id @default(cuid())
   storeId String
   code    String
   name    String
@@ -155,4 +158,77 @@ model SalesChannel {
 
   @@unique([storeId, code])
   @@map("sales_channels")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  fullName        String
+  preferredLocale String   @default("es")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships   UserStoreMembership[]
+  permissions   UserPermission[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model UserStoreMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  storeId   String
+  roleKey   String // "admin", "warehouse", "ops"
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId])
+  @@index([storeId, roleKey])
+  @@map("user_store_memberships")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique // "inventory.read", "products.write", etc.
+  description String?
+
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+}
+
+model UserPermission {
+  id           String   @id @default(cuid())
+  userId       String
+  storeId      String
+  permissionId String
+  granted      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store      Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId, permissionId])
+  @@index([storeId, userId])
+  @@map("user_permissions")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("refresh_tokens")
 }
