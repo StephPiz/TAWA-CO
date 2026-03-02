@@ -258,6 +258,16 @@ app.get("/inventory", requireAuth, async (req, res) => {
 });
 
 
+app.get("/inventory", requireAuth, async (req, res) => {
+  return res.json({
+    ok: true,
+    storeId: String(req.query.storeId || null),
+    withImages: String(req.query.withImages || null),
+    q: String(req.query.q || null),
+    note: "Inventory endpoint is alive ✅",
+  });
+});
+
 
 
 const PORT = 3001;
