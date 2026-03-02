@@ -46,7 +46,10 @@ export default function LoginPage() {
         onSubmit={handleLogin}
         className="bg-white p-8 rounded-2xl shadow-md w-96"
       >
-        <h1 className="text-2xl font-bold mb-6 text-center">DEMARCA Admin</h1>
+        <h1 className="text-2xl font-bold mb-6 text-center">TAWA Admin Portal</h1>
+<p className="text-center text-sm text-gray-500 mb-6">
+  Acceso al sistema interno (multi-tienda)
+</p>
 
         {error && (
           <div className="bg-red-100 text-red-600 p-2 rounded mb-4 text-sm">

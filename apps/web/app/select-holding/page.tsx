@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { logout, requireTokenOrRedirect } from "../lib/auth";
+import { logout, requireTokenOrRedirect } from "../../lib/auth";
 
 export default function SelectHoldingPage() {
   const [holdings, setHoldings] = useState<{ id: string; name: string }[]>([]);
