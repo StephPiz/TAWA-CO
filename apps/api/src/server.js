@@ -258,7 +258,76 @@ app.get("/inventory", requireAuth, async (req, res) => {
 });
 
 
+// Inventory list (MVP)
+app.get("/inventory", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "");
+    const withImages = String(req.query.withImages || "0") === "1";
+    const q = String(req.query.q || "").trim();
 
+    if (!storeId) {
+      return res.status(400).json({ error: "Missing storeId" });
+    }
+
+    // Security: user must be member of store
+    const membership = await prisma.userStoreMembership.findFirst({
+      where: { userId, storeId },
+      select: { id: true, roleKey: true },
+    });
+
+    if (!membership) {
+      return res.status(403).json({ error: "No access to this store" });
+    }
+
+    // Fetch products (simple)
+    const products = await prisma.product.findMany({
+      where: {
+        storeId,
+        ...(q
+          ? {
+              OR: [
+                { name: { contains: q, mode: "insensitive" } },
+                { brand: { contains: q, mode: "insensitive" } },
+                { model: { contains: q, mode: "insensitive" } },
+                { ean: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+
+    // MVP response: stock=0 (después lo calculamos con lots/movements)
+    const items = products.map((p) => ({
+      id: p.id,
+      name: p.name ?? "",
+      brand: p.brand ?? null,
+      model: p.model ?? null,
+      ean: p.ean ?? null,
+      // si tu campo se llama distinto (imageUrl/image), luego lo alineamos
+      imageUrl: withImages ? (p.imageUrl ?? p.image ?? null) : null,
+      stock: 0,
+      note: stockNote(0),
+    }));
+
+    return res.json({
+      storeId,
+      q: q || null,
+      withImages,
+      items,
+    });
+  } catch (err) {
+    console.error("GET /inventory error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+function stockNote(stock) {
+  if (stock > 0) return null;
+  return "Sin stock (MVP). Luego mostraremos: Disponible en ...";
+}
 
 
 
