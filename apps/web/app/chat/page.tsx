@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import Topbar from "../components/topbar";
 import { requireTokenOrRedirect } from "../lib/auth";
 import { useStorePermissions } from "../lib/access";
@@ -22,12 +23,23 @@ type ChatMessage = {
   user: { id: string; fullName: string; email: string };
 };
 
+type TeamMember = {
+  userId: string;
+  roleKey: string;
+  fullName: string;
+  email: string;
+  isActive: boolean;
+};
+
 export default function ChatPage() {
+  const router = useRouter();
   const { loading, storeId, storeName, error: permissionsError } = useStorePermissions();
   const [error, setError] = useState("");
   const [channels, setChannels] = useState<ChatChannel[]>([]);
   const [channelId, setChannelId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [mentionedUserIds, setMentionedUserIds] = useState<string[]>([]);
   const [messageBody, setMessageBody] = useState("");
   const [linkedEntityType, setLinkedEntityType] = useState("");
   const [linkedEntityId, setLinkedEntityId] = useState("");
@@ -52,6 +64,21 @@ export default function ChatPage() {
     }
   }, [storeId, channelId]);
 
+  const loadMembers = useCallback(async () => {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId) return;
+    try {
+      const res = await fetch(`${API_BASE}/stores/${encodeURIComponent(storeId)}/team`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || "Error loading team");
+      setMembers((data.members || []).filter((m: TeamMember) => m.isActive));
+    } catch {
+      setError("Connection error");
+    }
+  }, [storeId]);
+
   const loadMessages = useCallback(async () => {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !channelId) return;
@@ -73,8 +100,19 @@ export default function ChatPage() {
     if (!storeId) return;
     queueMicrotask(() => {
       void loadChannels();
+      void loadMembers();
     });
-  }, [loading, storeId, loadChannels]);
+  }, [loading, storeId, loadChannels, loadMembers]);
+
+  function getEntityHref(linkedEntityType: string | null, linkedEntityId: string | null) {
+    if (!linkedEntityType || !linkedEntityId) return null;
+    if (linkedEntityType === "sales_order") return `/store/orders?q=${encodeURIComponent(linkedEntityId)}`;
+    if (linkedEntityType === "purchase_order") return `/store/purchases?q=${encodeURIComponent(linkedEntityId)}`;
+    if (linkedEntityType === "return_case") return `/store/returns?q=${encodeURIComponent(linkedEntityId)}`;
+    if (linkedEntityType === "product") return `/store/products?q=${encodeURIComponent(linkedEntityId)}`;
+    if (linkedEntityType === "team_task") return "/store/tasks";
+    return null;
+  }
 
   useEffect(() => {
     if (!storeId || !channelId) return;
@@ -102,6 +140,7 @@ export default function ChatPage() {
         body: messageBody.trim(),
         linkedEntityType: linkedEntityType || null,
         linkedEntityId: linkedEntityId || null,
+        mentionedUserIds,
       }),
     });
     const data = await res.json();
@@ -110,6 +149,7 @@ export default function ChatPage() {
     setMessageBody("");
     setLinkedEntityType("");
     setLinkedEntityId("");
+    setMentionedUserIds([]);
     await loadMessages();
   }
 
@@ -148,6 +188,14 @@ export default function ChatPage() {
                   {m.linkedEntityType && m.linkedEntityId ? (
                     <div className="text-xs text-blue-700 mt-1">
                       Link: {m.linkedEntityType} #{m.linkedEntityId}
+                      {getEntityHref(m.linkedEntityType, m.linkedEntityId) ? (
+                        <button
+                          className="ml-2 rounded border px-2 py-0.5"
+                          onClick={() => router.push(getEntityHref(m.linkedEntityType, m.linkedEntityId) || "/store/chat")}
+                        >
+                          Abrir
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -158,11 +206,24 @@ export default function ChatPage() {
           <form className="mt-3 grid md:grid-cols-6 gap-2" onSubmit={sendMessage}>
             <input
               className="border rounded px-3 py-2 md:col-span-3"
-              placeholder="Escribe un mensaje..."
+              placeholder="Escribe un mensaje... (puedes mencionar usuarios)"
               value={messageBody}
               onChange={(e) => setMessageBody(e.target.value)}
               required
             />
+            <select
+              multiple
+              className="border rounded px-2 py-2 text-sm h-[96px]"
+              value={mentionedUserIds}
+              onChange={(e) => setMentionedUserIds(Array.from(e.target.selectedOptions).map((o) => o.value))}
+              title="Menciones"
+            >
+              {members.map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  @{m.fullName} ({m.roleKey})
+                </option>
+              ))}
+            </select>
             <input
               className="border rounded px-3 py-2"
               placeholder="Entity type (order/product)"

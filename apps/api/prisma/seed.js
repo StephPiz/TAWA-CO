@@ -1011,6 +1011,68 @@ async function main() {
     },
   });
 
+  await prisma.notification.upsert({
+    where: { id: "seed-notification-001" },
+    update: {
+      storeId: store.id,
+      userId: null,
+      type: "purchase_received",
+      severity: "info",
+      title: "Recepcion PO-2026-0001 completada",
+      body: "1 lote recibido en ES-MAD",
+      linkedEntityType: "purchase_order",
+      linkedEntityId: purchase.id,
+      createdByUserId: warehouseUser.id,
+      isRead: false,
+      readAt: null,
+    },
+    create: {
+      id: "seed-notification-001",
+      storeId: store.id,
+      userId: null,
+      type: "purchase_received",
+      severity: "info",
+      title: "Recepcion PO-2026-0001 completada",
+      body: "1 lote recibido en ES-MAD",
+      linkedEntityType: "purchase_order",
+      linkedEntityId: purchase.id,
+      createdByUserId: warehouseUser.id,
+      isRead: false,
+      readAt: null,
+    },
+  });
+
+  await prisma.notification.upsert({
+    where: { id: "seed-notification-002" },
+    update: {
+      storeId: store.id,
+      userId: admin.id,
+      type: "task_assigned",
+      severity: "warning",
+      title: "Nueva tarea asignada: Registrar pago final proveedor",
+      body: "Cerrar conciliacion PO y validar landed cost",
+      linkedEntityType: "team_task",
+      linkedEntityId: "seed-task-finance-001",
+      createdByUserId: admin.id,
+      isRead: false,
+      readAt: null,
+    },
+    create: {
+      id: "seed-notification-002",
+      storeId: store.id,
+      userId: admin.id,
+      type: "task_assigned",
+      severity: "warning",
+      title: "Nueva tarea asignada: Registrar pago final proveedor",
+      body: "Cerrar conciliacion PO y validar landed cost",
+      linkedEntityType: "team_task",
+      linkedEntityId: "seed-task-finance-001",
+      createdByUserId: admin.id,
+      isRead: false,
+      readAt: null,
+    },
+  });
+
   console.log("Seed OK");
   console.log("Holding:", holding.name);
   console.log("Store:", store.name);

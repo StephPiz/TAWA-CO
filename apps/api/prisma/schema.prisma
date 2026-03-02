@@ -176,6 +176,20 @@ enum ChatChannelType {
   direct
 }
 
+enum NotificationType {
+  task_assigned
+  purchase_received
+  backorder_created
+  return_processed
+  system
+}
+
+enum NotificationSeverity {
+  info
+  warning
+  critical
+}
+
 model HoldingCompany {
   id        String   @id @default(cuid())
   name      String   @unique
@@ -232,6 +246,7 @@ model Store {
   presences         UserPresence[]
   chatChannels      ChatChannel[]
   chatMessages      ChatMessage[]
+  notifications     Notification[]
 
   @@unique([holdingId, code])
   @@map("stores")
@@ -881,6 +896,30 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
+model Notification {
+  id               String               @id @default(cuid())
+  storeId          String
+  userId           String?
+  type             NotificationType
+  severity         NotificationSeverity @default(info)
+  title            String
+  body             String?
+  linkedEntityType String?
+  linkedEntityId   String?
+  isRead           Boolean              @default(false)
+  readAt           DateTime?
+  createdByUserId  String?
+  createdAt        DateTime             @default(now())
+
+  store     Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user      User? @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("NotificationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, userId, isRead, createdAt])
+  @@map("notifications")
+}
+
 model Payout {
   id              String   @id @default(cuid())
   storeId         String
@@ -1036,6 +1075,8 @@ model User {
   presences           UserPresence[]
   chatChannelsCreated ChatChannel[]          @relation("ChatChannelCreatedBy")
   chatMessages        ChatMessage[]
+  notifications       Notification[]         @relation("NotificationRecipient")
+  notificationsSent   Notification[]         @relation("NotificationCreatedBy")
 
   @@map("users")
 }

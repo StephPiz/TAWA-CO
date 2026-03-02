@@ -116,6 +116,32 @@ async function canUseChat(userId, storeId, roleKey) {
   return hasPermission(userId, storeId, "tasks.write");
 }
 
+async function canReadNotifications(userId, storeId, roleKey) {
+  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  return hasPermission(userId, storeId, "tasks.write");
+}
+
+async function createNotificationSafe(payload) {
+  try {
+    return await prisma.notification.create({
+      data: {
+        storeId: payload.storeId,
+        userId: payload.userId || null,
+        type: payload.type || "system",
+        severity: payload.severity || "info",
+        title: String(payload.title || "").trim(),
+        body: payload.body || null,
+        linkedEntityType: payload.linkedEntityType || null,
+        linkedEntityId: payload.linkedEntityId || null,
+        createdByUserId: payload.createdByUserId || null,
+      },
+    });
+  } catch (err) {
+    console.error("Notification create error:", err);
+    return null;
+  }
+}
+
 function normalizeMoney(value) {
   if (value === null || value === undefined) return null;
   const n = Number(value);
@@ -1265,6 +1291,18 @@ app.post("/purchases/:purchaseId/receive", requireAuth, async (req, res) => {
       if (code === "QTY_EXCEEDS_PENDING") return res.status(409).json({ error: "Received quantity exceeds pending", ...result.error });
     }
 
+    const totalReceivedUnits = result.receivedLots.reduce((sum, lot) => sum + Number(lot.quantityReceived || 0), 0);
+    await createNotificationSafe({
+      storeId,
+      type: "purchase_received",
+      severity: "info",
+      title: `Recepcion PO ${result.purchase.poNumber} completada`,
+      body: `${result.receivedLots.length} lotes, ${totalReceivedUnits} unidades ingresadas`,
+      linkedEntityType: "purchase_order",
+      linkedEntityId: result.purchase.id,
+      createdByUserId: userId,
+    });
+
     return res.json({
       ok: true,
       purchase: { ...result.purchase, totalAmountEur: normalizeMoney(result.purchase.totalAmountEur) },
@@ -1641,6 +1679,20 @@ app.post("/tasks", requireAuth, async (req, res) => {
       },
     });
 
+    if (task.assignedTo?.id && task.assignedTo.id !== userId) {
+      await createNotificationSafe({
+        storeId,
+        userId: task.assignedTo.id,
+        type: "task_assigned",
+        severity: task.priority === "high" ? "warning" : "info",
+        title: `Nueva tarea asignada: ${task.title}`,
+        body: task.description || null,
+        linkedEntityType: "team_task",
+        linkedEntityId: task.id,
+        createdByUserId: userId,
+      });
+    }
+
     return res.status(201).json({ task });
   } catch (err) {
     console.error("POST /tasks error:", err);
@@ -1704,6 +1756,120 @@ app.patch("/tasks/:taskId", requireAuth, async (req, res) => {
     return res.json({ task });
   } catch (err) {
     console.error("PATCH /tasks/:taskId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/notifications", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const onlyUnread = String(req.query.onlyUnread || "").trim() === "1";
+    const type = String(req.query.type || "").trim();
+    const severity = String(req.query.severity || "").trim();
+    const q = String(req.query.q || "").trim();
+    const limitRaw = Number(req.query.limit || 80);
+    const limit = Math.max(1, Math.min(200, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 80));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canRead = await canReadNotifications(userId, storeId, membership.roleKey);
+    if (!canRead) return res.status(403).json({ error: "No permission to read notifications" });
+
+    const notifications = await prisma.notification.findMany({
+      where: {
+        storeId,
+        AND: [
+          { OR: [{ userId: null }, { userId }] },
+          ...(onlyUnread ? [{ isRead: false }] : []),
+          ...(type ? [{ type }] : []),
+          ...(severity ? [{ severity }] : []),
+          ...(q
+            ? [
+                {
+                  OR: [
+                    { title: { contains: q, mode: "insensitive" } },
+                    { body: { contains: q, mode: "insensitive" } },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      },
+      include: {
+        createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+
+    return res.json({ notifications });
+  } catch (err) {
+    console.error("GET /notifications error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/notifications/:notificationId/read", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { notificationId } = req.params;
+    const { storeId, isRead } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canRead = await canReadNotifications(userId, storeId, membership.roleKey);
+    if (!canRead) return res.status(403).json({ error: "No permission to update notifications" });
+
+    const data = Boolean(isRead)
+      ? { isRead: true, readAt: new Date() }
+      : { isRead: false, readAt: null };
+
+    const updated = await prisma.notification.updateMany({
+      where: {
+        id: notificationId,
+        storeId,
+        OR: [{ userId: null }, { userId }],
+      },
+      data,
+    });
+
+    if (updated.count === 0) return res.status(404).json({ error: "Notification not found" });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("PATCH /notifications/:notificationId/read error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/notifications/read-all", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canRead = await canReadNotifications(userId, storeId, membership.roleKey);
+    if (!canRead) return res.status(403).json({ error: "No permission to update notifications" });
+
+    const result = await prisma.notification.updateMany({
+      where: {
+        storeId,
+        OR: [{ userId: null }, { userId }],
+        isRead: false,
+      },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    });
+
+    return res.json({ ok: true, updated: result.count });
+  } catch (err) {
+    console.error("POST /notifications/read-all error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
@@ -1821,7 +1987,7 @@ app.get("/chat/messages", requireAuth, async (req, res) => {
 app.post("/chat/messages", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
-    const { storeId, channelId, body, linkedEntityType, linkedEntityId } = req.body || {};
+    const { storeId, channelId, body, linkedEntityType, linkedEntityId, mentionedUserIds } = req.body || {};
     if (!storeId || !channelId || !body) return res.status(400).json({ error: "Missing storeId/channelId/body" });
     if (String(body).trim().length < 1) return res.status(400).json({ error: "Body is empty" });
 
@@ -1832,9 +1998,23 @@ app.post("/chat/messages", requireAuth, async (req, res) => {
 
     const channel = await prisma.chatChannel.findFirst({
       where: { id: channelId, storeId, isActive: true },
-      select: { id: true },
+      select: { id: true, code: true, name: true },
     });
     if (!channel) return res.status(404).json({ error: "Channel not found" });
+
+    const mentionIdsInput = Array.isArray(mentionedUserIds) ? mentionedUserIds.map((id) => String(id).trim()).filter(Boolean) : [];
+    const uniqueMentionIds = [...new Set(mentionIdsInput)].filter((id) => id !== userId);
+    const mentionableMembers =
+      uniqueMentionIds.length > 0
+        ? await prisma.userStoreMembership.findMany({
+            where: {
+              storeId,
+              userId: { in: uniqueMentionIds },
+            },
+            select: { userId: true },
+          })
+        : [];
+    const validMentionIds = mentionableMembers.map((m) => m.userId);
 
     const message = await prisma.chatMessage.create({
       data: {
@@ -1849,6 +2029,24 @@ app.post("/chat/messages", requireAuth, async (req, res) => {
         user: { select: { id: true, fullName: true, email: true } },
       },
     });
+
+    if (validMentionIds.length > 0) {
+      await Promise.all(
+        validMentionIds.map((mentionedUserId) =>
+          createNotificationSafe({
+            storeId,
+            userId: mentionedUserId,
+            type: "system",
+            severity: "info",
+            title: `Mencion en ${channel.name}`,
+            body: `${message.user.fullName}: ${message.body.slice(0, 180)}`,
+            linkedEntityType: "chat_message",
+            linkedEntityId: message.id,
+            createdByUserId: userId,
+          })
+        )
+      );
+    }
 
     await prisma.userPresence.upsert({
       where: { storeId_userId: { storeId, userId } },
@@ -2950,6 +3148,20 @@ app.get("/orders", requireAuth, async (req, res) => {
       });
     });
 
+    if (Array.isArray(order.backorders) && order.backorders.length > 0) {
+      const missingQty = order.backorders.reduce((sum, b) => sum + Number(b.missingQty || 0), 0);
+      await createNotificationSafe({
+        storeId,
+        type: "backorder_created",
+        severity: "warning",
+        title: `Backorder en pedido ${order.orderNumber}`,
+        body: `${order.backorders.length} linea(s) pendientes, ${missingQty} unidad(es) faltantes`,
+        linkedEntityType: "sales_order",
+        linkedEntityId: order.id,
+        createdByUserId: userId,
+      });
+    }
+
     return res.status(201).json({ order });
   } catch (err) {
     if (String(err?.message || "") === "INVALID_PRODUCT_FOR_STORE") {
@@ -3598,6 +3810,17 @@ app.post("/returns", requireAuth, async (req, res) => {
       }
 
       return returnCase;
+    });
+
+    await createNotificationSafe({
+      storeId,
+      type: "return_processed",
+      severity: "info",
+      title: `Devolucion procesada (${result.decision})`,
+      body: `Cantidad: ${result.quantity}${result.trackingCode ? ` | Tracking: ${result.trackingCode}` : ""}`,
+      linkedEntityType: "return_case",
+      linkedEntityId: result.id,
+      createdByUserId: userId,
     });
 
     return res.status(201).json({ returnCase: result });
