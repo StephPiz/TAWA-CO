@@ -285,6 +285,7 @@ export default function SettingsPage() {
       setStoreName(nextStoreName);
       await loadAll(selectedStoreId);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (permissionsLoading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;

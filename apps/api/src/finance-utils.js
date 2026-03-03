@@ -28,7 +28,14 @@ function isNonNegativeNumber(value) {
 function parseDateInput(value) {
   if (!value) return null;
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (!Number.isNaN(d.getTime())) return d;
+  const m = String(value).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const iso = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    const d2 = new Date(iso);
+    if (!Number.isNaN(d2.getTime())) return d2;
+  }
+  return null;
 }
 
 function parseCurrencyCode(value) {
@@ -50,23 +57,59 @@ function pdfEscape(value) {
   return String(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
-function buildInvoicePdfBuffer({ invoice, storeName, orderNumber }) {
-  const lines = [
-    `Invoice ${invoice.invoiceNumber}`,
-    `Store: ${storeName || "-"}`,
-    `Order: ${orderNumber || "-"}`,
-    `Issued: ${new Date(invoice.issuedAt).toISOString().slice(0, 10)}`,
-    `Billing Name: ${invoice.billingName || "-"}`,
+function buildInvoicePdfBuffer({ invoice, storeName, orderNumber, lines, storeBrand, taxByCountry }) {
+  const header = [
+    `${storeBrand?.legalName || storeName || "Store"}`,
+    `${storeBrand?.address || ""}`,
+    `${storeBrand?.country || ""}`,
+    `Invoice: ${invoice.invoiceNumber}`,
+    `Issued : ${new Date(invoice.issuedAt).toISOString().slice(0, 10)}`,
+    `Order  : ${orderNumber || "-"}`,
+    `Bill to: ${invoice.billingName || "-"}`,
     `Billing Country: ${invoice.billingCountry || "-"}`,
+    "",
+    "Lines:",
+    "Desc                           Qty    Unit      Tax%   LineTotal",
+    "---------------------------------------------------------------",
+  ];
+
+  const lineRows =
+    lines && lines.length
+      ? lines.map((l) => {
+          const desc = String(l.description || "").slice(0, 30).padEnd(30, " ");
+          const qty = Number(l.quantity || 1).toFixed(2).padStart(6, " ");
+          const unit = Number(l.unitPriceEur || 0).toFixed(2).padStart(8, " ");
+          const tax = Number(l.taxPercent || 0).toFixed(2).padStart(6, " ");
+          const total = Number(l.lineTotalEur || 0).toFixed(2).padStart(10, " ");
+          return `${desc} ${qty} ${unit} ${tax} ${total}`;
+        })
+      : ["(no lines)"];
+
+  const taxLines =
+    taxByCountry && Object.keys(taxByCountry).length
+      ? [
+          "",
+          "Tax by country:",
+          ...Object.entries(taxByCountry).map(
+            ([country, totals]) =>
+              `${country.padEnd(6, " ")}: base ${Number(totals.base || 0).toFixed(2)} | tax ${Number(totals.tax || 0).toFixed(2)}`
+          ),
+        ]
+      : [];
+
+  const footer = [
+    "",
     `Subtotal (EUR): ${Number(invoice.subtotalEur || 0).toFixed(2)}`,
     `Tax (EUR): ${Number(invoice.taxEur || 0).toFixed(2)}`,
     `Total (EUR): ${Number(invoice.totalEur || 0).toFixed(2)}`,
   ];
 
+  const allLines = [...header, ...lineRows, ...taxLines, ...footer];
+
   const textOps = ["BT", "/F1 12 Tf", "50 790 Td"];
-  for (let i = 0; i < lines.length; i += 1) {
-    if (i === 0) textOps.push(`(${pdfEscape(lines[i])}) Tj`);
-    else textOps.push(`T* (${pdfEscape(lines[i])}) Tj`);
+  for (let i = 0; i < allLines.length; i += 1) {
+    if (i === 0) textOps.push(`(${pdfEscape(allLines[i])}) Tj`);
+    else textOps.push(`T* (${pdfEscape(allLines[i])}) Tj`);
   }
   textOps.push("ET");
   const streamContent = textOps.join("\n");

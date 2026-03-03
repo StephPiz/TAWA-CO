@@ -1077,10 +1077,28 @@ model Invoice {
 
   store Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
   order SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lines InvoiceLine[]
 
   @@unique([storeId, invoiceNumber])
   @@index([storeId, issuedAt])
   @@map("invoices")
+}
+
+model InvoiceLine {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  description  String
+  quantity     Decimal  @default(1) @db.Decimal(10, 2)
+  unitPriceEur Decimal  @db.Decimal(14, 2)
+  taxPercent   Decimal  @default(0) @db.Decimal(6, 2)
+  taxEur       Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotalEur Decimal  @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
 }
 
 model ReturnCase {

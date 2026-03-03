@@ -112,6 +112,34 @@ async function canManagePayouts(userId, storeId, roleKey) {
   return hasPermission(userId, storeId, "payouts.write");
 }
 
+function parseCsvRows(csvText) {
+  const rows = [];
+  if (!csvText) return rows;
+  const lines = csvText
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length);
+  if (!lines.length) return rows;
+  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const idx = (key) => header.indexOf(key);
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = lines[i].split(",").map((c) => c.trim());
+    rows.push({
+      payoutRef: idx("payoutref") >= 0 ? cols[idx("payoutref")] : cols[0],
+      payoutDate: idx("payoutdate") >= 0 ? cols[idx("payoutdate")] : null,
+      currency: idx("currency") >= 0 ? cols[idx("currency")] : "EUR",
+      amount: idx("amount") >= 0 ? cols[idx("amount")] : null,
+      fees: idx("fees") >= 0 ? cols[idx("fees")] : 0,
+      adjustments: idx("adjustments") >= 0 ? cols[idx("adjustments")] : 0,
+      fxToEur: idx("fx") >= 0 ? cols[idx("fx")] : 1,
+      channelCode: idx("channelcode") >= 0 ? cols[idx("channelcode")] : null,
+    });
+  }
+  return rows;
+}
+
 async function canManageInvoices(userId, storeId, roleKey) {
   if (getRoleCapabilities(roleKey).invoicesWrite) return true;
   return hasPermission(userId, storeId, "invoices.write");
@@ -8459,27 +8487,42 @@ app.get("/payouts", requireAuth, async (req, res) => {
       take: 200,
     });
 
-    return res.json({
-      payouts: payouts.map((p) => ({
-        ...(() => {
-          const gross = normalizeMoney(p.amountEurFrozen);
-          const fees = normalizeMoney(p.feesEur);
-          const adjustments = normalizeMoney(p.adjustmentsEur);
-          const reconciled = roundMoney(p.matches.reduce((sum, m) => sum + numberOrZero(m.amountEur), 0));
-          const netExpected = roundMoney(numberOrZero(gross) - numberOrZero(fees) + numberOrZero(adjustments));
-          return {
-            netExpectedEur: netExpected,
-            reconciledEur: reconciled,
-            discrepancyEur: roundMoney(netExpected - reconciled),
-          };
-        })(),
+    let aggNet = 0;
+    let aggRec = 0;
+
+    const payoutDtos = payouts.map((p) => {
+      const gross = normalizeMoney(p.amountEurFrozen);
+      const fees = normalizeMoney(p.feesEur);
+      const adjustments = normalizeMoney(p.adjustmentsEur);
+      const reconciled = roundMoney(p.matches.reduce((sum, m) => sum + numberOrZero(m.amountEur), 0));
+      const netExpected = roundMoney(numberOrZero(gross) - numberOrZero(fees) + numberOrZero(adjustments));
+      aggNet += netExpected;
+      aggRec += reconciled;
+      return {
+        netExpectedEur: netExpected,
+        reconciledEur: reconciled,
+        discrepancyEur: roundMoney(netExpected - reconciled),
         ...p,
         amountOriginal: normalizeMoney(p.amountOriginal),
         fxToEur: normalizeMoney(p.fxToEur),
         amountEurFrozen: normalizeMoney(p.amountEurFrozen),
         feesEur: normalizeMoney(p.feesEur),
         adjustmentsEur: normalizeMoney(p.adjustmentsEur),
-      })),
+      };
+    });
+
+    const discrepancyAlerts = payoutDtos
+      .filter((p) => Math.abs(p.discrepancyEur || 0) > 0.5)
+      .map((p) => `${p.payoutRef}: dif ${p.discrepancyEur.toFixed(2)} EUR`);
+
+    return res.json({
+      payouts: payoutDtos,
+      summary: {
+        netExpectedEur: roundMoney(aggNet),
+        reconciledEur: roundMoney(aggRec),
+        discrepancyEur: roundMoney(aggNet - aggRec),
+      },
+      alerts: discrepancyAlerts,
     });
   } catch (err) {
     console.error("GET /payouts error:", err);
@@ -8611,6 +8654,145 @@ app.post("/payouts", requireAuth, async (req, res) => {
   }
 });
 
+app.post("/payouts/import", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, csvText } = req.body || {};
+    if (!storeId || !csvText) return res.status(400).json({ error: "Missing storeId or csvText" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePayouts(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage payouts" });
+
+    const channelMap = new Map(
+      (
+        await prisma.salesChannel.findMany({ where: { storeId }, select: { id: true, code: true } })
+      ).map((c) => [c.code.toUpperCase(), c.id])
+    );
+
+    const rows = parseCsvRows(String(csvText || ""));
+    if (!rows.length) return res.status(400).json({ error: "CSV sin filas" });
+
+    let created = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const row of rows) {
+      try {
+        const payoutRef = String(row.payoutRef || "").trim();
+        const payoutDate = parseDateInput(row.payoutDate) || new Date();
+        const currencyCode = parseCurrencyCode(row.currency) || "EUR";
+        const amountOriginal = numberOrZero(row.amount);
+        const fxToEur = Number.isFinite(Number(row.fxToEur)) && Number(row.fxToEur) > 0 ? Number(row.fxToEur) : 1;
+        const amountEurFrozen = roundMoney(amountOriginal * fxToEur);
+        const feesEur = roundMoney(numberOrZero(row.fees));
+        const adjustmentsEur = roundMoney(numberOrZero(row.adjustments));
+        if (!payoutRef || !isPositiveNumber(amountOriginal)) {
+          skipped += 1;
+          continue;
+        }
+
+        const existing = await prisma.payout.findFirst({ where: { storeId, payoutRef } });
+        if (existing) {
+          skipped += 1;
+          continue;
+        }
+
+        const channelId = row.channelCode ? channelMap.get(String(row.channelCode || "").trim().toUpperCase()) || null : null;
+
+        await prisma.payout.create({
+          data: {
+            storeId,
+            channelId,
+            payoutRef,
+            payoutDate,
+            currencyCode,
+            amountOriginal: String(amountOriginal),
+            fxToEur: String(fxToEur),
+            amountEurFrozen: String(amountEurFrozen),
+            feesEur: String(feesEur),
+            adjustmentsEur: String(adjustmentsEur),
+            note: "Import CSV",
+          },
+        });
+        created += 1;
+      } catch (err) {
+        errors.push(String(err?.message || "unknown"));
+      }
+    }
+
+    return res.json({ ok: true, created, skipped, errors });
+  } catch (err) {
+    console.error("POST /payouts/import error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/payouts/:payoutId/auto-match", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { payoutId } = req.params;
+    const { storeId, matches } = req.body || {};
+    if (!storeId || !Array.isArray(matches) || matches.length === 0) {
+      return res.status(400).json({ error: "Missing storeId or matches" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePayouts(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage payouts" });
+
+    const payout = await prisma.payout.findFirst({
+      where: { id: payoutId, storeId },
+      select: { id: true, channelId: true, amountEurFrozen: true, feesEur: true, adjustmentsEur: true },
+    });
+    if (!payout) return res.status(404).json({ error: "Payout not found" });
+
+    const ordersMap = new Map(
+      (
+        await prisma.salesOrder.findMany({ where: { storeId }, select: { id: true, orderNumber: true, sourceChannelId: true } })
+      ).map((o) => [o.orderNumber, o])
+    );
+
+    const existingSum = await prisma.payoutOrderMatch.aggregate({
+      where: { payoutId, storeId },
+      _sum: { amountEur: true },
+    });
+    const alreadyUsed = numberOrZero(existingSum?._sum?.amountEur);
+
+    let added = 0;
+    let addedTotal = 0;
+    for (const row of matches) {
+      const orderNumber = String(row?.orderNumber || "").trim();
+      const amountEur = numberOrZero(row?.amountEur);
+      if (!orderNumber || !isPositiveNumber(amountEur)) continue;
+      const order = ordersMap.get(orderNumber);
+      if (!order) continue;
+      if (payout.channelId && order.sourceChannelId && payout.channelId !== order.sourceChannelId) continue;
+      addedTotal += amountEur;
+      await prisma.payoutOrderMatch.upsert({
+        where: { payoutId_orderId: { payoutId, orderId: order.id } },
+        update: { amountEur: String(amountEur) },
+        create: { storeId, payoutId, orderId: order.id, amountEur: String(amountEur) },
+      });
+      added += 1;
+    }
+
+    const netAvailable = roundMoney(
+      numberOrZero(payout.amountEurFrozen) - numberOrZero(payout.feesEur) + numberOrZero(payout.adjustmentsEur)
+    );
+    if (roundMoney(alreadyUsed + addedTotal) > netAvailable + 0.01) {
+      return res.status(409).json({ error: "Matches exceed payout amount" });
+    }
+
+    return res.json({ ok: true, added, totalMatchedEur: roundMoney(alreadyUsed + addedTotal) });
+  } catch (err) {
+    console.error("POST /payouts/:payoutId/auto-match error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.post("/payouts/:payoutId/match", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
@@ -8698,7 +8880,7 @@ app.get("/invoices", requireAuth, async (req, res) => {
 
     const invoices = await prisma.invoice.findMany({
       where: { storeId },
-      include: { order: { select: { id: true, orderNumber: true, customerCountryCode: true } } },
+      include: { order: { select: { id: true, orderNumber: true, customerCountryCode: true } }, _count: { select: { lines: true } } },
       orderBy: { issuedAt: "desc" },
       take: 200,
     });
@@ -8706,6 +8888,7 @@ app.get("/invoices", requireAuth, async (req, res) => {
     return res.json({
       invoices: invoices.map((i) => ({
         ...i,
+        linesCount: i._count?.lines || 0,
         subtotalEur: normalizeMoney(i.subtotalEur),
         taxEur: normalizeMoney(i.taxEur),
         totalEur: normalizeMoney(i.totalEur),
@@ -8720,10 +8903,17 @@ app.get("/invoices", requireAuth, async (req, res) => {
   app.post("/invoices", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
-    const { storeId, orderId, dueAt, billingName, billingAddress, billingCountry, notes, taxEur } = req.body || {};
+    const { storeId, orderId, dueAt, billingName, billingAddress, billingCountry, notes, taxEur, taxPercent, lines } = req.body || {};
+    console.log("POST /invoices payload", { storeId, orderId, dueAt, billingName, billingCountry, taxEur, taxPercent, linesCount: Array.isArray(lines) ? lines.length : null });
     if (!storeId || !orderId) return res.status(400).json({ error: "Missing storeId or orderId" });
     if (taxEur !== undefined && !isNonNegativeNumber(taxEur)) {
       return res.status(400).json({ error: "taxEur must be a non-negative number" });
+    }
+    if (taxPercent !== undefined && !isNonNegativeNumber(taxPercent)) {
+      return res.status(400).json({ error: "taxPercent must be a non-negative number" });
+    }
+    if (lines !== undefined && !Array.isArray(lines)) {
+      return res.status(400).json({ error: "lines must be an array" });
     }
 
     const membership = await getStoreMembership(userId, storeId);
@@ -8750,12 +8940,63 @@ app.get("/invoices", requireAuth, async (req, res) => {
         return tx.invoice.findUnique({ where: { id: existing.id }, include: { order: true } });
       }
 
-      const subtotal = numberOrZero(order.grossAmountEurFrozen);
-      const tax = numberOrZero(taxEur);
+      let linesInput = Array.isArray(lines) ? lines : [];
+      if (linesInput.length > 50) linesInput = linesInput.slice(0, 50);
+
+      let subtotal = 0;
+      let tax = 0;
+      const normalizedLines = [];
+
+      for (const line of linesInput) {
+        const description = String(line?.description || "").trim();
+        const quantity = Number(line?.quantity || 1);
+        const unitPrice = numberOrZero(line?.unitPriceEur);
+        const taxPct = numberOrZero(line?.taxPercent);
+        if (!description || quantity <= 0 || unitPrice < 0) continue;
+        const lineSubtotal = roundMoney(quantity * unitPrice);
+        const lineTax = roundMoney(lineSubtotal * (taxPct / 100));
+        const lineTotal = roundMoney(lineSubtotal + lineTax);
+        subtotal += lineSubtotal;
+        tax += lineTax;
+        normalizedLines.push({
+          description,
+          quantity,
+          unitPriceEur: unitPrice,
+          taxPercent: taxPct,
+          taxEur: lineTax,
+          lineTotalEur: lineTotal,
+        });
+      }
+
+      if (!normalizedLines.length) {
+        subtotal = numberOrZero(order.grossAmountEurFrozen);
+        tax = taxEur !== undefined ? numberOrZero(taxEur) : roundMoney(subtotal * (numberOrZero(taxPercent) / 100 || 0));
+        normalizedLines.push({
+          description: `Order ${order.id}`,
+          quantity: 1,
+          unitPriceEur: subtotal,
+          taxPercent: taxPercent !== undefined ? numberOrZero(taxPercent) : 0,
+          taxEur: tax,
+          lineTotalEur: roundMoney(subtotal + tax),
+        });
+      } else if (taxEur !== undefined) {
+        tax = numberOrZero(taxEur);
+        normalizedLines.forEach((l, idx) => {
+          // simple proportional adjust of tax if user forced taxEur
+          const share = subtotal ? l.lineTotalEur / (subtotal + (tax - tax)) : 1 / normalizedLines.length;
+          normalizedLines[idx].taxEur = roundMoney(tax * share);
+          normalizedLines[idx].lineTotalEur = roundMoney(l.quantity * l.unitPriceEur + normalizedLines[idx].taxEur);
+        });
+      }
+
       const total = roundMoney(subtotal + tax);
       const invoiceNumber = await nextInvoiceNumber(tx, storeId);
 
-      return tx.invoice.create({
+      // Prevent double invoicing the same order
+      const existingInvoice = await tx.invoice.findUnique({ where: { orderId }, select: { id: true } });
+      if (existingInvoice) throw new Error("ORDER_ALREADY_INVOICED");
+
+      const created = await tx.invoice.create({
         data: {
           storeId,
           orderId,
@@ -8774,6 +9015,22 @@ app.get("/invoices", requireAuth, async (req, res) => {
         },
         include: { order: true },
       });
+
+      if (normalizedLines.length) {
+        await tx.invoiceLine.createMany({
+          data: normalizedLines.map((l) => ({
+            invoiceId: created.id,
+            description: l.description,
+            quantity: String(l.quantity),
+            unitPriceEur: String(l.unitPriceEur),
+            taxPercent: String(l.taxPercent),
+            taxEur: String(l.taxEur),
+            lineTotalEur: String(l.lineTotalEur),
+          })),
+        });
+      }
+
+      return tx.invoice.findUnique({ where: { id: created.id }, include: { order: true, lines: true } });
     });
 
     return res.status(201).json({ invoice });
@@ -8787,8 +9044,12 @@ app.get("/invoices", requireAuth, async (req, res) => {
     if (String(err?.message || "") === "ORDER_UNPAID") {
       return res.status(409).json({ error: "Cannot invoice an unpaid order" });
     }
+    if (String(err?.message || "") === "ORDER_ALREADY_INVOICED") {
+      return res.status(409).json({ error: "Order already invoiced" });
+    }
     console.error("POST /invoices error:", err);
-    return res.status(500).json({ error: "Server error" });
+    if (err?.stack) console.error(err.stack);
+    return res.status(500).json({ error: err?.message || "Server error" });
   }
 });
 
@@ -8824,15 +9085,29 @@ app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
 
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, storeId },
-      include: { order: true, store: true },
+      include: { order: true, store: true, lines: true },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    const taxByCountry = {};
+    const taxCountry = invoice.billingCountry || "UNK";
+    const linesWithCalc = (invoice.lines || []).map((l) => {
+      const lineSub = Number(l.quantity) * Number(l.unitPriceEur);
+      const lineTax = Number(l.taxEur || 0);
+      if (!taxByCountry[taxCountry]) taxByCountry[taxCountry] = { base: 0, tax: 0 };
+      taxByCountry[taxCountry].base += lineSub;
+      taxByCountry[taxCountry].tax += lineTax;
+      return { ...l, lineSub };
+    });
 
     if (format === "pdf") {
       const pdfBuffer = buildInvoicePdfBuffer({
         invoice,
         storeName: invoice.store.name,
         orderNumber: invoice.order.orderNumber,
+        lines: linesWithCalc,
+        storeBrand: { legalName: invoice.store.name, address: invoice.store.description || "", country: invoice.store.baseCurrencyCode, logoUrl: invoice.store.logoUrl },
+        taxByCountry,
       });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${invoice.invoiceNumber}.pdf"`);
@@ -8848,20 +9123,52 @@ app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
       body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
       .row { display: flex; justify-content: space-between; margin-bottom: 6px; }
       .box { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 12px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+      th, td { border: 1px solid #ddd; padding: 6px; text-align: left; font-size: 12px; }
+      th { background: #f7f7f7; }
       h1 { margin: 0 0 10px 0; }
+      .logo { font-size: 18px; font-weight: bold; }
     </style>
   </head>
   <body>
-    <h1>Invoice ${invoice.invoiceNumber}</h1>
-    <div class="row"><span>Store</span><span>${invoice.store.name}</span></div>
+    <div class="logo">${invoice.store.name}</div>
+    ${invoice.store.logoUrl ? `<div><img src="${invoice.store.logoUrl}" alt="logo" height="50"/></div>` : ""}
+    <div class="row"><span>Invoice</span><span>${invoice.invoiceNumber}</span></div>
     <div class="row"><span>Order</span><span>${invoice.order.orderNumber}</span></div>
     <div class="row"><span>Issued</span><span>${invoice.issuedAt.toISOString().slice(0, 10)}</span></div>
     <div class="row"><span>Billing Name</span><span>${invoice.billingName || "-"}</span></div>
     <div class="row"><span>Billing Country</span><span>${invoice.billingCountry || "-"}</span></div>
+    <div class="row"><span>Store Currency</span><span>${invoice.store.baseCurrencyCode || "EUR"}</span></div>
+    <table>
+      <thead>
+        <tr><th>Description</th><th>Qty</th><th>Unit</th><th>Tax %</th><th>Line Subtotal</th><th>Tax</th><th>Total</th></tr>
+      </thead>
+      <tbody>
+        ${(invoice.lines || [])
+          .map(
+            (l) =>
+              `<tr><td>${l.description}</td><td>${Number(l.quantity).toFixed(2)}</td><td>${Number(l.unitPriceEur).toFixed(2)}</td><td>${Number(
+                l.taxPercent
+              ).toFixed(2)}</td><td>${(Number(l.quantity) * Number(l.unitPriceEur)).toFixed(2)}</td><td>${Number(l.taxEur).toFixed(
+                2
+              )}</td><td>${Number(l.lineTotalEur).toFixed(2)}</td></tr>`
+          )
+          .join("") || "<tr><td colspan='5'>No lines</td></tr>"}
+      </tbody>
+    </table>
     <div class="box">
       <div class="row"><span>Subtotal (EUR)</span><span>${normalizeMoney(invoice.subtotalEur)?.toFixed(2)}</span></div>
       <div class="row"><span>Tax (EUR)</span><span>${normalizeMoney(invoice.taxEur)?.toFixed(2)}</span></div>
       <div class="row"><strong>Total (EUR)</strong><strong>${normalizeMoney(invoice.totalEur)?.toFixed(2)}</strong></div>
+    </div>
+    <div class="box">
+      <div class="row"><strong>Tax by country</strong><span></span></div>
+      ${Object.entries(taxByCountry || {})
+        .map(
+          ([c, t]) =>
+            `<div class="row"><span>${c}</span><span>Base ${Number(t.base || 0).toFixed(2)} | Tax ${Number(t.tax || 0).toFixed(2)}</span></div>`
+        )
+        .join("") || "<div class='row'><span>—</span><span>—</span></div>"}
     </div>
   </body>
 </html>`;
@@ -8870,6 +9177,103 @@ app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
     return res.send(html);
   } catch (err) {
     console.error("GET /invoices/:invoiceId/document error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Invoice discrepancies (sum(lines) vs stored totals)
+app.get("/invoices/discrepancies", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const format = String(req.query.format || "json").toLowerCase();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission" });
+
+    const invoices = await prisma.invoice.findMany({
+      where: { storeId },
+      include: { order: true, lines: true },
+      orderBy: { issuedAt: "desc" },
+      take: 500,
+    });
+
+    const discrepancies = invoices
+      .map((inv) => {
+        const sumSub = (inv.lines || []).reduce((acc, l) => acc + Number(l.quantity || 0) * Number(l.unitPriceEur || 0), 0);
+        const sumTax = (inv.lines || []).reduce((acc, l) => acc + Number(l.taxEur || 0), 0);
+        const sumTotal = (inv.lines || []).reduce((acc, l) => acc + Number(l.lineTotalEur || 0), 0);
+
+        const diffSubtotal = roundMoney(sumSub - Number(inv.subtotalEur || 0));
+        const diffTax = roundMoney(sumTax - Number(inv.taxEur || 0));
+        const diffTotal = roundMoney(sumTotal - Number(inv.totalEur || 0));
+
+        const hasGap = Math.abs(diffSubtotal) > 0.01 || Math.abs(diffTax) > 0.01 || Math.abs(diffTotal) > 0.01;
+        if (!hasGap) return null;
+
+        return {
+          invoiceNumber: inv.invoiceNumber,
+          orderNumber: inv.order?.orderNumber || "-",
+          issuedAt: inv.issuedAt?.toISOString?.() || null,
+          storedSubtotal: Number(inv.subtotalEur || 0),
+          storedTax: Number(inv.taxEur || 0),
+          storedTotal: Number(inv.totalEur || 0),
+          calcSubtotal: roundMoney(sumSub),
+          calcTax: roundMoney(sumTax),
+          calcTotal: roundMoney(sumTotal),
+          diffSubtotal,
+          diffTax,
+          diffTotal,
+        };
+      })
+      .filter(Boolean);
+
+    if (format === "csv") {
+      const header = [
+        "invoiceNumber",
+        "orderNumber",
+        "issuedAt",
+        "storedSubtotal",
+        "storedTax",
+        "storedTotal",
+        "calcSubtotal",
+        "calcTax",
+        "calcTotal",
+        "diffSubtotal",
+        "diffTax",
+        "diffTotal",
+      ];
+      const rows = [header.join(",")].concat(
+        discrepancies.map((d) =>
+          [
+            d.invoiceNumber,
+            d.orderNumber,
+            d.issuedAt,
+            d.storedSubtotal,
+            d.storedTax,
+            d.storedTotal,
+            d.calcSubtotal,
+            d.calcTax,
+            d.calcTotal,
+            d.diffSubtotal,
+            d.diffTax,
+            d.diffTotal,
+          ]
+            .map((v) => (v === null || v === undefined ? "" : String(v)))
+            .join(",")
+        )
+      );
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", "attachment; filename=invoice_discrepancies.csv");
+      return res.send(rows.join("\n"));
+    }
+
+    return res.json({ count: discrepancies.length, discrepancies });
+  } catch (err) {
+    console.error("GET /invoices/discrepancies error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
