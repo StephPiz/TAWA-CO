@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { requireTokenOrRedirect } from "../lib/auth";
 import Topbar from "../components/topbar";
 import { useStorePermissions } from "../lib/access";
+import Link from "next/link";
 
 const API_BASE = "http://localhost:3001";
 
@@ -564,6 +565,15 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-7xl mx-auto space-y-4">
         <Topbar title="Configuracion" storeName={storeName} />
+        <div className="bg-white p-4 rounded-2xl shadow-md flex items-center justify-between">
+          <div>
+            <div className="font-semibold">Manual del sistema</div>
+            <div className="text-sm text-gray-600">Ver el manual funcional completo y la guia de Fase 1.</div>
+          </div>
+          <Link href="/manual" className="rounded border px-4 py-2 hover:bg-gray-50">
+            Manual
+          </Link>
+        </div>
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
 
         <div className="grid md:grid-cols-2 gap-4">
