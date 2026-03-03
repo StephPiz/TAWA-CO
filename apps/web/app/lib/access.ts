@@ -19,6 +19,7 @@ export type StorePermissions = {
   tasksWrite: boolean;
   customersRead: boolean;
   supportWrite: boolean;
+  settingsWrite: boolean;
 };
 
 const DEFAULT_PERMS: StorePermissions = {
@@ -35,6 +36,7 @@ const DEFAULT_PERMS: StorePermissions = {
   tasksWrite: false,
   customersRead: false,
   supportWrite: false,
+  settingsWrite: false,
 };
 
 export function getSelectedStoreId(): string | null {

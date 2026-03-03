@@ -226,10 +226,34 @@ async function main() {
     create: { userId: warehouseUser.id, storeId: store.id, roleKey: "warehouse" },
   });
 
+  const adminKat = await prisma.user.upsert({
+    where: { email: "admin_kat@demarca.local" },
+    update: {
+      passwordHash,
+      fullName: "Admin KAT",
+      preferredLocale: "es",
+      isActive: true,
+    },
+    create: {
+      email: "admin_kat@demarca.local",
+      passwordHash,
+      fullName: "Admin KAT",
+      preferredLocale: "es",
+      isActive: true,
+    },
+  });
+
+  await prisma.userStoreMembership.upsert({
+    where: { userId_storeId: { userId: adminKat.id, storeId: store.id } },
+    update: { roleKey: "admin_kat" },
+    create: { userId: adminKat.id, storeId: store.id, roleKey: "admin_kat" },
+  });
+
   const perms = [
     ["inventory.read", "Read inventory"],
     ["inventory.write", "Move stock"],
     ["finance.read", "Read financial data"],
+    ["analytics.read", "Read analytics data (non-financial allowed)"],
     ["suppliers.read", "Read supplier data"],
     ["products.write", "Create/update products"],
     ["orders.write", "Create/update orders"],
@@ -258,6 +282,40 @@ async function main() {
       userId: admin.id,
       storeId: store.id,
       permissionId: permissionByKey["finance.read"].id,
+      granted: true,
+    },
+  });
+
+  await prisma.userPermission.upsert({
+    where: {
+      userId_storeId_permissionId: {
+        userId: adminKat.id,
+        storeId: store.id,
+        permissionId: permissionByKey["analytics.read"].id,
+      },
+    },
+    update: { granted: true },
+    create: {
+      userId: adminKat.id,
+      storeId: store.id,
+      permissionId: permissionByKey["analytics.read"].id,
+      granted: true,
+    },
+  });
+
+  await prisma.userPermission.upsert({
+    where: {
+      userId_storeId_permissionId: {
+        userId: admin.id,
+        storeId: store.id,
+        permissionId: permissionByKey["analytics.read"].id,
+      },
+    },
+    update: { granted: true },
+    create: {
+      userId: admin.id,
+      storeId: store.id,
+      permissionId: permissionByKey["analytics.read"].id,
       granted: true,
     },
   });
@@ -1170,6 +1228,7 @@ async function main() {
   console.log("Holding:", holding.name);
   console.log("Store:", store.name);
   console.log("Admin:", admin.email, "password: Admin123!");
+  console.log("Admin KAT:", adminKat.email, "password: Admin123!");
   console.log("Warehouse user:", warehouseUser.email, "password: Admin123!");
 }
 

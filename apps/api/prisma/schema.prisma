@@ -263,6 +263,8 @@ model Store {
   chatMessages      ChatMessage[]
   notifications     Notification[]
   supportTickets    SupportTicket[]
+  auditLogs         AuditLog[]
+  auditAnchors      AuditAnchor[]
 
   @@unique([holdingId, code])
   @@map("stores")
@@ -1152,6 +1154,8 @@ model User {
   assignedTickets     SupportTicket[]        @relation("SupportTicketAssignedTo")
   createdTickets      SupportTicket[]        @relation("SupportTicketCreatedBy")
   supportTicketNotes  SupportTicketNote[]
+  auditLogs           AuditLog[]
+  auditAnchors        AuditAnchor[] @relation("AuditAnchorCreatedBy")
 
   @@map("users")
 }
@@ -1210,4 +1214,51 @@ model RefreshToken {
 
   @@index([userId, expiresAt])
   @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  storeId    String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  message    String?
+  payload    Json?
+  prevHash   String?
+  hashAlgo   String?  @default("sha256")
+  hashChain  String?
+  createdAt  DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, action, createdAt])
+  @@index([storeId, entityType, entityId, createdAt])
+  @@map("audit_logs")
+}
+
+model AuditAnchor {
+  id              String   @id @default(cuid())
+  storeId         String
+  anchorDay       String
+  periodStart     DateTime
+  periodEnd       DateTime
+  eventCount      Int
+  lastAuditLogId  String?
+  lastHash        String?
+  hashAlgo        String   @default("sha256")
+  prevAnchorHash  String?
+  anchorHash      String
+  signature       String
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  store     Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("AuditAnchorCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, anchorDay])
+  @@index([storeId, createdAt])
+  @@map("audit_anchors")
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { requireTokenOrRedirect } from "../lib/auth";
 import Topbar from "../components/topbar";
+import { useStorePermissions } from "../lib/access";
 
 const API_BASE = "http://localhost:3001";
 
@@ -23,6 +24,7 @@ type Channel = {
 };
 
 export default function SettingsPage() {
+  const { loading: permissionsLoading, permissions, error: permissionsError } = useStorePermissions();
   const [storeId, setStoreId] = useState("");
   const [storeName, setStoreName] = useState("");
   const [error, setError] = useState("");
@@ -87,6 +89,12 @@ export default function SettingsPage() {
       await loadAll(selectedStoreId);
     })();
   }, []);
+
+  if (permissionsLoading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
+  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  if (!permissions.settingsWrite) {
+    return <div className="min-h-screen bg-gray-100 p-6 text-red-700">No autorizado para Configuracion.</div>;
+  }
 
   async function createWarehouse(e: React.FormEvent) {
     e.preventDefault();

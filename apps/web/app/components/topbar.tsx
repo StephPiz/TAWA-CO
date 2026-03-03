@@ -232,9 +232,16 @@ export default function Topbar({ title, storeName }: Props) {
                 {t("support")}
               </button>
             ) : null}
-            <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/settings")}>
-              {t("settings")}
-            </button>
+            {permissions.financeRead ? (
+              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/audit")}>
+                Audit
+              </button>
+            ) : null}
+            {permissions.settingsWrite ? (
+              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => router.push("/store/settings")}>
+                {t("settings")}
+              </button>
+            ) : null}
             <button className="px-3 py-2 rounded bg-black text-white" onClick={logout}>
               {t("logout")}
             </button>

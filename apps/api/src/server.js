@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { PrismaClient } = require("@prisma/client");
 const {
   ORDER_STATUS_FLOW,
@@ -19,6 +20,39 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+function normalizeRoleKey(roleKey) {
+  return String(roleKey || "").trim().toLowerCase();
+}
+
+function roleIn(roleKey, allowed) {
+  return allowed.includes(normalizeRoleKey(roleKey));
+}
+
+function getRoleCapabilities(roleKey) {
+  const role = normalizeRoleKey(roleKey);
+  const adminFull = ["admin", "admin_ste", "admin_ale", "owner"].includes(role);
+  const adminOps = adminFull || ["admin_kat", "warehouse", "ops"].includes(role);
+
+  return {
+    inventoryRead: true,
+    inventoryWrite: adminOps,
+    catalogWrite: adminFull || ["admin_kat", "ops"].includes(role),
+    ordersWrite: adminOps,
+    purchasesWrite: adminFull,
+    payoutsWrite: adminFull,
+    invoicesWrite: adminFull,
+    returnsWrite: adminOps,
+    analyticsRead: adminFull,
+    financeRead: adminFull,
+    suppliersRead: adminFull,
+    tasksWrite: adminOps,
+    customersRead: adminFull || ["ops", "marketing"].includes(role),
+    supportWrite: adminOps,
+    chatWrite: adminOps,
+    settingsWrite: adminFull,
+  };
+}
 
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization || "";
@@ -45,21 +79,8 @@ async function getStoreMembership(userId, storeId) {
 }
 
 async function canReadSensitive(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner"].includes(String(roleKey || "").toLowerCase())) {
-    return true;
-  }
-
-  const financePermission = await prisma.userPermission.findFirst({
-    where: {
-      userId,
-      storeId,
-      granted: true,
-      permission: { key: "finance.read" },
-    },
-    select: { id: true },
-  });
-
-  return Boolean(financePermission);
+  const state = await getSensitiveAccessState(userId, storeId, roleKey, { logOnBlock: false });
+  return state.allowed;
 }
 
 async function hasPermission(userId, storeId, permissionKey) {
@@ -77,42 +98,42 @@ async function hasPermission(userId, storeId, permissionKey) {
 }
 
 async function canManageCatalog(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).catalogWrite) return true;
   return hasPermission(userId, storeId, "products.write");
 }
 
 async function canManageOrders(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).ordersWrite) return true;
   return hasPermission(userId, storeId, "orders.write");
 }
 
 async function canManagePayouts(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).payoutsWrite) return true;
   return hasPermission(userId, storeId, "payouts.write");
 }
 
 async function canManageInvoices(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).invoicesWrite) return true;
   return hasPermission(userId, storeId, "invoices.write");
 }
 
 async function canManageReturns(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "warehouse", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).returnsWrite) return true;
   return hasPermission(userId, storeId, "inventory.write");
 }
 
 async function canManagePurchases(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).purchasesWrite) return true;
   return hasPermission(userId, storeId, "purchases.write");
 }
 
 async function canManageTasks(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).tasksWrite) return true;
   return hasPermission(userId, storeId, "tasks.write");
 }
 
 async function canReadCustomers(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).customersRead) return true;
   const [ordersWrite, tasksWrite] = await Promise.all([
     hasPermission(userId, storeId, "orders.write"),
     hasPermission(userId, storeId, "tasks.write"),
@@ -121,17 +142,22 @@ async function canReadCustomers(userId, storeId, roleKey) {
 }
 
 async function canManageSupport(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).supportWrite) return true;
   return hasPermission(userId, storeId, "tasks.write");
 }
 
+async function canReadAnalytics(userId, storeId, roleKey) {
+  if (getRoleCapabilities(roleKey).analyticsRead) return true;
+  return hasPermission(userId, storeId, "analytics.read");
+}
+
 async function canUseChat(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).chatWrite) return true;
   return hasPermission(userId, storeId, "tasks.write");
 }
 
 async function canReadNotifications(userId, storeId, roleKey) {
-  if (["admin", "admin_ste", "owner", "ops", "warehouse"].includes(String(roleKey || "").toLowerCase())) return true;
+  if (getRoleCapabilities(roleKey).tasksWrite) return true;
   return hasPermission(userId, storeId, "tasks.write");
 }
 
@@ -156,6 +182,203 @@ async function createNotificationSafe(payload) {
   }
 }
 
+async function createAuditLogSafe(payload) {
+  try {
+    const eventAt = new Date();
+    const previous = await prisma.auditLog.findFirst({
+      where: { storeId: payload.storeId },
+      select: { id: true, hashChain: true, createdAt: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+    const prevHash = previous?.hashChain || null;
+    const action = String(payload.action || "").trim().toLowerCase();
+    const entityType = String(payload.entityType || "").trim().toLowerCase();
+    const hashChain = computeAuditHash({
+      prevHash,
+      storeId: payload.storeId,
+      userId: payload.userId || null,
+      action,
+      entityType,
+      entityId: payload.entityId || null,
+      message: payload.message || null,
+      payload: payload.payload || null,
+      createdAt: eventAt,
+    });
+
+    const created = await prisma.auditLog.create({
+      data: {
+        storeId: payload.storeId,
+        userId: payload.userId || null,
+        action,
+        entityType,
+        entityId: payload.entityId || null,
+        message: payload.message || null,
+        payload: payload.payload || null,
+        prevHash,
+        hashAlgo: "sha256",
+        hashChain,
+        createdAt: eventAt,
+      },
+    });
+
+    // Security guardrail: alert when a user accumulates many denied accesses in 1 hour.
+    if (created.action === "access.denied" && created.storeId) {
+      const now = new Date();
+      const since = new Date(now.getTime() - 60 * 60 * 1000);
+      const deniedCount = await prisma.auditLog.count({
+        where: {
+          storeId: created.storeId,
+          userId: created.userId || null,
+          action: "access.denied",
+          createdAt: { gte: since },
+        },
+      });
+
+      const threshold = 5;
+      if (deniedCount >= threshold) {
+        const hourBucket = new Date(now);
+        hourBucket.setMinutes(0, 0, 0);
+        const dedupeKey = `${created.userId || "unknown"}:${hourBucket.toISOString()}`;
+        const existingAlert = await prisma.notification.findFirst({
+          where: {
+            storeId: created.storeId,
+            type: "system",
+            severity: "critical",
+            linkedEntityType: "audit_alert",
+            linkedEntityId: dedupeKey,
+            createdAt: { gte: since },
+          },
+          select: { id: true },
+        });
+
+        if (!existingAlert) {
+          await createNotificationSafe({
+            storeId: created.storeId,
+            userId: null,
+            type: "system",
+            severity: "critical",
+            title: "Alerta de seguridad: accesos denegados",
+            body: `Usuario ${created.userId || "unknown"} acumulo ${deniedCount} denegaciones en 1 hora.`,
+            linkedEntityType: "audit_alert",
+            linkedEntityId: dedupeKey,
+            createdByUserId: null,
+          });
+        }
+      }
+    }
+
+    return created;
+  } catch (err) {
+    console.error("Audit create error:", err);
+    return null;
+  }
+}
+
+async function createSensitiveReadAuditSafe({ storeId, userId, entityType, message, payload }) {
+  return createAuditLogSafe({
+    storeId,
+    userId: userId || null,
+    action: "sensitive.read",
+    entityType: entityType || "unknown",
+    entityId: null,
+    message: message || null,
+    payload: payload || null,
+  });
+}
+
+async function getSensitiveAccessState(userId, storeId, roleKey, options = {}) {
+  const { logOnBlock = true } = options;
+  const roleAllows = getRoleCapabilities(roleKey).financeRead;
+  const permissionAllows = roleAllows
+    ? true
+    : Boolean(
+        await prisma.userPermission.findFirst({
+          where: {
+            userId,
+            storeId,
+            granted: true,
+            permission: { key: "finance.read" },
+          },
+          select: { id: true },
+        })
+      );
+
+  if (!permissionAllows) {
+    return { allowed: false, blocked: false, blockedUntil: null, reason: "permission" };
+  }
+
+  const now = new Date();
+  const deniedWindowStart = new Date(now.getTime() - 60 * 60 * 1000);
+  const deniedEvents = await prisma.auditLog.findMany({
+    where: {
+      storeId,
+      userId,
+      action: "access.denied",
+      createdAt: { gte: deniedWindowStart },
+    },
+    select: { createdAt: true },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+
+  const threshold = 8;
+  if (deniedEvents.length < threshold) {
+    return { allowed: true, blocked: false, blockedUntil: null, reason: null };
+  }
+
+  const lastDeniedAt = deniedEvents[0]?.createdAt || now;
+  const blockedUntil = new Date(lastDeniedAt.getTime() + 30 * 60 * 1000);
+  if (blockedUntil <= now) {
+    return { allowed: true, blocked: false, blockedUntil: null, reason: null };
+  }
+
+  if (logOnBlock) {
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "access.blocked",
+      entityType: "security_policy",
+      message: "Sensitive access temporarily blocked after repeated denied attempts",
+      payload: {
+        deniedLastHour: deniedEvents.length,
+        threshold,
+        blockedUntil: blockedUntil.toISOString(),
+      },
+    });
+
+    const hourBucket = new Date(now);
+    hourBucket.setMinutes(0, 0, 0);
+    const dedupeKey = `blocked:${userId}:${hourBucket.toISOString()}`;
+    const existingAlert = await prisma.notification.findFirst({
+      where: {
+        storeId,
+        type: "system",
+        severity: "critical",
+        linkedEntityType: "audit_alert",
+        linkedEntityId: dedupeKey,
+        createdAt: { gte: deniedWindowStart },
+      },
+      select: { id: true },
+    });
+
+    if (!existingAlert) {
+      await createNotificationSafe({
+        storeId,
+        userId: null,
+        type: "system",
+        severity: "critical",
+        title: "Bloqueo temporal de acceso sensible",
+        body: `Usuario ${userId} bloqueado hasta ${blockedUntil.toISOString()} por denegaciones repetidas.`,
+        linkedEntityType: "audit_alert",
+        linkedEntityId: dedupeKey,
+        createdByUserId: null,
+      });
+    }
+  }
+
+  return { allowed: false, blocked: true, blockedUntil, reason: "cooldown" };
+}
+
 function normalizeMoney(value) {
   if (value === null || value === undefined) return null;
   const n = Number(value);
@@ -171,6 +394,425 @@ function roundMoney(value) {
   return Number((Number(value || 0)).toFixed(2));
 }
 
+function sortJson(value) {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = sortJson(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function canonicalJsonString(value) {
+  if (value === null || value === undefined) return "";
+  try {
+    return JSON.stringify(sortJson(value));
+  } catch (_e) {
+    return "";
+  }
+}
+
+function computeAuditHash({ prevHash, storeId, userId, action, entityType, entityId, message, payload, createdAt }) {
+  const parts = [
+    String(prevHash || "GENESIS"),
+    String(storeId || ""),
+    String(userId || ""),
+    String(action || ""),
+    String(entityType || ""),
+    String(entityId || ""),
+    String(message || ""),
+    canonicalJsonString(payload),
+    createdAt instanceof Date ? createdAt.toISOString() : "",
+  ];
+  return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
+}
+
+function toUtcDayString(date = new Date()) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseAnchorDay(dayStr) {
+  const s = String(dayStr || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const start = new Date(`${s}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(`${s}T23:59:59.999Z`);
+  return { day: s, start, end };
+}
+
+function getAnchorSigningSecret() {
+  return process.env.AUDIT_ANCHOR_SECRET || process.env.JWT_SECRET || "dev-secret";
+}
+
+function computeAnchorHash({ storeId, anchorDay, periodStart, periodEnd, eventCount, lastHash, prevAnchorHash }) {
+  const parts = [
+    String(storeId || ""),
+    String(anchorDay || ""),
+    periodStart instanceof Date ? periodStart.toISOString() : "",
+    periodEnd instanceof Date ? periodEnd.toISOString() : "",
+    String(eventCount || 0),
+    String(lastHash || ""),
+    String(prevAnchorHash || "GENESIS"),
+  ];
+  return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
+}
+
+function signAnchorHash(anchorHash) {
+  return crypto.createHmac("sha256", getAnchorSigningSecret()).update(String(anchorHash || "")).digest("hex");
+}
+
+async function sealAuditAnchorForDay(storeId, actorUserId, anchorDay) {
+  const dayInfo = parseAnchorDay(anchorDay);
+  if (!dayInfo) throw new Error("INVALID_ANCHOR_DAY");
+
+  const existing = await prisma.auditAnchor.findUnique({
+    where: { storeId_anchorDay: { storeId, anchorDay: dayInfo.day } },
+  });
+  if (existing) return { reused: true, anchor: existing };
+
+  const [logs, previousAnchor] = await Promise.all([
+    prisma.auditLog.findMany({
+      where: { storeId, createdAt: { gte: dayInfo.start, lte: dayInfo.end } },
+      select: { id: true, hashChain: true, createdAt: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 50000,
+    }),
+    prisma.auditAnchor.findFirst({
+      where: { storeId, anchorDay: { lt: dayInfo.day } },
+      orderBy: [{ anchorDay: "desc" }, { createdAt: "desc" }],
+    }),
+  ]);
+
+  const last = logs.length > 0 ? logs[logs.length - 1] : null;
+  const created = await prisma.auditAnchor.create({
+    data: {
+      storeId,
+      anchorDay: dayInfo.day,
+      periodStart: dayInfo.start,
+      periodEnd: dayInfo.end,
+      eventCount: logs.length,
+      lastAuditLogId: last?.id || null,
+      lastHash: last?.hashChain || null,
+      hashAlgo: "sha256",
+      prevAnchorHash: previousAnchor?.anchorHash || null,
+      anchorHash: computeAnchorHash({
+        storeId,
+        anchorDay: dayInfo.day,
+        periodStart: dayInfo.start,
+        periodEnd: dayInfo.end,
+        eventCount: logs.length,
+        lastHash: last?.hashChain || null,
+        prevAnchorHash: previousAnchor?.anchorHash || null,
+      }),
+      signature: signAnchorHash(
+        computeAnchorHash({
+          storeId,
+          anchorDay: dayInfo.day,
+          periodStart: dayInfo.start,
+          periodEnd: dayInfo.end,
+          eventCount: logs.length,
+          lastHash: last?.hashChain || null,
+          prevAnchorHash: previousAnchor?.anchorHash || null,
+        })
+      ),
+      createdByUserId: actorUserId || null,
+    },
+  });
+
+  await createAuditLogSafe({
+    storeId,
+    userId: actorUserId || null,
+    action: "audit.anchor.sealed",
+    entityType: "audit_anchor",
+    entityId: created.id,
+    message: `Audit anchor sealed for ${dayInfo.day}`,
+    payload: { anchorDay: dayInfo.day, eventCount: created.eventCount, auto: !actorUserId },
+  });
+
+  return { reused: false, anchor: created };
+}
+
+async function verifyAuditLogsIntegrityInternal(storeId, options = {}) {
+  const { dateFrom = null, dateTo = null, limit = 3000 } = options;
+  const parsedFrom = dateFrom ? parseDateInput(dateFrom) : null;
+  const parsedTo = dateTo ? parseDateInput(dateTo) : null;
+  const parsedToEnd = parsedTo ? new Date(parsedTo.getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      storeId,
+      ...(parsedFrom || parsedToEnd
+        ? { createdAt: { ...(parsedFrom ? { gte: parsedFrom } : {}), ...(parsedToEnd ? { lte: parsedToEnd } : {}) } }
+        : {}),
+    },
+    select: {
+      id: true,
+      storeId: true,
+      userId: true,
+      action: true,
+      entityType: true,
+      entityId: true,
+      message: true,
+      payload: true,
+      prevHash: true,
+      hashAlgo: true,
+      hashChain: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  let anchorPrevHash = null;
+  if (rows.length > 0) {
+    const first = rows[0];
+    const previous = await prisma.auditLog.findFirst({
+      where: {
+        storeId,
+        OR: [{ createdAt: { lt: first.createdAt } }, { createdAt: first.createdAt, id: { lt: first.id } }],
+      },
+      select: { hashChain: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+    anchorPrevHash = previous?.hashChain || null;
+  }
+
+  const mismatches = [];
+  let expectedPrevHash = anchorPrevHash;
+  let legacyRows = 0;
+  let verifiedRows = 0;
+  for (const row of rows) {
+    if (!row.hashChain || !row.hashAlgo || row.hashAlgo !== "sha256") {
+      legacyRows += 1;
+      expectedPrevHash = row.hashChain || expectedPrevHash;
+      continue;
+    }
+    const expectedHash = computeAuditHash({
+      prevHash: expectedPrevHash,
+      storeId: row.storeId,
+      userId: row.userId,
+      action: row.action,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      message: row.message,
+      payload: row.payload,
+      createdAt: row.createdAt,
+    });
+    verifiedRows += 1;
+    const prevOk = (row.prevHash || null) === (expectedPrevHash || null);
+    const hashOk = row.hashChain === expectedHash;
+    if (!prevOk || !hashOk) {
+      mismatches.push({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        action: row.action,
+        entityType: row.entityType,
+        prevHashOk: prevOk,
+        hashOk,
+      });
+    }
+    expectedPrevHash = row.hashChain;
+  }
+
+  return {
+    ok: mismatches.length === 0,
+    scanned: rows.length,
+    verifiedRows,
+    legacyRows,
+    mismatches,
+    anchorPrevHash,
+  };
+}
+
+async function verifyAuditAnchorsInternal(storeId, limit = 365) {
+  const anchors = await prisma.auditAnchor.findMany({
+    where: { storeId },
+    orderBy: [{ anchorDay: "asc" }, { createdAt: "asc" }],
+    take: limit,
+  });
+
+  const mismatches = [];
+  let expectedPrev = null;
+  for (const a of anchors) {
+    const expectedHash = computeAnchorHash({
+      storeId,
+      anchorDay: a.anchorDay,
+      periodStart: a.periodStart,
+      periodEnd: a.periodEnd,
+      eventCount: a.eventCount,
+      lastHash: a.lastHash,
+      prevAnchorHash: expectedPrev,
+    });
+    const expectedSig = signAnchorHash(expectedHash);
+    const prevOk = (a.prevAnchorHash || null) === (expectedPrev || null);
+    const hashOk = a.anchorHash === expectedHash;
+    const sigOk = a.signature === expectedSig;
+    if (!prevOk || !hashOk || !sigOk) {
+      mismatches.push({ id: a.id, anchorDay: a.anchorDay, prevOk, hashOk, sigOk });
+    }
+    expectedPrev = a.anchorHash;
+  }
+
+  return {
+    ok: mismatches.length === 0,
+    scanned: anchors.length,
+    mismatches,
+  };
+}
+
+const auditJobState = {
+  enabled: String(process.env.AUDIT_AUTO_JOB_ENABLED || "true").toLowerCase() !== "false",
+  running: false,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastError: null,
+  lastSummary: null,
+  lastTargetDay: null,
+};
+
+function getYesterdayUtcDayString() {
+  const now = new Date();
+  const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0, 0));
+  return toUtcDayString(y);
+}
+
+async function runAuditAutoJob({ actorUserId = null, source = "auto" } = {}) {
+  if (auditJobState.running) {
+    return { ok: false, skipped: true, reason: "already_running" };
+  }
+  auditJobState.running = true;
+  const targetDay = getYesterdayUtcDayString();
+  try {
+    const stores = await prisma.store.findMany({
+      where: { status: "active" },
+      select: { id: true, name: true },
+      take: 200,
+    });
+
+    const summary = {
+      source,
+      targetDay,
+      stores: stores.length,
+      sealed: 0,
+      reused: 0,
+      alerts: 0,
+      issues: 0,
+      perStore: [],
+    };
+
+    for (const s of stores) {
+      const storeResult = { storeId: s.id, storeName: s.name, seal: "ok", logsOk: true, anchorsOk: true, issues: [] };
+      try {
+        const sealResult = await sealAuditAnchorForDay(s.id, actorUserId, targetDay);
+        if (sealResult.reused) summary.reused += 1;
+        else summary.sealed += 1;
+
+        const [logsVerify, anchorsVerify] = await Promise.all([
+          verifyAuditLogsIntegrityInternal(s.id, { limit: 3000 }),
+          verifyAuditAnchorsInternal(s.id, 400),
+        ]);
+        if (!logsVerify.ok) {
+          storeResult.logsOk = false;
+          storeResult.issues.push(`logs_mismatch:${logsVerify.mismatches.length}`);
+        }
+        if (!anchorsVerify.ok) {
+          storeResult.anchorsOk = false;
+          storeResult.issues.push(`anchors_mismatch:${anchorsVerify.mismatches.length}`);
+        }
+
+        if (!logsVerify.ok || !anchorsVerify.ok) {
+          summary.issues += 1;
+          const alertKey = `audit_job:${targetDay}:${s.id}`;
+          const exists = await prisma.notification.findFirst({
+            where: {
+              storeId: s.id,
+              type: "system",
+              severity: "critical",
+              linkedEntityType: "audit_alert",
+              linkedEntityId: alertKey,
+            },
+            select: { id: true },
+          });
+          if (!exists) {
+            await createNotificationSafe({
+              storeId: s.id,
+              userId: null,
+              type: "system",
+              severity: "critical",
+              title: "Alerta integridad auditoria",
+              body: `Fallo verificacion automatica ${targetDay}. logsOk=${logsVerify.ok} anchorsOk=${anchorsVerify.ok}`,
+              linkedEntityType: "audit_alert",
+              linkedEntityId: alertKey,
+              createdByUserId: actorUserId || null,
+            });
+            summary.alerts += 1;
+          }
+        }
+
+        await createAuditLogSafe({
+          storeId: s.id,
+          userId: actorUserId || null,
+          action: "audit.job.run",
+          entityType: "audit_job",
+          message: "Audit auto job executed",
+          payload: {
+            source,
+            targetDay,
+            sealReused: sealResult.reused,
+            logsOk: logsVerify.ok,
+            logsMismatches: logsVerify.mismatches.length,
+            anchorsOk: anchorsVerify.ok,
+            anchorsMismatches: anchorsVerify.mismatches.length,
+          },
+        });
+      } catch (storeErr) {
+        summary.issues += 1;
+        storeResult.seal = "error";
+        storeResult.issues.push(String(storeErr?.message || "unknown_error"));
+      }
+      summary.perStore.push(storeResult);
+    }
+
+    auditJobState.lastRunAt = new Date().toISOString();
+    auditJobState.lastRunStatus = summary.issues > 0 ? "warning" : "ok";
+    auditJobState.lastError = null;
+    auditJobState.lastSummary = summary;
+    auditJobState.lastTargetDay = targetDay;
+    return { ok: true, summary };
+  } catch (err) {
+    auditJobState.lastRunAt = new Date().toISOString();
+    auditJobState.lastRunStatus = "error";
+    auditJobState.lastError = String(err?.message || err || "unknown_error");
+    return { ok: false, error: auditJobState.lastError };
+  } finally {
+    auditJobState.running = false;
+  }
+}
+
+function toComparableValue(value) {
+  if (value instanceof Date) return value.toISOString();
+  if (value === undefined) return null;
+  return value;
+}
+
+function buildFieldChanges(before, after, fields) {
+  const changes = [];
+  for (const key of fields) {
+    const beforeVal = toComparableValue(before?.[key]);
+    const afterVal = toComparableValue(after?.[key]);
+    if (beforeVal !== afterVal) {
+      changes.push({ field: key, before: beforeVal, after: afterVal });
+    }
+  }
+  return changes;
+}
+
 function parseDateRange(query) {
   const from = query?.dateFrom ? parseDateInput(query.dateFrom) : null;
   const to = query?.dateTo ? parseDateInput(query.dateTo) : null;
@@ -179,6 +821,51 @@ function parseDateRange(query) {
     from,
     to: toEnd,
   };
+}
+
+const AUDIT_RETENTION_POLICY = Object.freeze({
+  securityDays: 365,
+  operationalDays: 180,
+  readDays: 90,
+  defaultDays: 180,
+});
+
+function subtractDays(date, days) {
+  return new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
+}
+
+function getAuditRetentionDays(action, entityType) {
+  const a = String(action || "").toLowerCase();
+  const e = String(entityType || "").toLowerCase();
+
+  if (a.startsWith("access.") || a.startsWith("auth.") || e === "security_policy") {
+    return AUDIT_RETENTION_POLICY.securityDays;
+  }
+  if (a === "sensitive.read" || a.endsWith(".read")) {
+    return AUDIT_RETENTION_POLICY.readDays;
+  }
+  if (a.endsWith(".created") || a.endsWith(".updated") || a.endsWith(".deleted")) {
+    return AUDIT_RETENTION_POLICY.operationalDays;
+  }
+  return AUDIT_RETENTION_POLICY.defaultDays;
+}
+
+function evaluateAuditRetention(log, now = new Date()) {
+  const retentionDays = getAuditRetentionDays(log.action, log.entityType);
+  const cutoff = subtractDays(now, retentionDays);
+  const shouldDelete = log.createdAt < cutoff;
+  let bucket = "default";
+  const a = String(log.action || "").toLowerCase();
+  const e = String(log.entityType || "").toLowerCase();
+  if (a.startsWith("access.") || a.startsWith("auth.") || e === "security_policy") bucket = "security";
+  else if (a === "sensitive.read" || a.endsWith(".read")) bucket = "read";
+  else if (a.endsWith(".created") || a.endsWith(".updated") || a.endsWith(".deleted")) bucket = "operational";
+  return { shouldDelete, retentionDays, cutoff, bucket };
+}
+
+async function canManageSettings(userId, storeId, roleKey) {
+  if (getRoleCapabilities(roleKey).settingsWrite) return true;
+  return hasPermission(userId, storeId, "settings.write");
 }
 
 const ORDER_STATUSES = new Set(Object.keys(ORDER_STATUS_FLOW));
@@ -447,6 +1134,37 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/health/deep", async (_req, res) => {
+  const startedAt = Date.now();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    const [users, stores, orders, tasks, tickets] = await Promise.all([
+      prisma.user.count(),
+      prisma.store.count(),
+      prisma.salesOrder.count(),
+      prisma.teamTask.count(),
+      prisma.supportTicket.count(),
+    ]);
+    const latencyMs = Date.now() - startedAt;
+    return res.json({
+      ok: true,
+      database: "up",
+      latencyMs,
+      counts: { users, stores, orders, tasks, tickets },
+      now: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /health/deep error:", err);
+    return res.status(500).json({
+      ok: false,
+      database: "down",
+      latencyMs: Date.now() - startedAt,
+      error: "Database check failed",
+      now: new Date().toISOString(),
+    });
+  }
+});
+
 app.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -623,9 +1341,11 @@ app.get("/stores/:storeId/permissions", requireAuth, async (req, res) => {
 
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
+    const roleCaps = getRoleCapabilities(membership.roleKey);
 
-    const [canSensitive, canCatalogWrite, canOrdersWrite, canPayoutsWrite, canInvoicesWrite, canTasksWrite, canCustomersRead, canSupportWrite] = await Promise.all([
+    const [canSensitive, canAnalyticsRead, canCatalogWrite, canOrdersWrite, canPayoutsWrite, canInvoicesWrite, canTasksWrite, canCustomersRead, canSupportWrite] = await Promise.all([
       canReadSensitive(userId, storeId, membership.roleKey),
+      canReadAnalytics(userId, storeId, membership.roleKey),
       canManageCatalog(userId, storeId, membership.roleKey),
       canManageOrders(userId, storeId, membership.roleKey),
       canManagePayouts(userId, storeId, membership.roleKey),
@@ -638,23 +1358,20 @@ app.get("/stores/:storeId/permissions", requireAuth, async (req, res) => {
     return res.json({
       roleKey: membership.roleKey,
       permissions: {
-        inventoryRead: true,
-        inventoryWrite: ["admin", "admin_ste", "owner", "warehouse", "ops"].includes(
-          String(membership.roleKey).toLowerCase()
-        ),
+        inventoryRead: roleCaps.inventoryRead,
+        inventoryWrite: roleCaps.inventoryWrite,
         catalogWrite: canCatalogWrite,
         ordersWrite: canOrdersWrite,
         payoutsWrite: canPayoutsWrite,
         invoicesWrite: canInvoicesWrite,
-        returnsWrite: ["admin", "admin_ste", "owner", "warehouse", "ops"].includes(
-          String(membership.roleKey).toLowerCase()
-        ),
-        analyticsRead: canSensitive,
+        returnsWrite: roleCaps.returnsWrite,
+        analyticsRead: canAnalyticsRead,
         financeRead: canSensitive,
         suppliersRead: canSensitive,
         tasksWrite: canTasksWrite,
         customersRead: canCustomersRead,
         supportWrite: canSupportWrite,
+        settingsWrite: roleCaps.settingsWrite,
       },
     });
   } catch (err) {
@@ -680,6 +1397,699 @@ app.get("/stores/:storeId/warehouses", requireAuth, async (req, res) => {
     return res.json({ warehouses });
   } catch (err) {
     console.error("GET /stores/:storeId/warehouses error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/logs", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const filterUserId = String(req.query.userId || "").trim();
+    const action = String(req.query.action || "").trim().toLowerCase();
+    const entityType = String(req.query.entityType || "").trim().toLowerCase();
+    const q = String(req.query.q || "").trim();
+    const dateFrom = String(req.query.dateFrom || "").trim();
+    const dateTo = String(req.query.dateTo || "").trim();
+    const limitRaw = Number(req.query.limit || 120);
+    const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 120));
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const parsedFrom = dateFrom ? parseDateInput(dateFrom) : null;
+    const parsedTo = dateTo ? parseDateInput(dateTo) : null;
+    if (dateFrom && !parsedFrom) return res.status(400).json({ error: "Invalid dateFrom" });
+    if (dateTo && !parsedTo) return res.status(400).json({ error: "Invalid dateTo" });
+    const parsedToEnd = parsedTo ? new Date(parsedTo.getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: sensitiveState.blocked ? "access.blocked" : "access.denied",
+        entityType: "audit_log",
+        message: "Denied audit logs read",
+        payload: sensitiveState.blocked
+          ? { blockedUntil: sensitiveState.blockedUntil ? sensitiveState.blockedUntil.toISOString() : null }
+          : null,
+      });
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to read audit logs",
+      });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_log",
+      message: "Read audit logs",
+      payload: {
+        action: action || null,
+        entityType: entityType || null,
+        q: q || null,
+        userId: filterUserId || null,
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null,
+        limit,
+      },
+    });
+
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        storeId,
+        ...(filterUserId ? { userId: filterUserId } : {}),
+        ...(parsedFrom || parsedToEnd
+          ? {
+              createdAt: {
+                ...(parsedFrom ? { gte: parsedFrom } : {}),
+                ...(parsedToEnd ? { lte: parsedToEnd } : {}),
+              },
+            }
+          : {}),
+        ...(action ? { action } : {}),
+        ...(entityType ? { entityType } : {}),
+        ...(q
+          ? {
+              OR: [
+                { message: { contains: q, mode: "insensitive" } },
+                { entityId: { contains: q, mode: "insensitive" } },
+                { user: { fullName: { contains: q, mode: "insensitive" } } },
+                { user: { email: { contains: q, mode: "insensitive" } } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+
+    return res.json({ logs });
+  } catch (err) {
+    console.error("GET /audit/logs error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/logs/export", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const filterUserId = String(req.query.userId || "").trim();
+    const action = String(req.query.action || "").trim().toLowerCase();
+    const entityType = String(req.query.entityType || "").trim().toLowerCase();
+    const q = String(req.query.q || "").trim();
+    const dateFrom = String(req.query.dateFrom || "").trim();
+    const dateTo = String(req.query.dateTo || "").trim();
+    const limitRaw = Number(req.query.limit || 2000);
+    const limit = Math.max(1, Math.min(5000, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 2000));
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to export audit logs",
+      });
+    }
+
+    const parsedFrom = dateFrom ? parseDateInput(dateFrom) : null;
+    const parsedTo = dateTo ? parseDateInput(dateTo) : null;
+    if (dateFrom && !parsedFrom) return res.status(400).json({ error: "Invalid dateFrom" });
+    if (dateTo && !parsedTo) return res.status(400).json({ error: "Invalid dateTo" });
+    const parsedToEnd = parsedTo ? new Date(parsedTo.getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        storeId,
+        ...(filterUserId ? { userId: filterUserId } : {}),
+        ...(parsedFrom || parsedToEnd
+          ? {
+              createdAt: {
+                ...(parsedFrom ? { gte: parsedFrom } : {}),
+                ...(parsedToEnd ? { lte: parsedToEnd } : {}),
+              },
+            }
+          : {}),
+        ...(action ? { action } : {}),
+        ...(entityType ? { entityType } : {}),
+        ...(q
+          ? {
+              OR: [
+                { message: { contains: q, mode: "insensitive" } },
+                { entityId: { contains: q, mode: "insensitive" } },
+                { user: { fullName: { contains: q, mode: "insensitive" } } },
+                { user: { email: { contains: q, mode: "insensitive" } } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        user: { select: { fullName: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_log",
+      message: "Export audit logs CSV",
+      payload: {
+        action: action || null,
+        entityType: entityType || null,
+        q: q || null,
+        userId: filterUserId || null,
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null,
+        limit,
+        exportedRows: logs.length,
+      },
+    });
+
+    const escapeCsv = (v) => {
+      const s = String(v ?? "");
+      if (s.includes(",") || s.includes("\"") || s.includes("\n")) {
+        return `"${s.replace(/"/g, "\"\"")}"`;
+      }
+      return s;
+    };
+
+    const rows = [
+      ["id", "created_at", "action", "entity_type", "entity_id", "user_name", "user_email", "message", "payload_json"].join(","),
+      ...logs.map((l) =>
+        [
+          l.id,
+          l.createdAt.toISOString(),
+          l.action,
+          l.entityType,
+          l.entityId || "",
+          l.user?.fullName || "",
+          l.user?.email || "",
+          l.message || "",
+          l.payload ? JSON.stringify(l.payload) : "",
+        ]
+          .map(escapeCsv)
+          .join(",")
+      ),
+    ];
+
+    const filename = `audit_logs_${storeId}_${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(rows.join("\n"));
+  } catch (err) {
+    console.error("GET /audit/logs/export error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/evidence", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const filterUserId = String(req.query.userId || "").trim();
+    const action = String(req.query.action || "").trim().toLowerCase();
+    const entityType = String(req.query.entityType || "").trim().toLowerCase();
+    const q = String(req.query.q || "").trim();
+    const dateFrom = String(req.query.dateFrom || "").trim();
+    const dateTo = String(req.query.dateTo || "").trim();
+    const limitRaw = Number(req.query.limit || 1000);
+    const limit = Math.max(1, Math.min(5000, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 1000));
+    const hoursRaw = Number(req.query.hours || 24);
+    const hours = Math.max(1, Math.min(24 * 30, Number.isFinite(hoursRaw) ? Math.floor(hoursRaw) : 24));
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to export audit evidence",
+      });
+    }
+
+    const parsedFrom = dateFrom ? parseDateInput(dateFrom) : null;
+    const parsedTo = dateTo ? parseDateInput(dateTo) : null;
+    if (dateFrom && !parsedFrom) return res.status(400).json({ error: "Invalid dateFrom" });
+    if (dateTo && !parsedTo) return res.status(400).json({ error: "Invalid dateTo" });
+    const parsedToEnd = parsedTo ? new Date(parsedTo.getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+
+    const where = {
+      storeId,
+      ...(filterUserId ? { userId: filterUserId } : {}),
+      ...(parsedFrom || parsedToEnd
+        ? {
+            createdAt: {
+              ...(parsedFrom ? { gte: parsedFrom } : {}),
+              ...(parsedToEnd ? { lte: parsedToEnd } : {}),
+            },
+          }
+        : {}),
+      ...(action ? { action } : {}),
+      ...(entityType ? { entityType } : {}),
+      ...(q
+        ? {
+            OR: [
+              { message: { contains: q, mode: "insensitive" } },
+              { entityId: { contains: q, mode: "insensitive" } },
+              { user: { fullName: { contains: q, mode: "insensitive" } } },
+              { user: { email: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+
+    const [logs, alerts, metricRows] = await Promise.all([
+      prisma.auditLog.findMany({
+        where,
+        include: { user: { select: { id: true, fullName: true, email: true } } },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      }),
+      prisma.notification.findMany({
+        where: {
+          storeId,
+          linkedEntityType: "audit_alert",
+          ...(filterUserId ? { userId: filterUserId } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: 300,
+      }),
+      prisma.auditLog.findMany({
+        where: {
+          storeId,
+          ...(filterUserId ? { userId: filterUserId } : {}),
+          createdAt: { gte: new Date(Date.now() - hours * 60 * 60 * 1000) },
+        },
+        select: { action: true, entityType: true },
+        orderBy: { createdAt: "desc" },
+        take: 5000,
+      }),
+    ]);
+
+    const actionCounts = new Map();
+    const entityCounts = new Map();
+    let deniedAccess = 0;
+    let sensitiveReads = 0;
+    for (const row of metricRows) {
+      actionCounts.set(row.action, (actionCounts.get(row.action) || 0) + 1);
+      entityCounts.set(row.entityType, (entityCounts.get(row.entityType) || 0) + 1);
+      if (row.action === "access.denied") deniedAccess += 1;
+      if (row.action === "sensitive.read") sensitiveReads += 1;
+    }
+
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_log",
+      message: "Export audit evidence JSON",
+      payload: {
+        action: action || null,
+        entityType: entityType || null,
+        q: q || null,
+        userId: filterUserId || null,
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null,
+        limit,
+        hours,
+        exportedLogs: logs.length,
+        exportedAlerts: alerts.length,
+      },
+    });
+
+    const payload = {
+      meta: {
+        generatedAt: new Date().toISOString(),
+        exportedByUserId: userId,
+        storeId,
+      },
+      filters: {
+        action: action || null,
+        entityType: entityType || null,
+        q: q || null,
+        userId: filterUserId || null,
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null,
+        limit,
+        metricsHours: hours,
+      },
+      summary: {
+        logs: logs.length,
+        alerts: alerts.length,
+        deniedAccess,
+        sensitiveReads,
+        topActions: Array.from(actionCounts.entries())
+          .map(([name, count]) => ({ action: name, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 10),
+        topEntities: Array.from(entityCounts.entries())
+          .map(([name, count]) => ({ entityType: name, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 10),
+      },
+      logs: logs.map((log) => ({
+        id: log.id,
+        createdAt: log.createdAt.toISOString(),
+        action: log.action,
+        entityType: log.entityType,
+        entityId: log.entityId,
+        message: log.message,
+        payload: log.payload,
+        user: log.user
+          ? { id: log.user.id, fullName: log.user.fullName, email: log.user.email }
+          : null,
+      })),
+      alerts: alerts.map((a) => ({
+        id: a.id,
+        title: a.title,
+        body: a.body,
+        severity: a.severity,
+        isRead: a.isRead,
+        linkedEntityType: a.linkedEntityType,
+        linkedEntityId: a.linkedEntityId,
+        userId: a.userId,
+        createdAt: a.createdAt.toISOString(),
+      })),
+    };
+
+    const filename = `audit_evidence_${storeId}_${new Date().toISOString().slice(0, 10)}.json`;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(JSON.stringify(payload, null, 2));
+  } catch (err) {
+    console.error("GET /audit/evidence error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/metrics", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const filterUserId = String(req.query.userId || "").trim();
+    const hoursRaw = Number(req.query.hours || 24);
+    const hours = Math.max(1, Math.min(24 * 30, Number.isFinite(hoursRaw) ? Math.floor(hoursRaw) : 24));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to read audit metrics",
+      });
+    }
+
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const rows = await prisma.auditLog.findMany({
+      where: { storeId, ...(filterUserId ? { userId: filterUserId } : {}), createdAt: { gte: since } },
+      select: {
+        action: true,
+        entityType: true,
+        createdAt: true,
+        userId: true,
+        user: { select: { fullName: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+    });
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const [lastHourRows, prevHourRows] = await Promise.all([
+      prisma.auditLog.findMany({
+        where: { storeId, ...(filterUserId ? { userId: filterUserId } : {}), createdAt: { gte: oneHourAgo } },
+        select: { action: true, entityType: true, userId: true },
+      }),
+      prisma.auditLog.findMany({
+        where: {
+          storeId,
+          ...(filterUserId ? { userId: filterUserId } : {}),
+          createdAt: { gte: twoHoursAgo, lt: oneHourAgo },
+        },
+        select: { action: true, entityType: true, userId: true },
+      }),
+    ]);
+
+    const alertNotificationsCount = await prisma.notification.count({
+      where: {
+        storeId,
+        linkedEntityType: "audit_alert",
+        severity: "critical",
+        ...(filterUserId ? { userId: filterUserId } : {}),
+        createdAt: { gte: since },
+      },
+    });
+
+    const totals = {
+      totalEvents: rows.length,
+      deniedAccess: 0,
+      sensitiveReads: 0,
+      updatesWithDiff: 0,
+    };
+    const byActionMap = new Map();
+    const byEntityMap = new Map();
+    const deniedByUserMap = new Map();
+    for (const row of rows) {
+      if (row.action === "access.denied") totals.deniedAccess += 1;
+      if (row.action === "sensitive.read") totals.sensitiveReads += 1;
+      if (row.action.endsWith(".updated")) totals.updatesWithDiff += 1;
+
+      byActionMap.set(row.action, (byActionMap.get(row.action) || 0) + 1);
+      byEntityMap.set(row.entityType, (byEntityMap.get(row.entityType) || 0) + 1);
+      if (row.action === "access.denied") {
+        const label = row.user?.fullName || row.user?.email || row.userId || "unknown";
+        deniedByUserMap.set(label, (deniedByUserMap.get(label) || 0) + 1);
+      }
+    }
+
+    const byAction = Array.from(byActionMap.entries())
+      .map(([action, count]) => ({ action, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+
+    const byEntity = Array.from(byEntityMap.entries())
+      .map(([entityType, count]) => ({ entityType, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+
+    const deniedByUser = Array.from(deniedByUserMap.entries())
+      .map(([user, count]) => ({ user, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+
+    const byUserMap = new Map();
+    for (const row of rows) {
+      const label = row.user?.fullName || row.user?.email || row.userId || "unknown";
+      byUserMap.set(label, (byUserMap.get(label) || 0) + 1);
+    }
+    const byUser = Array.from(byUserMap.entries())
+      .map(([user, count]) => ({ user, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+
+    const countByAction = (list) => {
+      const m = new Map();
+      for (const row of list) m.set(row.action, (m.get(row.action) || 0) + 1);
+      return m;
+    };
+    const lastHourByAction = countByAction(lastHourRows);
+    const prevHourByAction = countByAction(prevHourRows);
+
+    const anomalies = [];
+    const recommendations = [];
+
+    const deniedLastHour = Number(lastHourByAction.get("access.denied") || 0);
+    const deniedPrevHour = Number(prevHourByAction.get("access.denied") || 0);
+    if (deniedLastHour >= 5) {
+      anomalies.push({
+        type: "denied_spike",
+        severity: deniedLastHour >= 10 ? "critical" : "warning",
+        title: "Pico de accesos denegados (1h)",
+        detail: `${deniedLastHour} denegaciones en la ultima hora`,
+      });
+      recommendations.push("Revisar roles/permisos de usuarios con mas denegaciones (Denied por usuario).");
+    }
+    if (deniedLastHour >= Math.max(3, deniedPrevHour * 2) && deniedPrevHour > 0) {
+      anomalies.push({
+        type: "denied_growth",
+        severity: "warning",
+        title: "Crecimiento brusco de denegaciones",
+        detail: `Ultima hora ${deniedLastHour} vs hora previa ${deniedPrevHour}`,
+      });
+      recommendations.push("Validar si hubo cambios recientes de permisos o rutas de frontend.");
+    }
+
+    const sensitiveLastHour = Number(lastHourByAction.get("sensitive.read") || 0);
+    const sensitivePrevHour = Number(prevHourByAction.get("sensitive.read") || 0);
+    if (sensitiveLastHour >= Math.max(20, sensitivePrevHour * 2) && sensitiveLastHour > 0) {
+      anomalies.push({
+        type: "sensitive_read_spike",
+        severity: "warning",
+        title: "Pico de lecturas sensibles",
+        detail: `Ultima hora ${sensitiveLastHour} vs hora previa ${sensitivePrevHour}`,
+      });
+      recommendations.push("Auditar consultas de finanzas/proveedores y confirmar necesidad operativa.");
+    }
+
+    const topDeniedUser = deniedByUser.length > 0 ? deniedByUser[0] : null;
+    if (topDeniedUser && topDeniedUser.count >= 3) {
+      recommendations.push(`Revisar cuenta ${topDeniedUser.user}: ${topDeniedUser.count} denegaciones en ventana actual.`);
+    }
+
+    return res.json({
+      range: { since: since.toISOString(), hours },
+      totals: {
+        ...totals,
+        alertNotifications: alertNotificationsCount,
+      },
+      byAction,
+      byEntity,
+      byUser,
+      deniedByUser,
+      anomalies,
+      recommendations: Array.from(new Set(recommendations)).slice(0, 6),
+    });
+  } catch (err) {
+    console.error("GET /audit/metrics error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/alerts", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const onlyOpen = String(req.query.onlyOpen || "1").trim() === "1";
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to read audit alerts",
+      });
+    }
+
+    const alerts = await prisma.notification.findMany({
+      where: {
+        storeId,
+        linkedEntityType: "audit_alert",
+        severity: "critical",
+        ...(onlyOpen ? { isRead: false } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+
+    return res.json({ alerts });
+  } catch (err) {
+    console.error("GET /audit/alerts error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/audit/alerts/:notificationId/ack", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { notificationId } = req.params;
+    const { storeId } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to ack audit alerts",
+      });
+    }
+
+    const updated = await prisma.notification.updateMany({
+      where: {
+        id: notificationId,
+        storeId,
+        linkedEntityType: "audit_alert",
+        severity: "critical",
+      },
+      data: { isRead: true, readAt: new Date() },
+    });
+    if (updated.count === 0) return res.status(404).json({ error: "Audit alert not found" });
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "audit.alert.ack",
+      entityType: "audit_alert",
+      entityId: notificationId,
+      message: "Audit alert acknowledged",
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("PATCH /audit/alerts/:notificationId/ack error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/audit/alerts/ack-all", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const sensitiveState = await getSensitiveAccessState(userId, storeId, membership.roleKey);
+    if (!sensitiveState.allowed) {
+      return res.status(403).json({
+        error: sensitiveState.blocked
+          ? "Sensitive access temporarily blocked. Try again later."
+          : "No permission to ack audit alerts",
+      });
+    }
+
+    const result = await prisma.notification.updateMany({
+      where: {
+        storeId,
+        linkedEntityType: "audit_alert",
+        severity: "critical",
+        isRead: false,
+      },
+      data: { isRead: true, readAt: new Date() },
+    });
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "audit.alert.ack_all",
+      entityType: "audit_alert",
+      message: "All audit alerts acknowledged",
+      payload: { updated: result.count },
+    });
+
+    return res.json({ ok: true, updated: result.count });
+  } catch (err) {
+    console.error("POST /audit/alerts/ack-all error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
@@ -825,7 +2235,23 @@ app.get("/suppliers", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read suppliers" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "supplier",
+        message: "Denied suppliers read",
+      });
+      return res.status(403).json({ error: "No permission to read suppliers" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "supplier",
+      message: "Read suppliers list",
+      payload: { q: q || null },
+    });
 
     const suppliers = await prisma.supplier.findMany({
       where: {
@@ -916,7 +2342,23 @@ app.get("/purchases", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read purchases" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "purchase_order",
+        message: "Denied purchases read",
+      });
+      return res.status(403).json({ error: "No permission to read purchases" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "purchase_order",
+      message: "Read purchases list",
+      payload: { status: status || null },
+    });
 
     const purchases = await prisma.purchaseOrder.findMany({
       where: { storeId, ...(status ? { status } : {}) },
@@ -1057,7 +2499,24 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read purchases" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "purchase_order",
+        message: "Denied purchase detail read",
+        payload: { purchaseId },
+      });
+      return res.status(403).json({ error: "No permission to read purchases" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "purchase_order",
+      message: "Read purchase detail",
+      payload: { purchaseId },
+    });
 
     const purchase = await prisma.purchaseOrder.findFirst({
       where: { id: purchaseId, storeId },
@@ -1418,6 +2877,20 @@ app.post("/purchases/:purchaseId/receive", requireAuth, async (req, res) => {
       linkedEntityType: "purchase_order",
       linkedEntityId: result.purchase.id,
       createdByUserId: userId,
+    });
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "purchase.received",
+      entityType: "purchase_order",
+      entityId: result.purchase.id,
+      message: `Purchase received: ${result.purchase.poNumber}`,
+      payload: {
+        lotCount: result.receivedLots.length,
+        totalReceivedUnits,
+        movementCount: result.movementIds.length,
+      },
     });
 
     return res.json({
@@ -2146,6 +3619,20 @@ app.post("/support/tickets", requireAuth, async (req, res) => {
       });
     }
 
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "support.ticket.created",
+      entityType: "support_ticket",
+      entityId: ticket.id,
+      message: `Support ticket created: ${ticket.title}`,
+      payload: {
+        priority: ticket.priority,
+        status: ticket.status,
+        assignedToUserId: ticket.assignedTo?.id || null,
+      },
+    });
+
     return res.status(201).json({ ticket });
   } catch (err) {
     console.error("POST /support/tickets error:", err);
@@ -2167,7 +3654,21 @@ app.patch("/support/tickets/:ticketId", requireAuth, async (req, res) => {
 
     const existing = await prisma.supportTicket.findFirst({
       where: { id: ticketId, storeId },
-      select: { id: true, status: true, createdAt: true, firstResponseAt: true, slaResolutionDueAt: true, assignedToUserId: true, title: true },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        priority: true,
+        dueAt: true,
+        resolutionNote: true,
+        firstResponseAt: true,
+        createdAt: true,
+        resolvedAt: true,
+        closedAt: true,
+        slaResolutionDueAt: true,
+        assignedToUserId: true,
+        slaBreached: true,
+      },
     });
     if (!existing) return res.status(404).json({ error: "Ticket not found" });
 
@@ -2231,6 +3732,40 @@ app.patch("/support/tickets/:ticketId", requireAuth, async (req, res) => {
       },
     });
 
+    const beforeTicket = {
+      status: existing.status,
+      priority: existing.priority,
+      dueAt: existing.dueAt,
+      assignedToUserId: existing.assignedToUserId,
+      resolutionNote: existing.resolutionNote,
+      firstResponseAt: existing.firstResponseAt,
+      slaBreached: existing.slaBreached,
+      resolvedAt: existing.resolvedAt,
+      closedAt: existing.closedAt,
+    };
+    const afterTicket = {
+      status: ticket.status,
+      priority: ticket.priority,
+      dueAt: ticket.dueAt,
+      assignedToUserId: ticket.assignedToUserId,
+      resolutionNote: ticket.resolutionNote,
+      firstResponseAt: ticket.firstResponseAt,
+      slaBreached: ticket.slaBreached,
+      resolvedAt: ticket.resolvedAt,
+      closedAt: ticket.closedAt,
+    };
+    const changes = buildFieldChanges(beforeTicket, afterTicket, [
+      "status",
+      "priority",
+      "dueAt",
+      "assignedToUserId",
+      "resolutionNote",
+      "firstResponseAt",
+      "slaBreached",
+      "resolvedAt",
+      "closedAt",
+    ]);
+
     if (shouldBeBreached && !existing.assignedToUserId) {
       await createNotificationSafe({
         storeId,
@@ -2243,6 +3778,20 @@ app.patch("/support/tickets/:ticketId", requireAuth, async (req, res) => {
         createdByUserId: userId,
       });
     }
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "support.ticket.updated",
+      entityType: "support_ticket",
+      entityId: ticket.id,
+      message: `Support ticket updated: ${ticket.title}`,
+      payload: {
+        before: beforeTicket,
+        after: afterTicket,
+        changes,
+      },
+    });
 
     return res.json({ ticket });
   } catch (err) {
@@ -2295,6 +3844,16 @@ app.post("/support/tickets/:ticketId/notes", requireAuth, async (req, res) => {
         createdByUserId: userId,
       });
     }
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "support.note.created",
+      entityType: "support_ticket",
+      entityId: ticket.id,
+      message: `Support note added to ticket: ${ticket.title}`,
+      payload: { noteId: note.id, bodyPreview: String(body).trim().slice(0, 120) },
+    });
 
     return res.status(201).json({ note });
   } catch (err) {
@@ -2494,6 +4053,20 @@ app.post("/tasks", requireAuth, async (req, res) => {
       });
     }
 
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "task.created",
+      entityType: "team_task",
+      entityId: task.id,
+      message: `Task created: ${task.title}`,
+      payload: {
+        priority: task.priority,
+        status: task.status,
+        assignedToUserId: task.assignedTo?.id || null,
+      },
+    });
+
     return res.status(201).json({ task });
   } catch (err) {
     console.error("POST /tasks error:", err);
@@ -2515,7 +4088,16 @@ app.patch("/tasks/:taskId", requireAuth, async (req, res) => {
 
     const existing = await prisma.teamTask.findFirst({
       where: { id: taskId, storeId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        status: true,
+        priority: true,
+        dueAt: true,
+        assignedToUserId: true,
+        closedAt: true,
+      },
     });
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
@@ -2551,6 +4133,48 @@ app.patch("/tasks/:taskId", requireAuth, async (req, res) => {
       include: {
         assignedTo: { select: { id: true, fullName: true, email: true } },
         createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    const beforeTask = {
+      title: existing.title,
+      description: existing.description,
+      status: existing.status,
+      priority: existing.priority,
+      dueAt: existing.dueAt,
+      assignedToUserId: existing.assignedToUserId,
+      closedAt: existing.closedAt,
+    };
+    const afterTask = {
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      dueAt: task.dueAt,
+      assignedToUserId: task.assignedToUserId,
+      closedAt: task.closedAt,
+    };
+    const changes = buildFieldChanges(beforeTask, afterTask, [
+      "title",
+      "description",
+      "status",
+      "priority",
+      "dueAt",
+      "assignedToUserId",
+      "closedAt",
+    ]);
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "task.updated",
+      entityType: "team_task",
+      entityId: task.id,
+      message: `Task updated: ${task.title}`,
+      payload: {
+        before: beforeTask,
+        after: afterTask,
+        changes,
       },
     });
 
@@ -3963,6 +5587,21 @@ app.get("/orders", requireAuth, async (req, res) => {
       });
     }
 
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "order.created",
+      entityType: "sales_order",
+      entityId: order.id,
+      message: `Order created: ${order.orderNumber}`,
+      payload: {
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        itemCount: Array.isArray(order.items) ? order.items.length : 0,
+        backorderCount: Array.isArray(order.backorders) ? order.backorders.length : 0,
+      },
+    });
+
     return res.status(201).json({ order });
   } catch (err) {
     if (String(err?.message || "") === "INVALID_PRODUCT_FOR_STORE") {
@@ -4032,6 +5671,30 @@ app.patch("/orders/:orderId/status", requireAuth, async (req, res) => {
       data: {
         ...(status ? { status } : {}),
         ...(paymentStatus ? { paymentStatus } : {}),
+      },
+    });
+
+    const beforeOrder = {
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+    };
+    const afterOrder = {
+      status: updated.status,
+      paymentStatus: updated.paymentStatus,
+    };
+    const changes = buildFieldChanges(beforeOrder, afterOrder, ["status", "paymentStatus"]);
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "order.status.updated",
+      entityType: "sales_order",
+      entityId: updated.id,
+      message: "Order status/payment updated",
+      payload: {
+        before: beforeOrder,
+        after: afterOrder,
+        changes,
       },
     });
 
@@ -4224,8 +5887,35 @@ app.get("/analytics/summary", requireAuth, async (req, res) => {
 
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canAnalytics = await canReadAnalytics(userId, storeId, membership.roleKey);
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+    if (!canAnalytics) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "analytics",
+        message: "Denied analytics summary read",
+      });
+      return res.status(403).json({ error: "No permission to read analytics" });
+    }
+    if (canSensitive) {
+      await createSensitiveReadAuditSafe({
+        storeId,
+        userId,
+        entityType: "analytics",
+        message: "Read analytics summary (financial)",
+        payload: { dateFrom: req.query.dateFrom || null, dateTo: req.query.dateTo || null },
+      });
+    } else {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "analytics.read",
+        entityType: "analytics",
+        message: "Read analytics summary (non-financial)",
+      });
+    }
 
     const range = parseDateRange(req.query);
     const orderWhere = {
@@ -4304,24 +5994,24 @@ app.get("/analytics/summary", requireAuth, async (req, res) => {
       range: { dateFrom: range.from, dateTo: range.to },
       sales: {
         ordersCount: orders.length,
-        revenueEur: salesRevenueEur,
-        cogsEur: salesCogsEur,
-        profitEur: salesProfitEur,
+        revenueEur: canSensitive ? salesRevenueEur : null,
+        cogsEur: canSensitive ? salesCogsEur : null,
+        profitEur: canSensitive ? salesProfitEur : null,
       },
       payouts: {
-        payoutsCount: payouts.length,
-        grossEur: payoutGrossEur,
-        netExpectedEur: payoutNetExpectedEur,
-        reconciledEur: payoutReconciledEur,
-        discrepancyEur: roundMoney(payoutNetExpectedEur - payoutReconciledEur),
+        payoutsCount: canSensitive ? payouts.length : null,
+        grossEur: canSensitive ? payoutGrossEur : null,
+        netExpectedEur: canSensitive ? payoutNetExpectedEur : null,
+        reconciledEur: canSensitive ? payoutReconciledEur : null,
+        discrepancyEur: canSensitive ? roundMoney(payoutNetExpectedEur - payoutReconciledEur) : null,
       },
       returns: {
         casesCount: returns.length,
-        totalCostEur: returnCostEur,
+        totalCostEur: canSensitive ? returnCostEur : null,
       },
       inventory: {
         stockLots: lots.length,
-        valueEur: inventoryValueEur,
+        valueEur: canSensitive ? inventoryValueEur : null,
       },
     });
   } catch (err) {
@@ -4338,8 +6028,35 @@ app.get("/analytics/channels", requireAuth, async (req, res) => {
 
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canAnalytics = await canReadAnalytics(userId, storeId, membership.roleKey);
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+    if (!canAnalytics) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "analytics",
+        message: "Denied analytics channels read",
+      });
+      return res.status(403).json({ error: "No permission to read analytics" });
+    }
+    if (canSensitive) {
+      await createSensitiveReadAuditSafe({
+        storeId,
+        userId,
+        entityType: "analytics",
+        message: "Read analytics channels (financial)",
+        payload: { dateFrom: req.query.dateFrom || null, dateTo: req.query.dateTo || null },
+      });
+    } else {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "analytics.read",
+        entityType: "analytics",
+        message: "Read analytics channels (non-financial)",
+      });
+    }
 
     const range = parseDateRange(req.query);
     const orders = await prisma.salesOrder.findMany({
@@ -4380,11 +6097,11 @@ app.get("/analytics/channels", requireAuth, async (req, res) => {
       channels: Array.from(byChannel.values())
         .map((r) => ({
           ...r,
-          revenueEur: roundMoney(r.revenueEur),
-          profitEur: roundMoney(r.profitEur),
+          revenueEur: canSensitive ? roundMoney(r.revenueEur) : null,
+          profitEur: canSensitive ? roundMoney(r.profitEur) : null,
           returnRatePct: r.orders ? roundMoney((r.returns / r.orders) * 100) : 0,
         }))
-        .sort((a, b) => b.revenueEur - a.revenueEur),
+        .sort((a, b) => b.orders - a.orders),
     });
   } catch (err) {
     console.error("GET /analytics/channels error:", err);
@@ -4400,8 +6117,35 @@ app.get("/analytics/countries", requireAuth, async (req, res) => {
 
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canAnalytics = await canReadAnalytics(userId, storeId, membership.roleKey);
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read analytics" });
+    if (!canAnalytics) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "analytics",
+        message: "Denied analytics countries read",
+      });
+      return res.status(403).json({ error: "No permission to read analytics" });
+    }
+    if (canSensitive) {
+      await createSensitiveReadAuditSafe({
+        storeId,
+        userId,
+        entityType: "analytics",
+        message: "Read analytics countries (financial)",
+        payload: { dateFrom: req.query.dateFrom || null, dateTo: req.query.dateTo || null },
+      });
+    } else {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "analytics.read",
+        entityType: "analytics",
+        message: "Read analytics countries (non-financial)",
+      });
+    }
 
     const range = parseDateRange(req.query);
     const orders = await prisma.salesOrder.findMany({
@@ -4434,11 +6178,11 @@ app.get("/analytics/countries", requireAuth, async (req, res) => {
       countries: Array.from(byCountry.values())
         .map((r) => ({
           ...r,
-          revenueEur: roundMoney(r.revenueEur),
-          profitEur: roundMoney(r.profitEur),
+          revenueEur: canSensitive ? roundMoney(r.revenueEur) : null,
+          profitEur: canSensitive ? roundMoney(r.profitEur) : null,
           returnRatePct: r.orders ? roundMoney((r.returns / r.orders) * 100) : 0,
         }))
-        .sort((a, b) => b.revenueEur - a.revenueEur),
+        .sort((a, b) => b.orders - a.orders),
     });
   } catch (err) {
     console.error("GET /analytics/countries error:", err);
@@ -4624,6 +6368,20 @@ app.post("/returns", requireAuth, async (req, res) => {
       createdByUserId: userId,
     });
 
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "return.processed",
+      entityType: "return_case",
+      entityId: result.id,
+      message: `Return processed (${result.decision})`,
+      payload: {
+        decision: result.decision,
+        quantity: result.quantity,
+        trackingCode: result.trackingCode || null,
+      },
+    });
+
     return res.status(201).json({ returnCase: result });
   } catch (err) {
     const msg = String(err?.message || "");
@@ -4631,6 +6389,435 @@ app.post("/returns", requireAuth, async (req, res) => {
     if (msg === "PRODUCT_NOT_FOUND") return res.status(404).json({ error: "Product not found for this store" });
     if (msg === "WAREHOUSE_NOT_FOUND") return res.status(404).json({ error: "Warehouse not found for this store" });
     console.error("POST /returns error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/retention/policy", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "audit_policy",
+        message: "Denied audit retention policy read",
+      });
+      return res.status(403).json({ error: "No permission to read audit retention policy" });
+    }
+
+    const now = new Date();
+    const minRetentionDays = Math.min(
+      AUDIT_RETENTION_POLICY.securityDays,
+      AUDIT_RETENTION_POLICY.operationalDays,
+      AUDIT_RETENTION_POLICY.readDays,
+      AUDIT_RETENTION_POLICY.defaultDays
+    );
+    const fetchSince = subtractDays(now, minRetentionDays);
+    const rows = await prisma.auditLog.findMany({
+      where: { storeId, createdAt: { lt: fetchSince } },
+      select: { id: true, action: true, entityType: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 50000,
+    });
+
+    const counts = {
+      scanned: rows.length,
+      candidateDelete: 0,
+      byBucket: { security: 0, operational: 0, read: 0, default: 0 },
+    };
+
+    for (const row of rows) {
+      const r = evaluateAuditRetention(row, now);
+      if (r.shouldDelete) {
+        counts.candidateDelete += 1;
+        counts.byBucket[r.bucket] = (counts.byBucket[r.bucket] || 0) + 1;
+      }
+    }
+
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_policy",
+      message: "Read audit retention policy preview",
+      payload: counts,
+    });
+
+    return res.json({
+      policy: AUDIT_RETENTION_POLICY,
+      limits: { maxScanned: 50000 },
+      preview: counts,
+      generatedAt: now.toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /audit/retention/policy error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/audit/retention/run", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const dryRun = req.body.dryRun !== false;
+    const maxDeleteRaw = Number(req.body.maxDelete || 5000);
+    const maxDelete = Math.max(1, Math.min(50000, Number.isFinite(maxDeleteRaw) ? Math.floor(maxDeleteRaw) : 5000));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "audit_policy",
+        message: "Denied audit retention run",
+      });
+      return res.status(403).json({ error: "No permission to run audit retention" });
+    }
+
+    const now = new Date();
+    const minRetentionDays = Math.min(
+      AUDIT_RETENTION_POLICY.securityDays,
+      AUDIT_RETENTION_POLICY.operationalDays,
+      AUDIT_RETENTION_POLICY.readDays,
+      AUDIT_RETENTION_POLICY.defaultDays
+    );
+    const fetchSince = subtractDays(now, minRetentionDays);
+    const rows = await prisma.auditLog.findMany({
+      where: { storeId, createdAt: { lt: fetchSince } },
+      select: { id: true, action: true, entityType: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 50000,
+    });
+
+    const candidateIds = [];
+    const byBucket = { security: 0, operational: 0, read: 0, default: 0 };
+    for (const row of rows) {
+      const r = evaluateAuditRetention(row, now);
+      if (r.shouldDelete) {
+        candidateIds.push(row.id);
+        byBucket[r.bucket] = (byBucket[r.bucket] || 0) + 1;
+      }
+    }
+
+    const idsToDelete = candidateIds.slice(0, maxDelete);
+    let deleted = 0;
+    if (!dryRun && idsToDelete.length > 0) {
+      const result = await prisma.auditLog.deleteMany({
+        where: { id: { in: idsToDelete } },
+      });
+      deleted = result.count;
+    }
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "audit.retention.run",
+      entityType: "audit_log",
+      message: dryRun ? "Audit retention dry-run executed" : "Audit retention deletion executed",
+      payload: {
+        dryRun,
+        scanned: rows.length,
+        candidateDelete: candidateIds.length,
+        requestedDelete: idsToDelete.length,
+        deleted,
+        maxDelete,
+        byBucket,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      dryRun,
+      policy: AUDIT_RETENTION_POLICY,
+      scanned: rows.length,
+      candidateDelete: candidateIds.length,
+      requestedDelete: idsToDelete.length,
+      deleted,
+      maxDelete,
+      byBucket,
+      generatedAt: now.toISOString(),
+    });
+  } catch (err) {
+    console.error("POST /audit/retention/run error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/integrity/verify", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const dateFrom = String(req.query.dateFrom || "").trim();
+    const dateTo = String(req.query.dateTo || "").trim();
+    const limitRaw = Number(req.query.limit || 2000);
+    const limit = Math.max(1, Math.min(5000, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 2000));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "audit_integrity",
+        message: "Denied audit integrity verify",
+      });
+      return res.status(403).json({ error: "No permission to verify audit integrity" });
+    }
+
+    const parsedFrom = dateFrom ? parseDateInput(dateFrom) : null;
+    const parsedTo = dateTo ? parseDateInput(dateTo) : null;
+    if (dateFrom && !parsedFrom) return res.status(400).json({ error: "Invalid dateFrom" });
+    if (dateTo && !parsedTo) return res.status(400).json({ error: "Invalid dateTo" });
+    const verify = await verifyAuditLogsIntegrityInternal(storeId, {
+      dateFrom: dateFrom || null,
+      dateTo: dateTo || null,
+      limit,
+    });
+
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_integrity",
+      message: "Verify audit hash chain",
+      payload: {
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null,
+        limit,
+        scanned: verify.scanned,
+        verifiedRows: verify.verifiedRows,
+        legacyRows: verify.legacyRows,
+        mismatches: verify.mismatches.length,
+      },
+    });
+
+    return res.json({
+      ok: verify.ok,
+      scanned: verify.scanned,
+      verifiedRows: verify.verifiedRows,
+      legacyRows: verify.legacyRows,
+      mismatches: verify.mismatches.length,
+      sampleMismatches: verify.mismatches.slice(0, 30),
+      anchor: { previousHash: verify.anchorPrevHash },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /audit/integrity/verify error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/integrity/anchors", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const limitRaw = Number(req.query.limit || 90);
+    const limit = Math.max(1, Math.min(365, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 90));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      return res.status(403).json({ error: "No permission to read audit anchors" });
+    }
+
+    const anchors = await prisma.auditAnchor.findMany({
+      where: { storeId },
+      include: { createdBy: { select: { id: true, fullName: true, email: true } } },
+      orderBy: [{ anchorDay: "desc" }, { createdAt: "desc" }],
+      take: limit,
+    });
+
+    return res.json({
+      anchors: anchors.map((a) => ({
+        id: a.id,
+        anchorDay: a.anchorDay,
+        periodStart: a.periodStart.toISOString(),
+        periodEnd: a.periodEnd.toISOString(),
+        eventCount: a.eventCount,
+        lastAuditLogId: a.lastAuditLogId,
+        lastHash: a.lastHash,
+        hashAlgo: a.hashAlgo,
+        prevAnchorHash: a.prevAnchorHash,
+        anchorHash: a.anchorHash,
+        signature: a.signature,
+        createdAt: a.createdAt.toISOString(),
+        createdBy: a.createdBy ? { id: a.createdBy.id, fullName: a.createdBy.fullName, email: a.createdBy.email } : null,
+      })),
+    });
+  } catch (err) {
+    console.error("GET /audit/integrity/anchors error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/audit/integrity/anchor-seal", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const requestedDay = String(req.body.anchorDay || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "audit_anchor",
+        message: "Denied audit anchor seal",
+      });
+      return res.status(403).json({ error: "No permission to seal audit anchor" });
+    }
+
+    const targetDay = requestedDay || toUtcDayString(new Date());
+    if (!parseAnchorDay(targetDay)) return res.status(400).json({ error: "Invalid anchorDay (expected YYYY-MM-DD)" });
+    const { reused, anchor } = await sealAuditAnchorForDay(storeId, userId, targetDay);
+
+    return res.json({
+      ok: true,
+      reused,
+      anchor: {
+        id: anchor.id,
+        anchorDay: anchor.anchorDay,
+        eventCount: anchor.eventCount,
+        anchorHash: anchor.anchorHash,
+        signature: anchor.signature,
+        createdAt: anchor.createdAt.toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error("POST /audit/integrity/anchor-seal error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/integrity/anchors/verify", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const limitRaw = Number(req.query.limit || 365);
+    const limit = Math.max(1, Math.min(1000, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 365));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) {
+      return res.status(403).json({ error: "No permission to verify audit anchors" });
+    }
+
+    const verify = await verifyAuditAnchorsInternal(storeId, limit);
+
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "audit_anchor",
+      message: "Verify audit anchors chain",
+      payload: {
+        scanned: verify.scanned,
+        mismatches: verify.mismatches.length,
+      },
+    });
+
+    return res.json({
+      ok: verify.ok,
+      scanned: verify.scanned,
+      mismatches: verify.mismatches.length,
+      sampleMismatches: verify.mismatches.slice(0, 30),
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /audit/integrity/anchors/verify error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/audit/job/status", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) return res.status(403).json({ error: "No permission to read audit job status" });
+
+    return res.json({
+      ...auditJobState,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /audit/job/status error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/audit/job/run", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const [canSensitive, canSettings] = await Promise.all([
+      canReadSensitive(userId, storeId, membership.roleKey),
+      canManageSettings(userId, storeId, membership.roleKey),
+    ]);
+    if (!canSensitive || !canSettings) return res.status(403).json({ error: "No permission to run audit job" });
+
+    const result = await runAuditAutoJob({ actorUserId: userId, source: "manual" });
+    if (!result.ok && result.reason === "already_running") {
+      return res.status(409).json({ error: "Audit job already running" });
+    }
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error || "Audit job failed" });
+    }
+
+    return res.json({ ok: true, summary: result.summary });
+  } catch (err) {
+    console.error("POST /audit/job/run error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
@@ -4644,7 +6831,23 @@ app.get("/payouts", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read payouts" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "payout",
+        message: "Denied payouts read",
+      });
+      return res.status(403).json({ error: "No permission to read payouts" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "payout",
+      message: "Read payouts list",
+      payload: null,
+    });
 
     const payouts = await prisma.payout.findMany({
       where: { storeId },
@@ -4879,7 +7082,23 @@ app.get("/invoices", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read invoices" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "invoice",
+        message: "Denied invoices read",
+      });
+      return res.status(403).json({ error: "No permission to read invoices" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "invoice",
+      message: "Read invoices list",
+      payload: null,
+    });
 
     const invoices = await prisma.invoice.findMany({
       where: { storeId },
@@ -4988,7 +7207,24 @@ app.get("/invoices/:invoiceId/document", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
-    if (!canSensitive) return res.status(403).json({ error: "No permission to read invoice documents" });
+    if (!canSensitive) {
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "access.denied",
+        entityType: "invoice",
+        message: "Denied invoice document read",
+        payload: { invoiceId },
+      });
+      return res.status(403).json({ error: "No permission to read invoice documents" });
+    }
+    await createSensitiveReadAuditSafe({
+      storeId,
+      userId,
+      entityType: "invoice",
+      message: "Read invoice document",
+      payload: { invoiceId },
+    });
 
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, storeId },
@@ -5088,6 +7324,15 @@ app.get("/products/:productId", requireAuth, async (req, res) => {
     });
 
     if (!product) return res.status(404).json({ error: "Product not found" });
+    if (sensitive) {
+      await createSensitiveReadAuditSafe({
+        storeId,
+        userId,
+        entityType: "product",
+        message: "Read product sensitive detail",
+        payload: { productId },
+      });
+    }
 
     const lots = product.lots.map((lot) => {
       if (!sensitive) {
@@ -5115,10 +7360,29 @@ app.get("/products/:productId", requireAuth, async (req, res) => {
       };
     });
 
+    const movements = product.movements.map((mv) => ({
+      id: mv.id,
+      storeId: mv.storeId,
+      productId: mv.productId,
+      lotId: mv.lotId,
+      warehouseId: mv.warehouseId,
+      movementType: mv.movementType,
+      quantity: mv.quantity,
+      unitCostEurFrozen: sensitive ? normalizeMoney(mv.unitCostEurFrozen) : null,
+      referenceType: mv.referenceType,
+      referenceId: mv.referenceId,
+      reason: mv.reason,
+      createdByUserId: mv.createdByUserId,
+      createdAt: mv.createdAt,
+      warehouse: mv.warehouse,
+      createdBy: mv.createdBy,
+    }));
+
     return res.json({
       product: {
         ...product,
         lots,
+        movements,
       },
       access: { roleKey: membership.roleKey, canReadSensitive: sensitive },
     });
@@ -5131,4 +7395,17 @@ app.get("/products/:productId", requireAuth, async (req, res) => {
 const PORT = Number(process.env.PORT || 3001);
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
+  if (auditJobState.enabled) {
+    setTimeout(() => {
+      runAuditAutoJob({ source: "startup" }).catch((err) => {
+        console.error("Audit auto job startup error:", err);
+      });
+    }, 10 * 1000);
+
+    setInterval(() => {
+      runAuditAutoJob({ source: "auto" }).catch((err) => {
+        console.error("Audit auto job interval error:", err);
+      });
+    }, 15 * 60 * 1000);
+  }
 });
