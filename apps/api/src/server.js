@@ -415,6 +415,84 @@ function canonicalJsonString(value) {
   }
 }
 
+function normalizeProvider(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function computePayloadHash(payload) {
+  return crypto.createHash("sha256").update(canonicalJsonString(payload)).digest("hex");
+}
+
+function verifyWebhookSignature(secret, payload, signature) {
+  if (!secret) return true;
+  const sig = String(signature || "").trim();
+  if (!sig) return false;
+  const digest = crypto.createHmac("sha256", secret).update(canonicalJsonString(payload)).digest("hex");
+  return digest === sig;
+}
+
+function mapExternalOrderStatus(rawStatus) {
+  const s = String(rawStatus || "").toLowerCase();
+  if (["cancelled", "canceled", "voided"].includes(s)) return "cancelled";
+  if (["returned", "refunded"].includes(s)) return "returned";
+  if (["delivered", "fulfilled"].includes(s)) return "delivered";
+  if (["shipped", "in_transit"].includes(s)) return "shipped";
+  if (["packed", "ready_to_ship"].includes(s)) return "packed";
+  if (["paid", "authorized"].includes(s)) return "paid";
+  return "pending";
+}
+
+function mapExternalPaymentStatus(rawStatus) {
+  const s = String(rawStatus || "").toLowerCase();
+  if (["paid", "captured"].includes(s)) return "paid";
+  if (["partially_paid", "partial"].includes(s)) return "partially_paid";
+  return "unpaid";
+}
+
+function getByPath(obj, path) {
+  if (!obj || typeof obj !== "object") return undefined;
+  const parts = String(path || "")
+    .split(".")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function resolveMappedValue(payload, mapEntry, fallbackPaths = []) {
+  const candidates = [];
+  if (Array.isArray(mapEntry)) candidates.push(...mapEntry);
+  else if (typeof mapEntry === "string") candidates.push(mapEntry);
+  candidates.push(...fallbackPaths);
+
+  for (const c of candidates) {
+    const value = getByPath(payload, c);
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+function resolveMappedValueDetailed(payload, mapEntry, fallbackPaths = []) {
+  const candidates = [];
+  if (Array.isArray(mapEntry)) candidates.push(...mapEntry);
+  else if (typeof mapEntry === "string") candidates.push(mapEntry);
+  candidates.push(...fallbackPaths);
+
+  for (const c of candidates) {
+    const value = getByPath(payload, c);
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return { value, path: c };
+    }
+  }
+  return { value: null, path: null };
+}
+
 function computeAuditHash({ prevHash, storeId, userId, action, entityType, entityId, message, payload, createdAt }) {
   const parts = [
     String(prevHash || "GENESIS"),
@@ -793,6 +871,565 @@ async function runAuditAutoJob({ actorUserId = null, source = "auto" } = {}) {
   } finally {
     auditJobState.running = false;
   }
+}
+
+async function getLatestFxToEur(storeId, currencyCode) {
+  const c = String(currencyCode || "EUR").toUpperCase();
+  if (!c || c === "EUR") return 1;
+  const row = await prisma.fxRate.findFirst({
+    where: { storeId, baseCurrencyCode: c, quoteCurrencyCode: "EUR" },
+    orderBy: { rateDate: "desc" },
+    select: { rate: true },
+  });
+  return row ? Number(row.rate) || 1 : 1;
+}
+
+function parseWebhookOrderPayload(payload, mappingConfig = null) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const mapping = mappingConfig && typeof mappingConfig === "object" ? mappingConfig : {};
+
+  const orderNumberResolved = resolveMappedValueDetailed(p, mapping.orderNumber, ["orderNumber", "order_number", "name", "id"]);
+  const currencyResolved = resolveMappedValueDetailed(p, mapping.currencyCode, ["currency", "currencyCode"]);
+  const totalResolved = resolveMappedValueDetailed(p, mapping.total, ["totalPrice", "total_price", "total"]);
+  const orderedAtResolved = resolveMappedValueDetailed(p, mapping.orderedAt, ["orderedAt", "created_at", "createdAt"]);
+  const emailResolved = resolveMappedValueDetailed(p, mapping.customerEmail, ["customerEmail", "email", "customer.email"]);
+  const nameResolved = resolveMappedValueDetailed(p, mapping.customerName, ["customerName", "customer.name", "customer.first_name"]);
+  const countryResolved = resolveMappedValueDetailed(p, mapping.customerCountryCode, [
+    "customerCountryCode",
+    "shipping_address.country_code",
+    "shippingAddress.countryCode",
+  ]);
+  const statusResolved = resolveMappedValueDetailed(p, mapping.orderStatus, ["status", "fulfillment_status"]);
+  const paymentStatusResolved = resolveMappedValueDetailed(p, mapping.paymentStatus, ["paymentStatus", "financial_status"]);
+
+  const orderNumber =
+    String(orderNumberResolved.value || "")
+      .trim()
+      .replace(/^#/, "") || null;
+  const currencyCode = String(currencyResolved.value || "EUR").toUpperCase();
+  const totalRaw = Number(totalResolved.value || 0);
+  const orderedAtRaw = orderedAtResolved.value || null;
+  const orderedAt = orderedAtRaw ? new Date(orderedAtRaw) : new Date();
+  const customerEmail = String(emailResolved.value || "")
+    .trim()
+    .toLowerCase();
+  const customerName = String(nameResolved.value || "").trim();
+  const countryCode = String(countryResolved.value || "").trim().toUpperCase();
+  const rawStatus = statusResolved.value || null;
+  const rawPaymentStatus = paymentStatusResolved.value || null;
+
+  return {
+    orderNumber,
+    currencyCode: currencyCode || "EUR",
+    total: Number.isFinite(totalRaw) ? totalRaw : 0,
+    orderedAt: Number.isNaN(orderedAt.getTime()) ? new Date() : orderedAt,
+    customerEmail: customerEmail || null,
+    customerName: customerName || null,
+    countryCode: countryCode || null,
+    status: mapExternalOrderStatus(rawStatus),
+    paymentStatus: mapExternalPaymentStatus(rawPaymentStatus),
+  };
+}
+
+function previewWebhookOrderPayload(payload, mappingConfig = null) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const mapping = mappingConfig && typeof mappingConfig === "object" ? mappingConfig : {};
+  const resolved = {
+    orderNumber: resolveMappedValueDetailed(p, mapping.orderNumber, ["orderNumber", "order_number", "name", "id"]),
+    currencyCode: resolveMappedValueDetailed(p, mapping.currencyCode, ["currency", "currencyCode"]),
+    total: resolveMappedValueDetailed(p, mapping.total, ["totalPrice", "total_price", "total"]),
+    orderedAt: resolveMappedValueDetailed(p, mapping.orderedAt, ["orderedAt", "created_at", "createdAt"]),
+    customerEmail: resolveMappedValueDetailed(p, mapping.customerEmail, ["customerEmail", "email", "customer.email"]),
+    customerName: resolveMappedValueDetailed(p, mapping.customerName, ["customerName", "customer.name", "customer.first_name"]),
+    customerCountryCode: resolveMappedValueDetailed(p, mapping.customerCountryCode, [
+      "customerCountryCode",
+      "shipping_address.country_code",
+      "shippingAddress.countryCode",
+    ]),
+    orderStatus: resolveMappedValueDetailed(p, mapping.orderStatus, ["status", "fulfillment_status"]),
+    paymentStatus: resolveMappedValueDetailed(p, mapping.paymentStatus, ["paymentStatus", "financial_status"]),
+  };
+  return {
+    parsed: parseWebhookOrderPayload(p, mappingConfig),
+    resolved,
+    warnings: [
+      !resolved.orderNumber.value ? "orderNumber no encontrado" : null,
+      !resolved.total.value ? "total no encontrado (se usara 0)" : null,
+      !resolved.currencyCode.value ? "currencyCode no encontrado (se usara EUR)" : null,
+    ].filter(Boolean),
+  };
+}
+
+async function processWebhookEvent(event, actorUserId = null) {
+  const provider = normalizeProvider(event.provider);
+  const topic = String(event.topic || "").toLowerCase();
+  if (!["shopify", "idealo", "marketplace", "manual", "other"].includes(provider)) {
+    return { status: "ignored", reason: "unsupported_provider", salesOrderId: null };
+  }
+  if (!["order.created", "order.updated", "order.paid", "order.cancelled"].includes(topic)) {
+    return { status: "ignored", reason: "unsupported_topic", salesOrderId: null };
+  }
+
+  const integration = event.integrationId
+    ? await prisma.storeIntegration.findUnique({ where: { id: event.integrationId }, select: { configJson: true } })
+    : await prisma.storeIntegration.findUnique({
+        where: { storeId_provider: { storeId: event.storeId, provider } },
+        select: { configJson: true },
+      });
+  const mappingConfig =
+    integration?.configJson && typeof integration.configJson === "object"
+      ? integration.configJson.mapping || null
+      : null;
+
+  const parsed = parseWebhookOrderPayload(event.payload, mappingConfig);
+  if (!parsed.orderNumber) {
+    return { status: "failed", reason: "missing_order_number", salesOrderId: null };
+  }
+
+  const [fxToEur, channel] = await Promise.all([
+    getLatestFxToEur(event.storeId, parsed.currencyCode),
+    prisma.salesChannel.findFirst({
+      where: { storeId: event.storeId, type: provider, status: "active" },
+      select: { id: true, name: true },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
+
+  const total = Number(parsed.total || 0);
+  const grossEur = Number((total * fxToEur).toFixed(2));
+  let customerId = null;
+  if (parsed.customerEmail || parsed.customerName) {
+    const emailKey = parsed.customerEmail || `${parsed.orderNumber}@unknown.local`;
+    const existingCustomer = await prisma.customer.findFirst({
+      where: { storeId: event.storeId, email: emailKey },
+      select: { id: true },
+    });
+    const customer = existingCustomer
+      ? await prisma.customer.update({
+          where: { id: existingCustomer.id },
+          data: {
+            fullName: parsed.customerName || undefined,
+            country: parsed.countryCode || undefined,
+          },
+          select: { id: true },
+        })
+      : await prisma.customer.create({
+          data: {
+            storeId: event.storeId,
+            email: emailKey,
+            fullName: parsed.customerName || null,
+            country: parsed.countryCode || null,
+          },
+          select: { id: true },
+        });
+    customerId = customer.id;
+  }
+
+  const order = await prisma.salesOrder.upsert({
+    where: { storeId_orderNumber: { storeId: event.storeId, orderNumber: parsed.orderNumber } },
+    update: {
+      sourceChannelId: channel?.id || null,
+      sourceLabel: channel?.name || provider.toUpperCase(),
+      customerId,
+      customerCountryCode: parsed.countryCode,
+      currencyCode: parsed.currencyCode,
+      grossAmountOriginal: total,
+      grossFxToEur: fxToEur,
+      grossAmountEurFrozen: grossEur,
+      status: parsed.status,
+      paymentStatus: parsed.paymentStatus,
+      orderedAt: parsed.orderedAt,
+    },
+    create: {
+      storeId: event.storeId,
+      orderNumber: parsed.orderNumber,
+      platform: provider.toUpperCase(),
+      sourceChannelId: channel?.id || null,
+      sourceLabel: channel?.name || provider.toUpperCase(),
+      customerId,
+      customerCountryCode: parsed.countryCode,
+      currencyCode: parsed.currencyCode,
+      grossAmountOriginal: total,
+      grossFxToEur: fxToEur,
+      grossAmountEurFrozen: grossEur,
+      status: parsed.status,
+      paymentStatus: parsed.paymentStatus,
+      orderedAt: parsed.orderedAt,
+    },
+    select: { id: true, orderNumber: true },
+  });
+
+  await createAuditLogSafe({
+    storeId: event.storeId,
+    userId: actorUserId,
+    action: "integration.webhook.processed",
+    entityType: "sales_order",
+    entityId: order.id,
+    message: `Webhook ${provider}/${topic} processed`,
+    payload: { eventId: event.id, externalEventId: event.externalEventId, orderNumber: order.orderNumber },
+  });
+
+  await enqueueIntegrationOutbox({
+    storeId: event.storeId,
+    provider,
+    topic: "order.sync",
+    entityType: "sales_order",
+    entityId: order.id,
+    dedupeKey: `order.sync:${order.id}:${event.id}`,
+    payload: {
+      sourceEventId: event.id,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      provider,
+      topic,
+    },
+  });
+
+  return { status: "processed", reason: null, salesOrderId: order.id };
+}
+
+const integrationOutboxState = {
+  enabled: String(process.env.INTEGRATION_OUTBOX_ENABLED || "true").toLowerCase() !== "false",
+  running: false,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastError: null,
+  lastSummary: null,
+};
+
+const INTEGRATION_SLA = {
+  webhookMinutes: 15,
+  outboxMinutes: 20,
+};
+
+const INTEGRATION_SLA_ALERTS = {
+  webhookP95Ms: 30000,
+  webhookFailed: 5,
+  outboxFailed: 10,
+  deniedSig: 3,
+};
+
+function resolveProviderSla(configJson) {
+  const defaults = {
+    webhookMinutes: INTEGRATION_SLA.webhookMinutes,
+    outboxMinutes: INTEGRATION_SLA.outboxMinutes,
+    webhookP95Ms: INTEGRATION_SLA_ALERTS.webhookP95Ms,
+    webhookFailed: INTEGRATION_SLA_ALERTS.webhookFailed,
+    outboxFailed: INTEGRATION_SLA_ALERTS.outboxFailed,
+    deniedSig: INTEGRATION_SLA_ALERTS.deniedSig,
+    autoPauseOutbox: false,
+  };
+  if (!configJson || typeof configJson !== "object") return defaults;
+  const sla = configJson.sla && typeof configJson.sla === "object" ? configJson.sla : {};
+  return {
+    webhookMinutes: Number.isFinite(sla.webhookMinutes) ? sla.webhookMinutes : defaults.webhookMinutes,
+    outboxMinutes: Number.isFinite(sla.outboxMinutes) ? sla.outboxMinutes : defaults.outboxMinutes,
+    webhookP95Ms: Number.isFinite(sla.webhookP95Ms) ? sla.webhookP95Ms : defaults.webhookP95Ms,
+    webhookFailed: Number.isFinite(sla.webhookFailed) ? sla.webhookFailed : defaults.webhookFailed,
+    outboxFailed: Number.isFinite(sla.outboxFailed) ? sla.outboxFailed : defaults.outboxFailed,
+    deniedSig: Number.isFinite(sla.deniedSig) ? sla.deniedSig : defaults.deniedSig,
+    autoPauseOutbox: Boolean(sla.autoPauseOutbox),
+  };
+}
+
+function computeOutboxBackoffMinutes(attemptCount) {
+  const n = Math.max(1, Number(attemptCount || 1));
+  return Math.min(60, 2 ** (n - 1));
+}
+
+async function enqueueIntegrationOutbox({ storeId, provider, topic, entityType, entityId, dedupeKey, payload }) {
+  const normalizedProvider = normalizeProvider(provider);
+  const dk = String(dedupeKey || `${topic}:${entityType}:${entityId || "none"}`).trim().toLowerCase();
+  const payloadHash = computePayloadHash(payload || {});
+  const integration = await prisma.storeIntegration.findUnique({
+    where: { storeId_provider: { storeId, provider: normalizedProvider } },
+    select: { id: true, isActive: true },
+  });
+
+  const created = await prisma.integrationOutboxEvent
+    .create({
+      data: {
+        storeId,
+        integrationId: integration?.id || null,
+        provider: normalizedProvider,
+        topic: String(topic || "").trim().toLowerCase(),
+        entityType: String(entityType || "").trim().toLowerCase(),
+        entityId: entityId || null,
+        dedupeKey: dk,
+        payloadHash,
+        payload: payload || {},
+        status: integration?.isActive ? "pending" : "failed",
+        nextAttemptAt: new Date(),
+        lastError: integration?.isActive ? null : "integration_inactive",
+      },
+    })
+    .catch(async (err) => {
+      if (err?.code === "P2002") {
+        const existing = await prisma.integrationOutboxEvent.findFirst({
+          where: { storeId, provider: normalizedProvider, dedupeKey: dk },
+        });
+        return existing || null;
+      }
+      throw err;
+    });
+
+  return created;
+}
+
+async function deliverOutboxEvent(row) {
+  const integration = await prisma.storeIntegration.findUnique({
+    where: { storeId_provider: { storeId: row.storeId, provider: row.provider } },
+    select: { id: true, isActive: true, configJson: true },
+  });
+  if (!integration || !integration.isActive) {
+    return { sent: false, reason: "integration_inactive" };
+  }
+  const sla = resolveProviderSla(integration.configJson || null);
+  if (sla.autoPauseOutbox === true && integration.isActive === false) {
+    return { sent: false, reason: "outbox_paused" };
+  }
+
+  // Placeholder delivery: persistent outbox with retry semantics (real provider client can replace this block).
+  await createAuditLogSafe({
+    storeId: row.storeId,
+    userId: null,
+    action: "integration.outbox.sent",
+    entityType: row.entityType || "integration_outbox",
+    entityId: row.entityId || row.id,
+    message: `Outbox delivered ${row.provider}/${row.topic}`,
+    payload: { outboxEventId: row.id, dedupeKey: row.dedupeKey },
+  });
+  return { sent: true, reason: null };
+}
+
+async function runIntegrationOutboxJob({ actorUserId = null, source = "auto", storeId = null, limit = 120 } = {}) {
+  if (integrationOutboxState.running) {
+    return { ok: false, skipped: true, reason: "already_running" };
+  }
+  integrationOutboxState.running = true;
+  try {
+    const now = new Date();
+    const rows = await prisma.integrationOutboxEvent.findMany({
+      where: {
+        ...(storeId ? { storeId } : {}),
+        status: { in: ["pending", "failed"] },
+        nextAttemptAt: { lte: now },
+        attemptCount: { lt: 12 },
+      },
+      orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
+      take: Math.max(1, Math.min(500, Number(limit || 120))),
+    });
+
+    const summary = { source, total: rows.length, sent: 0, failed: 0, dead: 0, scannedStoreId: storeId || null };
+    for (const row of rows) {
+      await prisma.integrationOutboxEvent.update({
+        where: { id: row.id },
+        data: { status: "processing", lockedAt: new Date() },
+      });
+
+      const result = await deliverOutboxEvent(row);
+      if (result.sent) {
+        summary.sent += 1;
+        await prisma.integrationOutboxEvent.update({
+          where: { id: row.id },
+          data: {
+            status: "sent",
+            processedAt: new Date(),
+            processedByUserId: actorUserId || null,
+            lockedAt: null,
+            lastError: null,
+          },
+        });
+      } else {
+        const nextAttemptCount = Number(row.attemptCount || 0) + 1;
+        const toDead = nextAttemptCount >= 12;
+        if (toDead) summary.dead += 1;
+        else summary.failed += 1;
+        const backoffMin = computeOutboxBackoffMinutes(nextAttemptCount);
+        const nextAttemptAt = new Date(Date.now() + backoffMin * 60 * 1000);
+        await prisma.integrationOutboxEvent.update({
+          where: { id: row.id },
+          data: {
+            status: toDead ? "dead" : "failed",
+            attemptCount: nextAttemptCount,
+            nextAttemptAt,
+            lockedAt: null,
+            lastError: result.reason || "delivery_failed",
+            processedByUserId: actorUserId || null,
+            processedAt: toDead ? new Date() : null,
+          },
+        });
+      }
+    }
+
+    if (rows.length > 0 || storeId) {
+      const storesToEvaluate = storeId
+        ? [storeId]
+        : Array.from(new Set(rows.map((r) => r.storeId).filter(Boolean))).slice(0, 50);
+      for (const sId of storesToEvaluate) {
+        await evaluateIntegrationAlertsForStore(sId, actorUserId, { windowMinutes: 15 });
+      }
+    }
+
+    integrationOutboxState.lastRunAt = new Date().toISOString();
+    integrationOutboxState.lastRunStatus = summary.failed > 0 || summary.dead > 0 ? "warning" : "ok";
+    integrationOutboxState.lastError = null;
+    integrationOutboxState.lastSummary = summary;
+    return { ok: true, summary };
+  } catch (err) {
+    integrationOutboxState.lastRunAt = new Date().toISOString();
+    integrationOutboxState.lastRunStatus = "error";
+    integrationOutboxState.lastError = String(err?.message || err || "unknown_error");
+    return { ok: false, error: integrationOutboxState.lastError };
+  } finally {
+    integrationOutboxState.running = false;
+  }
+}
+
+async function evaluateIntegrationAlertsForStore(storeId, actorUserId = null, opts = {}) {
+  const now = new Date();
+  const windowMinutesRaw = Number(opts.windowMinutes || 15);
+  const windowMinutes = Math.max(5, Math.min(240, Number.isFinite(windowMinutesRaw) ? Math.floor(windowMinutesRaw) : 15));
+  const since = new Date(now.getTime() - windowMinutes * 60 * 1000);
+
+  const [webhooks, outbox, deniedSigCount, overdueWebhooks, overdueOutbox, integrations] = await Promise.all([
+    prisma.integrationWebhookEvent.findMany({
+      where: { storeId, receivedAt: { gte: since } },
+      select: { provider: true, status: true },
+      take: 5000,
+    }),
+    prisma.integrationOutboxEvent.findMany({
+      where: { storeId, createdAt: { gte: since } },
+      select: { provider: true, status: true },
+      take: 5000,
+    }),
+    prisma.auditLog.count({
+      where: {
+        storeId,
+        action: "integration.webhook.denied",
+        createdAt: { gte: since },
+      },
+    }),
+    prisma.integrationWebhookEvent.count({
+      where: {
+        storeId,
+        status: "received",
+        receivedAt: { lt: new Date(now.getTime() - INTEGRATION_SLA.webhookMinutes * 60 * 1000) },
+      },
+    }),
+    prisma.integrationOutboxEvent.count({
+      where: {
+        storeId,
+        status: { in: ["pending", "failed"] },
+        createdAt: { lt: new Date(now.getTime() - INTEGRATION_SLA.outboxMinutes * 60 * 1000) },
+      },
+    }),
+    prisma.storeIntegration.findMany({
+      where: { storeId },
+      select: { id: true, provider: true, configJson: true, isActive: true },
+    }),
+  ]);
+
+  const byProvider = new Map();
+  for (const w of webhooks) {
+    const p = w.provider || "unknown";
+    if (!byProvider.has(p)) byProvider.set(p, { provider: p, webhookFailed: 0, outboxFailed: 0 });
+    if (w.status === "failed") byProvider.get(p).webhookFailed += 1;
+  }
+  for (const o of outbox) {
+    const p = o.provider || "unknown";
+    if (!byProvider.has(p)) byProvider.set(p, { provider: p, webhookFailed: 0, outboxFailed: 0 });
+    if (o.status === "failed" || o.status === "dead") byProvider.get(p).outboxFailed += 1;
+  }
+
+  const alertsRaised = [];
+  const bucket = new Date(now);
+  bucket.setMinutes(Math.floor(bucket.getMinutes() / 15) * 15, 0, 0);
+  for (const row of byProvider.values()) {
+    const cfg = integrations.find((i) => i.provider === row.provider);
+    const sla = resolveProviderSla(cfg?.configJson || null);
+    const failedWebhookThreshold = sla.webhookFailed;
+    const failedOutboxThreshold = sla.outboxFailed;
+    const deniedSigThreshold = sla.deniedSig;
+    const webhookP95MsThreshold = sla.webhookP95Ms;
+
+    const reasons = [];
+    if (row.webhookFailed >= failedWebhookThreshold) reasons.push(`webhook_failed=${row.webhookFailed}`);
+    if (row.outboxFailed >= failedOutboxThreshold) reasons.push(`outbox_failed=${row.outboxFailed}`);
+    if (deniedSigCount >= deniedSigThreshold) reasons.push(`denied_signature=${deniedSigCount}`);
+    if (overdueWebhooks > 0) reasons.push(`webhook_sla_overdue=${overdueWebhooks}`);
+    if (overdueOutbox > 0) reasons.push(`outbox_sla_overdue=${overdueOutbox}`);
+    // future: hook p95 per provider cache
+    if (reasons.length === 0) continue;
+
+    const dedupeKey = `integration_alert:${row.provider}:${bucket.toISOString()}`;
+    const existing = await prisma.notification.findFirst({
+      where: {
+        storeId,
+        type: "system",
+        severity: "critical",
+        linkedEntityType: "integration_alert",
+        linkedEntityId: dedupeKey,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
+
+    if (sla.autoPauseOutbox && cfg && cfg.isActive) {
+      await prisma.storeIntegration.update({
+        where: { id: cfg.id },
+        data: { isActive: false, lastWebhookStatus: "paused_by_sla" },
+      });
+      await createAuditLogSafe({
+        storeId,
+        userId: actorUserId || null,
+        action: "integration.outbox.paused",
+        entityType: "integration",
+        entityId: cfg.id,
+        message: `Outbox auto-paused for ${row.provider} (SLA)`,
+        payload: { reasons },
+      });
+    }
+
+    const created = await createNotificationSafe({
+      storeId,
+      userId: null,
+      type: "system",
+      severity: "critical",
+      title: `Alerta Integracion: ${row.provider.toUpperCase()}`,
+      body: `Umbrales excedidos (${windowMinutes}m): ${reasons.join(", ")}`,
+      linkedEntityType: "integration_alert",
+      linkedEntityId: dedupeKey,
+      createdByUserId: actorUserId || null,
+    });
+    if (created) alertsRaised.push(created.id);
+  }
+
+  if (alertsRaised.length > 0) {
+    await createAuditLogSafe({
+      storeId,
+      userId: actorUserId || null,
+      action: "integration.alert.raised",
+      entityType: "integration_alert",
+      message: "Integration threshold alerts raised",
+      payload: { windowMinutes, alertsRaised: alertsRaised.length, deniedSigCount },
+    });
+  }
+
+  return {
+    windowMinutes,
+    deniedSigCount,
+    overdueWebhooks,
+    overdueOutbox,
+    byProvider: Array.from(byProvider.values()).sort((a, b) => a.provider.localeCompare(b.provider)),
+    alertsRaised: alertsRaised.length,
+    autoPausedProviders: integrations
+      .filter((i) => {
+        const sla = resolveProviderSla(i.configJson || null);
+        return sla.autoPauseOutbox && i.isActive === false;
+      })
+      .map((i) => i.provider),
+  };
 }
 
 function toComparableValue(value) {
@@ -6822,6 +7459,965 @@ app.post("/audit/job/run", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/integrations/config", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read integrations config" });
+
+    const [configs, events, outbox] = await Promise.all([
+      prisma.storeIntegration.findMany({
+        where: { storeId },
+        orderBy: { provider: "asc" },
+      }),
+      prisma.integrationWebhookEvent.findMany({
+        where: { storeId },
+        orderBy: { receivedAt: "desc" },
+        take: 120,
+      }),
+      prisma.integrationOutboxEvent.findMany({
+        where: { storeId },
+        orderBy: { createdAt: "desc" },
+        take: 120,
+      }),
+    ]);
+
+    return res.json({
+      configs: configs.map((c) => ({
+        id: c.id,
+        provider: c.provider,
+        isActive: c.isActive,
+        hasWebhookSecret: Boolean(c.webhookSecret),
+        hasApiKey: Boolean(c.apiKey),
+        configJson: c.configJson || null,
+        lastWebhookAt: c.lastWebhookAt ? c.lastWebhookAt.toISOString() : null,
+        lastWebhookStatus: c.lastWebhookStatus || null,
+        updatedAt: c.updatedAt.toISOString(),
+      })),
+      events: events.map((e) => ({
+        id: e.id,
+        provider: e.provider,
+        topic: e.topic,
+        externalEventId: e.externalEventId,
+        status: e.status,
+        errorMessage: e.errorMessage,
+        receivedAt: e.receivedAt.toISOString(),
+        processedAt: e.processedAt ? e.processedAt.toISOString() : null,
+        salesOrderId: e.salesOrderId || null,
+      })),
+      outbox: outbox.map((o) => ({
+        id: o.id,
+        provider: o.provider,
+        topic: o.topic,
+        entityType: o.entityType,
+        entityId: o.entityId,
+        dedupeKey: o.dedupeKey,
+        status: o.status,
+        attemptCount: o.attemptCount,
+        nextAttemptAt: o.nextAttemptAt.toISOString(),
+        lastError: o.lastError || null,
+        createdAt: o.createdAt.toISOString(),
+        processedAt: o.processedAt ? o.processedAt.toISOString() : null,
+      })),
+      outboxJob: integrationOutboxState,
+    });
+  } catch (err) {
+    console.error("GET /integrations/config error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/config/upsert", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider);
+    const webhookSecret = req.body.webhookSecret !== undefined ? String(req.body.webhookSecret || "").trim() : undefined;
+    const apiKey = req.body.apiKey !== undefined ? String(req.body.apiKey || "").trim() : undefined;
+    const isActive = req.body.isActive !== undefined ? Boolean(req.body.isActive) : true;
+    const configJson = req.body.configJson && typeof req.body.configJson === "object" ? req.body.configJson : null;
+    if (!storeId || !provider) return res.status(400).json({ error: "Missing storeId/provider" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to update integrations config" });
+
+    const data = {
+      isActive,
+      ...(webhookSecret !== undefined ? { webhookSecret: webhookSecret || null } : {}),
+      ...(apiKey !== undefined ? { apiKey: apiKey || null } : {}),
+      ...(configJson !== null ? { configJson } : {}),
+    };
+    const config = await prisma.storeIntegration.upsert({
+      where: { storeId_provider: { storeId, provider } },
+      update: data,
+      create: { storeId, provider, ...data },
+    });
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "integration.config.updated",
+      entityType: "integration",
+      entityId: config.id,
+      message: `Integration config updated: ${provider}`,
+      payload: { provider, isActive, hasWebhookSecret: Boolean(config.webhookSecret), hasApiKey: Boolean(config.apiKey) },
+    });
+
+    return res.json({
+      config: {
+        id: config.id,
+        provider: config.provider,
+        isActive: config.isActive,
+        hasWebhookSecret: Boolean(config.webhookSecret),
+        hasApiKey: Boolean(config.apiKey),
+        configJson: config.configJson || null,
+        updatedAt: config.updatedAt.toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error("POST /integrations/config/upsert error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/mapping/preview", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider || "");
+    const payload = req.body.payload && typeof req.body.payload === "object" ? req.body.payload : null;
+    const mapping = req.body.mapping && typeof req.body.mapping === "object" ? req.body.mapping : null;
+    if (!storeId || !provider || !payload) {
+      return res.status(400).json({ error: "Missing storeId/provider/payload" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to preview mapping" });
+
+    let finalMapping = mapping;
+    if (!finalMapping) {
+      const integration = await prisma.storeIntegration.findUnique({
+        where: { storeId_provider: { storeId, provider } },
+        select: { configJson: true },
+      });
+      if (integration?.configJson && typeof integration.configJson === "object") {
+        finalMapping = integration.configJson.mapping && typeof integration.configJson.mapping === "object" ? integration.configJson.mapping : null;
+      }
+    }
+
+    const preview = previewWebhookOrderPayload(payload, finalMapping);
+    return res.json({
+      provider,
+      mapping: finalMapping || null,
+      ...preview,
+    });
+  } catch (err) {
+    console.error("POST /integrations/mapping/preview error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/webhooks/:provider/:storeCode", async (req, res) => {
+  try {
+    const provider = normalizeProvider(req.params.provider);
+    const storeCode = String(req.params.storeCode || "").trim().toUpperCase();
+    const topic = String(req.headers["x-webhook-topic"] || req.body?.topic || req.body?.event || "unknown")
+      .trim()
+      .toLowerCase();
+    const signature = String(req.headers["x-webhook-signature"] || "").trim() || null;
+    if (!provider || !storeCode) return res.status(400).json({ error: "Missing provider/storeCode" });
+
+    const store = await prisma.store.findFirst({
+      where: { code: storeCode, status: "active" },
+      select: { id: true, code: true },
+    });
+    if (!store) return res.status(404).json({ error: "Store not found" });
+
+    const integration = await prisma.storeIntegration.findUnique({
+      where: { storeId_provider: { storeId: store.id, provider } },
+    });
+    if (!integration || !integration.isActive) {
+      return res.status(404).json({ error: "Integration inactive" });
+    }
+
+    if (!verifyWebhookSignature(integration.webhookSecret, req.body, signature)) {
+      await createAuditLogSafe({
+        storeId: store.id,
+        userId: null,
+        action: "integration.webhook.denied",
+        entityType: "integration",
+        entityId: integration.id,
+        message: `Invalid webhook signature (${provider})`,
+        payload: { topic },
+      });
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
+    const payloadHash = computePayloadHash(req.body);
+    const externalEventId =
+      String(req.headers["x-webhook-id"] || req.body?.eventId || req.body?.id || `${topic}:${payloadHash}`).trim();
+
+    const created = await prisma.integrationWebhookEvent
+      .create({
+        data: {
+          storeId: store.id,
+          integrationId: integration.id,
+          provider,
+          topic,
+          externalEventId,
+          payloadHash,
+          signature,
+          payload: req.body || {},
+          status: "received",
+        },
+      })
+      .catch(async (err) => {
+        if (err?.code === "P2002") {
+          const existing = await prisma.integrationWebhookEvent.findFirst({
+            where: { storeId: store.id, provider, externalEventId },
+          });
+          if (existing) return { ...existing, _duplicate: true };
+        }
+        throw err;
+      });
+
+    if (created?._duplicate) {
+      return res.status(200).json({ ok: true, duplicate: true, eventId: created.id });
+    }
+
+    await prisma.storeIntegration.update({
+      where: { id: integration.id },
+      data: { lastWebhookAt: new Date(), lastWebhookStatus: "received" },
+    });
+
+    await createAuditLogSafe({
+      storeId: store.id,
+      userId: null,
+      action: "integration.webhook.received",
+      entityType: "integration_event",
+      entityId: created.id,
+      message: `Webhook received ${provider}/${topic}`,
+      payload: { externalEventId },
+    });
+
+    const result = await processWebhookEvent(created, null);
+    if (result.status === "processed") {
+      await prisma.integrationWebhookEvent.update({
+        where: { id: created.id },
+        data: {
+          status: "processed",
+          processedAt: new Date(),
+          salesOrderId: result.salesOrderId || null,
+          errorMessage: null,
+        },
+      });
+      await prisma.storeIntegration.update({
+        where: { id: integration.id },
+        data: { lastWebhookStatus: "processed" },
+      });
+      await evaluateIntegrationAlertsForStore(store.id, null, { windowMinutes: 15 });
+      return res.status(200).json({ ok: true, processed: true, eventId: created.id, salesOrderId: result.salesOrderId || null });
+    }
+
+    await prisma.integrationWebhookEvent.update({
+      where: { id: created.id },
+      data: {
+        status: result.status === "failed" ? "failed" : "ignored",
+        processedAt: new Date(),
+        errorMessage: result.reason || null,
+      },
+    });
+    await prisma.storeIntegration.update({
+      where: { id: integration.id },
+      data: { lastWebhookStatus: result.status === "failed" ? "failed" : "ignored" },
+    });
+    await evaluateIntegrationAlertsForStore(store.id, null, { windowMinutes: 15 });
+    return res.status(200).json({ ok: true, processed: false, status: result.status, reason: result.reason || null, eventId: created.id });
+  } catch (err) {
+    console.error("POST /webhooks/:provider/:storeCode error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/events/:eventId/process", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { eventId } = req.params;
+    const storeId = String(req.body.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canOrders = await canManageOrders(userId, storeId, membership.roleKey);
+    if (!canOrders) return res.status(403).json({ error: "No permission to process integration events" });
+
+    const event = await prisma.integrationWebhookEvent.findFirst({
+      where: { id: eventId, storeId },
+    });
+    if (!event) return res.status(404).json({ error: "Event not found" });
+
+    const result = await processWebhookEvent(event, userId);
+    const nextStatus = result.status === "processed" ? "processed" : result.status === "failed" ? "failed" : "ignored";
+    const updated = await prisma.integrationWebhookEvent.update({
+      where: { id: event.id },
+      data: {
+        status: nextStatus,
+        processedAt: new Date(),
+        processedByUserId: userId,
+        salesOrderId: result.salesOrderId || null,
+        errorMessage: result.reason || null,
+      },
+      select: { id: true, status: true, processedAt: true, errorMessage: true, salesOrderId: true },
+    });
+
+    return res.json({ event: updated });
+  } catch (err) {
+    console.error("POST /integrations/events/:eventId/process error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/events/:eventId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { eventId } = req.params;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read integration event detail" });
+
+    const event = await prisma.integrationWebhookEvent.findFirst({
+      where: { id: eventId, storeId },
+      select: {
+        id: true,
+        provider: true,
+        topic: true,
+        externalEventId: true,
+        payloadHash: true,
+        signature: true,
+        payload: true,
+        status: true,
+        errorMessage: true,
+        salesOrderId: true,
+        receivedAt: true,
+        processedAt: true,
+        processedByUserId: true,
+      },
+    });
+    if (!event) return res.status(404).json({ error: "Event not found" });
+    return res.json({ event });
+  } catch (err) {
+    console.error("GET /integrations/events/:eventId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/events/replay", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider);
+    const status = String(req.body.status || "failed").trim().toLowerCase();
+    const limitRaw = Number(req.body.limit || 60);
+    const limit = Math.max(1, Math.min(300, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 60));
+    const allowedStatus = ["failed", "ignored", "received"];
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    if (!allowedStatus.includes(status)) return res.status(400).json({ error: "Invalid status for replay" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canOrders = await canManageOrders(userId, storeId, membership.roleKey);
+    if (!canOrders) return res.status(403).json({ error: "No permission to replay integration events" });
+
+    const rows = await prisma.integrationWebhookEvent.findMany({
+      where: {
+        storeId,
+        status,
+        ...(provider ? { provider } : {}),
+      },
+      orderBy: { receivedAt: "asc" },
+      take: limit,
+    });
+    if (rows.length === 0) return res.json({ ok: true, replayed: 0, processed: 0, failed: 0, ignored: 0 });
+
+    let processed = 0;
+    let failed = 0;
+    let ignored = 0;
+    for (const event of rows) {
+      const result = await processWebhookEvent(event, userId);
+      const nextStatus = result.status === "processed" ? "processed" : result.status === "failed" ? "failed" : "ignored";
+      await prisma.integrationWebhookEvent.update({
+        where: { id: event.id },
+        data: {
+          status: nextStatus,
+          processedAt: new Date(),
+          processedByUserId: userId,
+          salesOrderId: result.salesOrderId || null,
+          errorMessage: result.reason || null,
+        },
+      });
+      if (nextStatus === "processed") processed += 1;
+      else if (nextStatus === "failed") failed += 1;
+      else ignored += 1;
+    }
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "integration.webhook.replay",
+      entityType: "integration_event",
+      message: "Bulk replay integration events",
+      payload: { replayed: rows.length, processed, failed, ignored, provider: provider || null, sourceStatus: status },
+    });
+
+    return res.json({ ok: true, replayed: rows.length, processed, failed, ignored });
+  } catch (err) {
+    console.error("POST /integrations/events/replay error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/webhooks/simulate", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider || "shopify");
+    const topic = String(req.body.topic || "order.created").trim().toLowerCase();
+    if (!storeId || !provider) return res.status(400).json({ error: "Missing storeId/provider" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to simulate webhook" });
+
+    const integration = await prisma.storeIntegration.findUnique({
+      where: { storeId_provider: { storeId, provider } },
+      select: { id: true, isActive: true },
+    });
+    if (!integration || !integration.isActive) return res.status(404).json({ error: "Integration inactive" });
+
+    const syntheticOrderNo = String(req.body.orderNumber || `SIM-${Date.now()}`).trim();
+    const payload = req.body.payload && typeof req.body.payload === "object"
+      ? req.body.payload
+      : {
+          topic,
+          orderNumber: syntheticOrderNo,
+          currency: "EUR",
+          totalPrice: 199.99,
+          status: topic === "order.cancelled" ? "cancelled" : "paid",
+          paymentStatus: "paid",
+          customerEmail: `sim+${syntheticOrderNo.toLowerCase()}@demarca.local`,
+          customerName: "Simulated Customer",
+          customerCountryCode: "ES",
+          createdAt: new Date().toISOString(),
+        };
+    const externalEventId = `sim:${provider}:${topic}:${Date.now()}`;
+    const created = await prisma.integrationWebhookEvent.create({
+      data: {
+        storeId,
+        integrationId: integration.id,
+        provider,
+        topic,
+        externalEventId,
+        payloadHash: computePayloadHash(payload),
+        signature: "simulated",
+        payload,
+        status: "received",
+      },
+    });
+
+    const result = await processWebhookEvent(created, userId);
+    const nextStatus = result.status === "processed" ? "processed" : result.status === "failed" ? "failed" : "ignored";
+    const updated = await prisma.integrationWebhookEvent.update({
+      where: { id: created.id },
+      data: {
+        status: nextStatus,
+        processedAt: new Date(),
+        processedByUserId: userId,
+        salesOrderId: result.salesOrderId || null,
+        errorMessage: result.reason || null,
+      },
+      select: { id: true, status: true, salesOrderId: true, processedAt: true, errorMessage: true },
+    });
+
+    return res.status(201).json({ ok: true, simulated: true, event: updated });
+  } catch (err) {
+    console.error("POST /integrations/webhooks/simulate error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/outbox", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const status = String(req.query.status || "").trim().toLowerCase();
+    const provider = normalizeProvider(req.query.provider);
+    const limitRaw = Number(req.query.limit || 200);
+    const limit = Math.max(1, Math.min(1000, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 200));
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read outbox" });
+
+    const rows = await prisma.integrationOutboxEvent.findMany({
+      where: { storeId, ...(status ? { status } : {}), ...(provider ? { provider } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return res.json({ outbox: rows, job: integrationOutboxState });
+  } catch (err) {
+    console.error("GET /integrations/outbox error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/outbox/enqueue", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider);
+    const topic = String(req.body.topic || "").trim().toLowerCase();
+    const entityType = String(req.body.entityType || "manual").trim().toLowerCase();
+    const entityId = req.body.entityId ? String(req.body.entityId) : null;
+    const payload = req.body.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+    const dedupeKey = String(req.body.dedupeKey || `${topic}:${entityType}:${entityId || Date.now()}`).trim().toLowerCase();
+    if (!storeId || !provider || !topic) return res.status(400).json({ error: "Missing storeId/provider/topic" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to enqueue outbox event" });
+
+    const event = await enqueueIntegrationOutbox({ storeId, provider, topic, entityType, entityId, dedupeKey, payload });
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "integration.outbox.enqueued",
+      entityType: entityType || "integration_outbox",
+      entityId: entityId || event?.id || null,
+      message: `Outbox enqueued ${provider}/${topic}`,
+      payload: { dedupeKey, outboxEventId: event?.id || null },
+    });
+    return res.status(201).json({ event });
+  } catch (err) {
+    console.error("POST /integrations/outbox/enqueue error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/outbox/run", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const limitRaw = Number(req.body.limit || 120);
+    const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 120));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to run outbox job" });
+
+    const result = await runIntegrationOutboxJob({ actorUserId: userId, source: "manual", storeId, limit });
+    if (!result.ok && result.reason === "already_running") return res.status(409).json({ error: "Outbox job already running" });
+    if (!result.ok) return res.status(500).json({ error: result.error || "Outbox job failed" });
+    return res.json({ ok: true, summary: result.summary, state: integrationOutboxState });
+  } catch (err) {
+    console.error("POST /integrations/outbox/run error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/outbox/retry-dead", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const provider = normalizeProvider(req.body.provider);
+    const limitRaw = Number(req.body.limit || 80);
+    const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 80));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to retry outbox dead/failed" });
+
+    const rows = await prisma.integrationOutboxEvent.findMany({
+      where: {
+        storeId,
+        ...(provider ? { provider } : {}),
+        status: { in: ["dead", "failed"] },
+      },
+      orderBy: { updatedAt: "asc" },
+      take: limit,
+    });
+
+    if (rows.length === 0) return res.json({ ok: true, retried: 0 });
+
+    const ids = rows.map((r) => r.id);
+    await prisma.integrationOutboxEvent.updateMany({
+      where: { id: { in: ids } },
+      data: {
+        status: "pending",
+        nextAttemptAt: new Date(),
+        lockedAt: null,
+        lastError: null,
+        processedAt: null,
+      },
+    });
+
+    await createAuditLogSafe({
+      storeId,
+      userId,
+      action: "integration.outbox.retry",
+      entityType: "integration_outbox",
+      message: "Retry dead/failed outbox events",
+      payload: { retried: ids.length, provider: provider || null },
+    });
+
+    return res.json({ ok: true, retried: ids.length });
+  } catch (err) {
+    console.error("POST /integrations/outbox/retry-dead error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/health", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const hoursRaw = Number(req.query.hours || 24);
+    const hours = Math.max(1, Math.min(24 * 30, Number.isFinite(hoursRaw) ? Math.floor(hoursRaw) : 24));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read integrations health" });
+
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const [webhooks, outbox, deniedWebhookAudits, overdueWebhooks, overdueOutbox] = await Promise.all([
+      prisma.integrationWebhookEvent.findMany({
+        where: { storeId, receivedAt: { gte: since } },
+        select: { provider: true, status: true, receivedAt: true, processedAt: true, errorMessage: true, topic: true },
+        orderBy: { receivedAt: "desc" },
+        take: 5000,
+      }),
+      prisma.integrationOutboxEvent.findMany({
+        where: { storeId, createdAt: { gte: since } },
+        select: {
+          provider: true,
+          status: true,
+          attemptCount: true,
+          nextAttemptAt: true,
+          createdAt: true,
+          processedAt: true,
+          lastError: true,
+          topic: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5000,
+      }),
+      prisma.auditLog.count({
+        where: {
+          storeId,
+          action: "integration.webhook.denied",
+          createdAt: { gte: since },
+        },
+      }),
+      prisma.integrationWebhookEvent.count({
+        where: {
+          storeId,
+          status: "received",
+          receivedAt: { lt: new Date(Date.now() - INTEGRATION_SLA.webhookMinutes * 60 * 1000) },
+        },
+      }),
+      prisma.integrationOutboxEvent.count({
+        where: {
+          storeId,
+          status: { in: ["pending", "failed"] },
+          createdAt: { lt: new Date(Date.now() - INTEGRATION_SLA.outboxMinutes * 60 * 1000) },
+        },
+      }),
+    ]);
+
+  const webhookTotals = {
+    total: webhooks.length,
+    processed: 0,
+    failed: 0,
+    ignored: 0,
+    duplicate: 0,
+    received: 0,
+    deniedSignature: deniedWebhookAudits,
+    avgProcessingMs: 0,
+    p95ProcessingMs: 0,
+  };
+    const webhookDurations = [];
+    const outboxTotals = {
+      total: outbox.length,
+      pending: 0,
+      processing: 0,
+      sent: 0,
+      failed: 0,
+      dead: 0,
+      avgAttemptsFailed: 0,
+    };
+    const byProviderMap = new Map();
+    const recentErrors = [];
+
+    for (const w of webhooks) {
+      webhookTotals[w.status] = (webhookTotals[w.status] || 0) + 1;
+      const p = w.provider || "unknown";
+      if (!byProviderMap.has(p)) byProviderMap.set(p, { provider: p, webhooks: 0, webhookFailed: 0, outbox: 0, outboxFailed: 0 });
+      const row = byProviderMap.get(p);
+      row.webhooks += 1;
+      if (w.status === "failed") row.webhookFailed += 1;
+      if (w.processedAt && w.receivedAt) {
+        const ms = Math.max(0, new Date(w.processedAt).getTime() - new Date(w.receivedAt).getTime());
+        webhookDurations.push(ms);
+      }
+      if (w.status === "failed" && recentErrors.length < 20) {
+        recentErrors.push({
+          source: "webhook",
+          provider: w.provider,
+          topic: w.topic,
+          status: w.status,
+          error: w.errorMessage || "unknown",
+          at: w.processedAt ? new Date(w.processedAt).toISOString() : new Date(w.receivedAt).toISOString(),
+        });
+      }
+    }
+
+    let failedAttemptsSum = 0;
+    let failedAttemptsCount = 0;
+    for (const o of outbox) {
+      outboxTotals[o.status] = (outboxTotals[o.status] || 0) + 1;
+      const p = o.provider || "unknown";
+      if (!byProviderMap.has(p)) byProviderMap.set(p, { provider: p, webhooks: 0, webhookFailed: 0, outbox: 0, outboxFailed: 0 });
+      const row = byProviderMap.get(p);
+      row.outbox += 1;
+      if (o.status === "failed" || o.status === "dead") row.outboxFailed += 1;
+      if (o.status === "failed") {
+        failedAttemptsSum += Number(o.attemptCount || 0);
+        failedAttemptsCount += 1;
+      }
+      if ((o.status === "failed" || o.status === "dead") && recentErrors.length < 20) {
+        recentErrors.push({
+          source: "outbox",
+          provider: o.provider,
+          topic: o.topic,
+          status: o.status,
+          error: o.lastError || "unknown",
+          at: o.processedAt ? new Date(o.processedAt).toISOString() : new Date(o.createdAt).toISOString(),
+        });
+      }
+    }
+
+    if (webhookDurations.length > 0) {
+      const sorted = [...webhookDurations].sort((a, b) => a - b);
+      const sum = sorted.reduce((acc, v) => acc + v, 0);
+      webhookTotals.avgProcessingMs = Math.round(sum / sorted.length);
+      const p95Index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
+      webhookTotals.p95ProcessingMs = sorted[p95Index];
+    }
+    if (failedAttemptsCount > 0) {
+      outboxTotals.avgAttemptsFailed = Number((failedAttemptsSum / failedAttemptsCount).toFixed(2));
+    }
+
+    const health = {
+      level: "healthy",
+      issues: [],
+    };
+  if (webhookTotals.failed > 0 || outboxTotals.failed > 0) {
+    health.level = "warning";
+    health.issues.push("Eventos con estado failed detectados");
+  }
+  if (outboxTotals.dead > 0) {
+      health.level = "critical";
+      health.issues.push("Eventos outbox en dead-letter queue");
+    }
+  if (webhookTotals.deniedSignature > 0) {
+    health.level = health.level === "critical" ? "critical" : "warning";
+    health.issues.push("Firmas webhook denegadas detectadas");
+  }
+  if (webhookTotals.p95ProcessingMs > INTEGRATION_SLA_ALERTS.webhookP95Ms) {
+    health.level = health.level === "critical" ? "critical" : "warning";
+    health.issues.push("Latencia webhook p95 superior a 30s");
+  }
+    if (overdueWebhooks > 0 || overdueOutbox > 0) {
+      health.level = "warning";
+      health.issues.push(`SLA vencido: webhooks ${overdueWebhooks} / outbox ${overdueOutbox}`);
+    }
+
+    return res.json({
+      range: { hours, since: since.toISOString() },
+      health,
+      webhookTotals,
+      outboxTotals,
+      sla: {
+        webhookMinutes: INTEGRATION_SLA.webhookMinutes,
+        outboxMinutes: INTEGRATION_SLA.outboxMinutes,
+        overdueWebhooks,
+        overdueOutbox,
+      },
+      thresholds: INTEGRATION_SLA_ALERTS,
+      byProvider: Array.from(byProviderMap.values()).sort((a, b) => a.provider.localeCompare(b.provider)),
+      recentErrors,
+      outboxJob: integrationOutboxState,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /integrations/health error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/alerts", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const onlyOpen = String(req.query.onlyOpen || "1").trim() !== "0";
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read integration alerts" });
+
+    const alerts = await prisma.notification.findMany({
+      where: {
+        storeId,
+        linkedEntityType: "integration_alert",
+        ...(onlyOpen ? { isRead: false } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    });
+
+    return res.json({
+      alerts: alerts.map((a) => ({
+        id: a.id,
+        title: a.title,
+        body: a.body,
+        severity: a.severity,
+        isRead: a.isRead,
+        createdAt: a.createdAt.toISOString(),
+      })),
+    });
+  } catch (err) {
+    console.error("GET /integrations/alerts error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/alerts/evaluate", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    const windowMinutesRaw = Number(req.body.windowMinutes || 15);
+    const windowMinutes = Math.max(5, Math.min(240, Number.isFinite(windowMinutesRaw) ? Math.floor(windowMinutesRaw) : 15));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to evaluate integration alerts" });
+
+    const result = await evaluateIntegrationAlertsForStore(storeId, userId, { windowMinutes });
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("POST /integrations/alerts/evaluate error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/timeline", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 100));
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to read integration timeline" });
+
+    const [webhooks, outbox, alerts] = await Promise.all([
+      prisma.integrationWebhookEvent.findMany({
+        where: { storeId },
+        orderBy: { receivedAt: "desc" },
+        take: limit,
+      }),
+      prisma.integrationOutboxEvent.findMany({
+        where: { storeId },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      }),
+      prisma.notification.findMany({
+        where: { storeId, linkedEntityType: "integration_alert" },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      }),
+    ]);
+
+    const items = [
+      ...webhooks.map((w) => ({
+        type: "webhook",
+        provider: w.provider,
+        topic: w.topic,
+        status: w.status,
+        message: w.errorMessage || null,
+        at: w.receivedAt,
+      })),
+      ...outbox.map((o) => ({
+        type: "outbox",
+        provider: o.provider,
+        topic: o.topic,
+        status: o.status,
+        message: o.lastError || null,
+        at: o.createdAt,
+      })),
+      ...alerts.map((a) => ({
+        type: "alert",
+        provider: null,
+        topic: "integration_alert",
+        status: a.severity,
+        message: a.title,
+        at: a.createdAt,
+      })),
+    ]
+      .sort((a, b) => b.at.getTime() - a.at.getTime())
+      .slice(0, limit);
+
+    return res.json({
+      items: items.map((i) => ({
+        ...i,
+        at: i.at.toISOString(),
+      })),
+    });
+  } catch (err) {
+    console.error("GET /integrations/timeline error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.get("/payouts", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
@@ -7407,5 +9003,18 @@ app.listen(PORT, () => {
         console.error("Audit auto job interval error:", err);
       });
     }, 15 * 60 * 1000);
+  }
+  if (integrationOutboxState.enabled) {
+    setTimeout(() => {
+      runIntegrationOutboxJob({ source: "startup" }).catch((err) => {
+        console.error("Integration outbox startup error:", err);
+      });
+    }, 15 * 1000);
+
+    setInterval(() => {
+      runIntegrationOutboxJob({ source: "auto" }).catch((err) => {
+        console.error("Integration outbox interval error:", err);
+      });
+    }, 20 * 1000);
   }
 });

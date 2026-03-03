@@ -178,6 +178,22 @@ async function main() {
     },
   });
 
+  await prisma.storeIntegration.upsert({
+    where: { storeId_provider: { storeId: store.id, provider: "shopify" } },
+    update: {
+      isActive: true,
+      webhookSecret: "shopify-dev-secret",
+      configJson: { note: "Dev webhook config for phase 7" },
+    },
+    create: {
+      storeId: store.id,
+      provider: "shopify",
+      isActive: true,
+      webhookSecret: "shopify-dev-secret",
+      configJson: { note: "Dev webhook config for phase 7" },
+    },
+  });
+
   const passwordHash = await bcrypt.hash("Admin123!", 10);
 
   const admin = await prisma.user.upsert({

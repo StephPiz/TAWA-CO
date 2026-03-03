@@ -190,6 +190,22 @@ enum NotificationSeverity {
   critical
 }
 
+enum IntegrationEventStatus {
+  received
+  processed
+  failed
+  ignored
+  duplicate
+}
+
+enum IntegrationOutboxStatus {
+  pending
+  processing
+  sent
+  failed
+  dead
+}
+
 enum SupportTicketStatus {
   open
   in_progress
@@ -265,6 +281,9 @@ model Store {
   supportTickets    SupportTicket[]
   auditLogs         AuditLog[]
   auditAnchors      AuditAnchor[]
+  integrations      StoreIntegration[]
+  webhookEvents     IntegrationWebhookEvent[]
+  outboxEvents      IntegrationOutboxEvent[]
 
   @@unique([holdingId, code])
   @@map("stores")
@@ -626,6 +645,7 @@ model SalesOrder {
   returns       ReturnCase[]
   backorders    BackorderLine[]
   tickets       SupportTicket[]
+  webhookEvents IntegrationWebhookEvent[]
 
   @@unique([storeId, orderNumber])
   @@index([storeId, orderedAt])
@@ -1156,6 +1176,8 @@ model User {
   supportTicketNotes  SupportTicketNote[]
   auditLogs           AuditLog[]
   auditAnchors        AuditAnchor[] @relation("AuditAnchorCreatedBy")
+  processedWebhooks   IntegrationWebhookEvent[] @relation("WebhookProcessedBy")
+  processedOutbox     IntegrationOutboxEvent[]  @relation("OutboxProcessedBy")
 
   @@map("users")
 }
@@ -1261,4 +1283,86 @@ model AuditAnchor {
   @@unique([storeId, anchorDay])
   @@index([storeId, createdAt])
   @@map("audit_anchors")
+}
+
+model StoreIntegration {
+  id                String   @id @default(cuid())
+  storeId           String
+  provider          String
+  isActive          Boolean  @default(true)
+  webhookSecret     String?
+  apiKey            String?
+  configJson        Json?
+  lastWebhookAt     DateTime?
+  lastWebhookStatus String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  events IntegrationWebhookEvent[]
+  outboxEvents IntegrationOutboxEvent[]
+
+  @@unique([storeId, provider])
+  @@index([storeId, isActive])
+  @@map("store_integrations")
+}
+
+model IntegrationWebhookEvent {
+  id                 String                 @id @default(cuid())
+  storeId            String
+  integrationId      String?
+  provider           String
+  topic              String
+  externalEventId    String
+  payloadHash        String
+  signature          String?
+  payload            Json
+  status             IntegrationEventStatus @default(received)
+  errorMessage       String?
+  processedAt        DateTime?
+  processedByUserId  String?
+  salesOrderId       String?
+  receivedAt         DateTime               @default(now())
+  createdAt          DateTime               @default(now())
+
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  integration StoreIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  processedBy User?             @relation("WebhookProcessedBy", fields: [processedByUserId], references: [id], onDelete: SetNull)
+  salesOrder  SalesOrder?       @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, provider, externalEventId])
+  @@index([storeId, status, receivedAt])
+  @@index([storeId, topic, receivedAt])
+  @@map("integration_webhook_events")
+}
+
+model IntegrationOutboxEvent {
+  id                String                 @id @default(cuid())
+  storeId           String
+  integrationId     String?
+  provider          String
+  topic             String
+  entityType        String
+  entityId          String?
+  dedupeKey         String
+  payloadHash       String
+  payload           Json
+  status            IntegrationOutboxStatus @default(pending)
+  attemptCount      Int                    @default(0)
+  nextAttemptAt     DateTime               @default(now())
+  lockedAt          DateTime?
+  lastError         String?
+  processedAt       DateTime?
+  processedByUserId String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  integration StoreIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  processedBy User?             @relation("OutboxProcessedBy", fields: [processedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, provider, dedupeKey])
+  @@index([storeId, status, nextAttemptAt])
+  @@index([storeId, provider, createdAt])
+  @@map("integration_outbox_events")
 }
