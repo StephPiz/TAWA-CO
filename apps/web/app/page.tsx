@@ -10,6 +10,11 @@ const headingFont = localFont({
   variable: "--font-login-heading",
 });
 
+const mobileTitleFont = localFont({
+  src: "./fonts/HFHySans_Bold.ttf",
+  variable: "--font-login-mobile-title",
+});
+
 const bodyFont = localFont({
   src: "./fonts/HFHySans_Regular.ttf",
   variable: "--font-login-body",
@@ -17,15 +22,27 @@ const bodyFont = localFont({
 
 export default function LoginPage() {
   const router = useRouter();
+  const [mobileStores, setMobileStores] = useState<Array<{ storeId: string; storeName: string }>>(() => {
+    if (typeof window === "undefined") return [];
+    const raw = localStorage.getItem("stores");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((s) => ({ storeId: String(s.storeId || ""), storeName: String(s.storeName || "") }))
+        .filter((s) => s.storeId && s.storeName);
+    } catch {
+      return [];
+    }
+  });
   const [desktopStep, setDesktopStep] = useState<"login" | "space">("login");
   const [mobileStep, setMobileStep] = useState<"login" | "space" | "store">("login");
   const [email, setEmail] = useState("admin@demarca.local");
   const [password, setPassword] = useState("Admin123!");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showMobileSplash, setShowMobileSplash] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < 768
-  );
+  const [showMobileSplash, setShowMobileSplash] = useState(true);
   const [mobileFormVisible, setMobileFormVisible] = useState(false);
   const girlStyle: React.CSSProperties = {
     right: "530px",
@@ -35,7 +52,14 @@ export default function LoginPage() {
   };
 
   useEffect(() => {
-    if (!showMobileSplash) return;
+    if (typeof window === "undefined") return;
+    if (window.innerWidth >= 768) {
+      const desktopTimer = window.setTimeout(() => setShowMobileSplash(false), 0);
+      return () => window.clearTimeout(desktopTimer);
+    }
+    if (!showMobileSplash) {
+      return;
+    }
     const timer = window.setTimeout(() => {
       setShowMobileSplash(false);
     }, 4200);
@@ -74,6 +98,16 @@ export default function LoginPage() {
       localStorage.setItem("accessToken", data.accessToken);
       localStorage.setItem("user", JSON.stringify(data.user));
       localStorage.setItem("stores", JSON.stringify(data.stores));
+      if (Array.isArray(data.stores)) {
+        setMobileStores(
+          data.stores
+            .map((s: { storeId?: string; storeName?: string }) => ({
+              storeId: String(s.storeId || ""),
+              storeName: String(s.storeName || ""),
+            }))
+            .filter((s: { storeId: string; storeName: string }) => s.storeId && s.storeName)
+        );
+      }
       if (data?.user?.preferredLocale) {
         localStorage.setItem("uiLocale", String(data.user.preferredLocale).toLowerCase());
       }
@@ -91,7 +125,7 @@ export default function LoginPage() {
 
   return (
     <div
-      className={`${headingFont.variable} ${bodyFont.variable} relative h-screen w-screen overflow-hidden`}
+      className={`${headingFont.variable} ${mobileTitleFont.variable} ${bodyFont.variable} relative h-screen w-screen overflow-hidden`}
       style={{
         background: "linear-gradient(135deg, #2C2F95 0%, #3A42C5 45%, #4A57E6 100%)",
       }}
@@ -230,25 +264,25 @@ export default function LoginPage() {
       </section>
 
       {!showMobileSplash ? (
-        <section className="absolute inset-0 z-[40] overflow-hidden bg-[#4449CD] md:hidden">
-          <div
-            className={`absolute bottom-0 left-0 right-0 h-[78%] rounded-t-[28px] bg-[#DDE0E5] px-8 pb-8 pt-14 text-[#121633] transition-transform duration-700 ease-out ${
-              mobileFormVisible ? "translate-y-0" : "translate-y-full"
-            }`}
-          >
-            <Image
-              src="/branding/cara.png"
-              alt="cara"
-              width={140}
-              height={140}
-              className="absolute right-8 top-[-96px] h-[140px] w-[140px] object-contain"
-              priority
-            />
+        <section className={`absolute inset-0 z-[40] overflow-hidden md:hidden ${mobileStep === "login" ? "bg-[#4449CD]" : "bg-[#DDE0E5]"}`}>
+          {mobileStep === "login" ? (
+            <div
+              className={`absolute bottom-0 left-0 right-0 h-[78%] rounded-t-[28px] bg-[#DDE0E5] px-8 pb-8 pt-14 text-[#121633] transition-transform duration-700 ease-out ${
+                mobileFormVisible ? "translate-y-0" : "translate-y-full"
+              }`}
+            >
+              <Image
+                src="/branding/cara.png"
+                alt="cara"
+                width={140}
+                height={140}
+                className="absolute right-8 top-[-96px] h-[140px] w-[140px] object-contain"
+                priority
+              />
 
-            <p className="mb-[14px] text-[36px] font-extrabold leading-[36px]" style={{ fontFamily: "var(--font-login-heading)" }}>
-              TAWA Co
-            </p>
-            {mobileStep === "login" ? (
+              <p className="mb-[14px] text-[36px] font-extrabold leading-[36px]" style={{ fontFamily: "var(--font-login-heading)" }}>
+                TAWA Co
+              </p>
               <>
                 <h2 className="mt-[10px] max-w-[230px] text-[39px] font-black leading-[58px]" style={{ fontFamily: "var(--font-login-heading)" }}>
                   Bienvenido!
@@ -290,18 +324,20 @@ export default function LoginPage() {
                   </button>
                 </form>
               </>
-            ) : mobileStep === "space" ? (
-              <>
-                <h2
-                  className="mt-[96px] -mb-[24px] translate-y-[60px] text-center text-[31px] font-black leading-[1.1]"
-                  style={{ fontFamily: "var(--font-login-heading)" }}
-                >
-                  Elige tu espacio
-                </h2>
+            </div>
+          ) : (
+            <div className="mx-auto flex h-full w-full max-w-[420px] flex-col justify-center px-7 pb-8 pt-8 text-[#121633]">
+              <h2
+                className="text-center text-[31px] font-black leading-[1.1]"
+                style={{ fontFamily: "var(--font-login-mobile-title)" }}
+              >
+                {mobileStep === "space" ? "Elige tu espacio" : "Elige tu tienda"}
+              </h2>
 
-                <div className="mt-[130px] flex flex-col gap-[18px]" style={{ fontFamily: "var(--font-login-body)" }}>
+              {mobileStep === "space" ? (
+                <div className="mt-8 flex flex-col gap-4" style={{ fontFamily: "var(--font-login-body)" }}>
                   <button
-                    className="h-[66px] w-full rounded-full border-none bg-white text-center text-[24px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
+                    className="h-[62px] w-full rounded-full border-none bg-white text-center text-[20px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
                     style={{ boxShadow: "inset 0px 0px 0px 1px rgba(15,20,40,0.06)" }}
                     type="button"
                     onClick={() => router.push("/select-holding")}
@@ -310,45 +346,42 @@ export default function LoginPage() {
                   </button>
 
                   <button
-                    className="h-[66px] w-full rounded-full border-none bg-white text-center text-[24px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
+                    className="h-[62px] w-full rounded-full border-none bg-white text-center text-[20px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
                     style={{ boxShadow: "inset 0px 0px 0px 1px rgba(15,20,40,0.06)" }}
                     type="button"
                     onClick={() => setMobileStep("store")}
                   >
-                    Ir a Tienda
+                    Ir a tienda
                   </button>
                 </div>
-              </>
-            ) : (
-              <>
-                <h2
-                  className="mt-[96px] -mb-[24px] translate-y-[60px] text-center text-[31px] font-black leading-[1.1]"
-                  style={{ fontFamily: "var(--font-login-heading)" }}
-                >
-                  Elige tu tienda
-                </h2>
-
-                <div className="mt-[130px] flex flex-col gap-[18px]" style={{ fontFamily: "var(--font-login-body)" }}>
-                  <button
-                    className="h-[66px] w-full rounded-full border-none bg-white text-center text-[24px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
-                    style={{ boxShadow: "inset 0px 0px 0px 1px rgba(15,20,40,0.06)" }}
-                    type="button"
-                    onClick={() => router.push("/dashboard")}
-                  >
-                    demarca
-                  </button>
+              ) : (
+                <div className="mt-8 flex flex-col gap-4" style={{ fontFamily: "var(--font-login-body)" }}>
+                  {(mobileStores.length > 0 ? [...mobileStores].reverse() : [{ storeId: "demarca", storeName: "demarca" }]).map((store) => (
+                    <button
+                      key={store.storeId}
+                      className="h-[62px] w-full rounded-full border-none bg-white text-center text-[20px] text-[#666] transition-colors hover:bg-[#4449CD26] active:bg-[#4449CD26]"
+                      style={{ boxShadow: "inset 0px 0px 0px 1px rgba(15,20,40,0.06)" }}
+                      type="button"
+                      onClick={() => {
+                        localStorage.setItem("selectedStoreId", store.storeId);
+                        router.push("/dashboard");
+                      }}
+                    >
+                      {store.storeName.toLowerCase()}
+                    </button>
+                  ))}
 
                   <button
-                    className="h-[66px] w-full rounded-full border-2 border-dashed border-[#6142C4] bg-[#4449CC26] text-center text-[24px] text-[#6142C4] transition-all duration-200 hover:-translate-y-[1px] hover:border-[#5331bb] hover:bg-[#6142C429] hover:text-[#5331bb] hover:shadow-[0_10px_22px_rgba(97,66,196,0.22)] active:translate-y-0 active:bg-[#6142C433]"
+                    className="h-[62px] w-full rounded-full border-2 border-dashed border-[#6142C4] bg-[#4449CC26] text-center text-[20px] text-[#6142C4] transition-all duration-200 hover:-translate-y-[1px] hover:border-[#5331bb] hover:bg-[#6142C429] hover:text-[#5331bb] hover:shadow-[0_10px_22px_rgba(97,66,196,0.22)] active:translate-y-0 active:bg-[#6142C433]"
                     type="button"
                     onClick={() => router.push("/add-store")}
                   >
-                    + Agregar tienda
+                    + agregar tienda
                   </button>
                 </div>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </section>
       ) : null}
 
