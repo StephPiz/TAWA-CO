@@ -284,9 +284,30 @@ model Store {
   integrations      StoreIntegration[]
   webhookEvents     IntegrationWebhookEvent[]
   outboxEvents      IntegrationOutboxEvent[]
+  billingProfile    StoreBillingProfile?
 
   @@unique([holdingId, code])
   @@map("stores")
+}
+
+model StoreBillingProfile {
+  storeId        String   @id
+  companyName    String?
+  fiscalAddress  String?
+  countryCode    String?
+  city           String?
+  postalCode     String?
+  phone          String?
+  taxId          String?
+  billingEmail   String?
+  invoicePrefix  String?
+  fiscalCountry  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("store_billing_profiles")
 }
 
 model Product {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { requireTokenOrRedirect } from "./auth";
+import { handleUnauthorized, requireTokenOrRedirect } from "./auth";
 import { getSelectedStoreId } from "./access";
 
 const API_BASE = "http://localhost:3001";
@@ -32,6 +32,7 @@ export function usePresence(lastEventLabel: string) {
       const res = await fetch(`${API_BASE}/presence?${qs}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (handleUnauthorized(res.status)) return;
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Presence error");
@@ -47,7 +48,7 @@ export function usePresence(lastEventLabel: string) {
     const token = requireTokenOrRedirect();
     if (!token || !storeId) return;
     try {
-      await fetch(`${API_BASE}/presence/heartbeat`, {
+      const res = await fetch(`${API_BASE}/presence/heartbeat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -57,6 +58,7 @@ export function usePresence(lastEventLabel: string) {
           lastPath: typeof window !== "undefined" ? window.location.pathname : null,
         }),
       });
+      if (handleUnauthorized(res.status)) return;
     } catch {
       // Presence heartbeat is best effort.
     }

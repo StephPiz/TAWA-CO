@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import localFont from "next/font/local";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logout, requireTokenOrRedirect } from "../../lib/auth";
 
@@ -33,6 +33,7 @@ type StoreProfile = {
   name: string;
   description: string;
   logoUrl: string | null;
+  themeColor?: string | null;
   baseCurrencyCode: string;
   salesCountryCodes: string[];
   marketplaces: string[];
@@ -53,26 +54,198 @@ const COUNTRY_OPTIONS: Array<{ id: string; label: string; tax: string }> = [
   { id: "PL", label: "Polonia 🇵🇱", tax: "VAT 23%" },
   { id: "FR", label: "Francia 🇫🇷", tax: "TVA 20%" },
   { id: "PE", label: "Perú 🇵🇪", tax: "IGV 18%" },
+  { id: "AR", label: "Argentina 🇦🇷", tax: "IVA 21%" },
+  { id: "MX", label: "México 🇲🇽", tax: "IVA 16%" },
+  { id: "BR", label: "Brasil 🇧🇷", tax: "ICMS/ISS (según estado/municipio)" },
+  { id: "CL", label: "Chile 🇨🇱", tax: "IVA 19%" },
+  { id: "CO", label: "Colombia 🇨🇴", tax: "IVA 19%" },
+  { id: "EC", label: "Ecuador 🇪🇨", tax: "IVA 15%" },
+  { id: "US", label: "Estados Unidos 🇺🇸", tax: "Sales Tax (según estado)" },
+  { id: "GB", label: "Reino Unido 🇬🇧", tax: "VAT 20%" },
+  { id: "IE", label: "Irlanda 🇮🇪", tax: "VAT 23%" },
+  { id: "NL", label: "Países Bajos 🇳🇱", tax: "BTW 21%" },
+  { id: "BE", label: "Bélgica 🇧🇪", tax: "VAT 21%" },
+  { id: "AT", label: "Austria 🇦🇹", tax: "USt 20%" },
+  { id: "CH", label: "Suiza 🇨🇭", tax: "MWST 8.1%" },
+  { id: "SE", label: "Suecia 🇸🇪", tax: "Moms 25%" },
+  { id: "NO", label: "Noruega 🇳🇴", tax: "MVA 25%" },
+  { id: "DK", label: "Dinamarca 🇩🇰", tax: "MOMS 25%" },
+  { id: "FI", label: "Finlandia 🇫🇮", tax: "VAT 25.5%" },
+  { id: "TR", label: "Turquía 🇹🇷", tax: "KDV 20%" },
+  { id: "CN", label: "China 🇨🇳", tax: "VAT 13%" },
+  { id: "JP", label: "Japón 🇯🇵", tax: "JCT 10%" },
 ];
+
+const MAX_EXTRA_BRAND_COLORS = 3;
+
+const MARKETPLACE_SEARCH_OPTIONS = [
+  "Shopify",
+  "Idealo ES",
+  "Idealo DE",
+  "Amazon",
+  "eBay",
+  "Worten",
+  "KuantoKusta",
+];
+
+const CURRENCY_OPTIONS = [
+  { code: "EUR", label: "EURO €" },
+  { code: "USD", label: "DÓLAR $" },
+  { code: "PEN", label: "SOLES S/" },
+  { code: "CNY", label: "YUANES ¥" },
+  { code: "TRY", label: "LIRA TURCA ₺" },
+  { code: "PLN", label: "ZLOTY zł" },
+];
+
+const HIDDEN_WAREHOUSE_LABELS = new Set(["ES-MAD", "IT-MIL"]);
+
+function normalizeWarehouseLabel(raw: string) {
+  return String(raw || "").trim().toUpperCase();
+}
+
+function isVisibleWarehouseLabel(raw: string) {
+  const label = normalizeWarehouseLabel(raw);
+  if (!label) return false;
+  return !HIDDEN_WAREHOUSE_LABELS.has(label);
+}
+
+function sanitizeWarehouseRows(rows: Array<{ id?: string; label?: string; active?: boolean }>): ToggleItem[] {
+  const byLabel = new Map<string, ToggleItem>();
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const label = normalizeWarehouseLabel(String(row.label || ""));
+    if (!isVisibleWarehouseLabel(label)) continue;
+    const id = String(row.id || label.toLowerCase().replace(/\s+/g, "-"));
+    const current = byLabel.get(label);
+    if (current) {
+      byLabel.set(label, { ...current, active: current.active || Boolean(row.active) });
+    } else {
+      byLabel.set(label, {
+        id,
+        label,
+        active: Boolean(row.active),
+      });
+    }
+  }
+  return Array.from(byLabel.values());
+}
+
+function sanitizeMarketplaceRows(rows: Array<{ id?: string; label?: string; active?: boolean }>): ToggleItem[] {
+  const byLabel = new Map<string, ToggleItem>();
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const label = String(row.label || "").trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    const id = String(row.id || key.replace(/\s+/g, "-"));
+    const current = byLabel.get(key);
+    if (current) {
+      byLabel.set(key, { ...current, active: current.active || Boolean(row.active) });
+    } else {
+      byLabel.set(key, { id, label, active: Boolean(row.active) });
+    }
+  }
+  return Array.from(byLabel.values());
+}
+
+const BILLING_CITIES_BY_COUNTRY: Record<string, string[]> = {
+  IE: ["Dublín", "Cork", "Galway", "Limerick", "Waterford"],
+  ES: ["Madrid", "Barcelona", "Valencia", "Sevilla", "Bilbao"],
+  IT: ["Roma", "Milán", "Nápoles", "Turín", "Florencia"],
+  PT: ["Lisboa", "Oporto", "Braga", "Coímbra", "Faro"],
+  DE: ["Berlín", "Múnich", "Hamburgo", "Colonia", "Fráncfort"],
+  FR: ["París", "Lyon", "Marsella", "Toulouse", "Niza"],
+  PE: ["Lima", "Arequipa", "Trujillo", "Cusco", "Piura"],
+};
 
 function flagFromCountryCode(code: string) {
   if (!/^[A-Z]{2}$/.test(code)) return "";
   return String.fromCodePoint(...[...code].map((c) => 127397 + c.charCodeAt(0)));
 }
 
+function fallbackTaxLabelByCountry(code: string) {
+  const c = String(code || "").toUpperCase();
+  if (!c) return "Impuesto local";
+  if (c === "US") return "Sales Tax (según estado)";
+  if (c === "CA") return "GST/HST (según provincia)";
+  if (c === "AU" || c === "NZ") return "GST 10%";
+  if (c === "JP") return "JCT 10%";
+  if (c === "CN") return "VAT 13%";
+  if (c === "IN") return "GST 18% (promedio)";
+  if (c === "BR") return "ICMS/ISS (según estado/municipio)";
+  if (c === "AR") return "IVA 21%";
+  if (c === "CL") return "IVA 19%";
+  if (c === "CO") return "IVA 19%";
+  if (c === "EC") return "IVA 15%";
+  if (c === "PE") return "IGV 18%";
+  if (c === "MX") return "IVA 16%";
+  if (c === "UY") return "IVA 22%";
+  if (c === "PY") return "IVA 10%";
+  if (c === "BO") return "IVA 13%";
+  if (c === "VE") return "IVA 16%";
+  if (c === "GB") return "VAT 20%";
+  if (c === "IE") return "VAT 23%";
+  if (c === "NL") return "BTW 21%";
+  if (c === "BE") return "VAT 21%";
+  if (c === "AT") return "USt 20%";
+  if (c === "CH") return "MWST 8.1%";
+  if (c === "SE") return "Moms 25%";
+  if (c === "NO") return "MVA 25%";
+  if (c === "DK") return "MOMS 25%";
+  if (c === "FI") return "VAT 25.5%";
+  if (c === "TR") return "KDV 20%";
+  if (c === "AE" || c === "SA") return "VAT 15%";
+  return "VAT/GST local";
+}
+
+function countryLabelWithFlag(
+  id: string,
+  fallbackLabel: string,
+  options: Array<{ id: string; label: string }>
+) {
+  const byId = options.find((item) => item.id === id)?.label;
+  if (byId) return byId;
+  const flag = flagFromCountryCode(id);
+  if (!flag) return fallbackLabel;
+  return fallbackLabel.includes(flag) ? fallbackLabel : `${fallbackLabel} ${flag}`;
+}
+
 const FALLBACK_REGION_CODES = [
   "AD","AE","AF","AG","AI","AL","AM","AO","AQ","AR","AS","AT","AU","AW","AX","AZ","BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BQ","BR","BS","BT","BV","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK","CL","CM","CN","CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM","DO","DZ","EC","EE","EG","EH","ER","ES","ET","FI","FJ","FK","FM","FO","FR","GA","GB","GD","GE","GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GS","GT","GU","GW","GY","HK","HM","HN","HR","HT","HU","ID","IE","IL","IM","IN","IO","IQ","IR","IS","IT","JE","JM","JO","JP","KE","KG","KH","KI","KM","KN","KP","KR","KW","KY","KZ","LA","LB","LC","LI","LK","LR","LS","LT","LU","LV","LY","MA","MC","MD","ME","MF","MG","MH","MK","ML","MM","MN","MO","MP","MQ","MR","MS","MT","MU","MV","MW","MX","MY","MZ","NA","NC","NE","NF","NG","NI","NL","NO","NP","NR","NU","NZ","OM","PA","PE","PF","PG","PH","PK","PL","PM","PN","PR","PS","PT","PW","PY","QA","RE","RO","RS","RU","RW","SA","SB","SC","SD","SE","SG","SH","SI","SJ","SK","SL","SM","SN","SO","SR","SS","ST","SV","SX","SY","SZ","TC","TD","TF","TG","TH","TJ","TK","TL","TM","TN","TO","TR","TT","TV","TW","TZ","UA","UG","UM","US","UY","UZ","VA","VC","VE","VG","VI","VN","VU","WF","WS","YE","YT","ZA","ZM","ZW",
 ] as const;
+const API_BASE = "http://localhost:3001";
+
+function toAbsoluteLogoUrl(value: string | null | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/")) return `${API_BASE}${raw}`;
+  return `${API_BASE}/${raw}`;
+}
+
+function toApiLogoPath(value: string | null | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith(API_BASE)) return raw.slice(API_BASE.length) || null;
+  return raw;
+}
 
 const menu: MenuItem[] = [
   { key: "dashboard", label: "Dashboard", path: "/store/dashboard", isMain: true },
   { key: "inventario", label: "Inventario", path: "/store/inventory", isMain: true },
   { key: "escaner", label: "Escaner", path: "/store/scanner", indent: 1 },
   { key: "productos", label: "Productos", path: "/store/products", indent: 1 },
+  { key: "almacenes", label: "Almacenes", path: "/store/inventory", isMain: true },
+  { key: "almacenes-lista", label: "Lista de Almacenes", path: "/store/inventory", indent: 1 },
+  { key: "es-seg", label: "ES-SEG", emptyText: "ES-SEG aun esta vacio.", indent: 2 },
+  { key: "almacenes-mapa", label: "Mapa de Almacén", emptyText: "Mapa de Almacén aun esta vacio.", indent: 3 },
+  { key: "almacenes-agregar", label: "Agregar Almacén", path: "/add-store", indent: 1 },
+  { key: "almacenes-inventario", label: "Inventario por Almacén", path: "/store/inventory", indent: 1 },
+  { key: "almacenes-movimientos", label: "Movimiento de Stock", path: "/store/inventory", indent: 1 },
   { key: "proveedores", label: "Proveedores", path: "/store/suppliers", isMain: true },
   { key: "compras", label: "Compras", path: "/store/purchases", indent: 1 },
   { key: "tracking", label: "Tracking", emptyText: "Tracking aun esta vacio.", indent: 1 },
-  { key: "marketplaces", label: "Marketplaces", isMain: true, isGroup: true },
+  { key: "marketplaces", label: "Canales", isMain: true, isGroup: true },
   { key: "shopify-demarca", label: "Shopify Demarca", path: "/store/orders", indent: 1 },
   { key: "pedidos", label: "Pedidos", path: "/store/orders", indent: 2 },
   { key: "clientes", label: "Clientes", path: "/store/customers", indent: 2 },
@@ -80,8 +253,6 @@ const menu: MenuItem[] = [
   { key: "devoluciones", label: "Devoluciones", path: "/store/returns", indent: 2 },
   { key: "payouts", label: "Payouts", path: "/store/payouts", indent: 2 },
   { key: "facturas", label: "Facturas", path: "/store/invoices", indent: 2 },
-  { key: "almacenes", label: "Almacenes", path: "/store/inventory", isMain: true },
-  { key: "es-seg", label: "ES-SEG", emptyText: "ES-SEG aun esta vacio.", indent: 1 },
   { key: "3pl", label: "3PL", path: "/store/3pl", isMain: true },
   { key: "finanzas", label: "Finanzas", path: "/store/payouts", isMain: true },
   { key: "tareas", label: "Tareas", path: "/store/tasks", isMain: true },
@@ -133,12 +304,15 @@ export default function DashboardDemarcaPage() {
   const router = useRouter();
   const [activeKey, setActiveKey] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [searchError, setSearchError] = useState("");
   const [showStoreProfile, setShowStoreProfile] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTabKey>("general");
   const [profileEditable, setProfileEditable] = useState(false);
-  const [brandColors, setBrandColors] = useState(["#B7D1CE", "#8D79E5", "#D4A7F0"]);
+  const [brandColors, setBrandColors] = useState<string[]>(["#6456DF"]);
+  const [selectedBrandColor, setSelectedBrandColor] = useState("#6456DF");
+  const [editingColorIndex, setEditingColorIndex] = useState<number | null>(null);
   const [fiscalCountry, setFiscalCountry] = useState("ES");
   const [countryRows, setCountryRows] = useState<ToggleItem[]>([
     { id: "ES", label: "España 🇪🇸", active: true },
@@ -155,16 +329,60 @@ export default function DashboardDemarcaPage() {
     { id: "idealo-de", label: "Idealo DE", active: true },
   ]);
   const [showMonedasMarketplaceForm, setShowMonedasMarketplaceForm] = useState(false);
+  const [showMarketplacesAddForm, setShowMarketplacesAddForm] = useState(false);
   const [showAlmacenesAddForm, setShowAlmacenesAddForm] = useState(false);
   const [selectedBaseCurrency, setSelectedBaseCurrency] = useState("");
   const [usesMultipleCurrencies, setUsesMultipleCurrencies] = useState<boolean | null>(null);
   const [exchangeMode, setExchangeMode] = useState<"api" | "manual">("manual");
   const [notifyFxChange, setNotifyFxChange] = useState(false);
+  const [selectedAdditionalCurrency, setSelectedAdditionalCurrency] = useState("");
+  const [fxManualRate, setFxManualRate] = useState("");
+  const [fxApiRate, setFxApiRate] = useState<number | null>(null);
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxError, setFxError] = useState("");
+  const [fxAmountOriginal, setFxAmountOriginal] = useState("100");
+  const [fxThresholdPercent, setFxThresholdPercent] = useState("");
+  const [monedasSaveError, setMonedasSaveError] = useState("");
+  const [monedasSaveOk, setMonedasSaveOk] = useState("");
+  const [monedasSaving, setMonedasSaving] = useState(false);
   const [warehouseRows, setWarehouseRows] = useState<ToggleItem[]>([
     { id: "es-seg", label: "ES-SEG", active: true },
   ]);
   const [newMarketplaceLabel, setNewMarketplaceLabel] = useState("");
+  const [selectedMarketplaceOption, setSelectedMarketplaceOption] = useState("");
   const [newWarehouseLabel, setNewWarehouseLabel] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoUploadError, setLogoUploadError] = useState("");
+  const [generalSaveError, setGeneralSaveError] = useState("");
+  const [generalSaveOk, setGeneralSaveOk] = useState("");
+  const [generalSaving, setGeneralSaving] = useState(false);
+  const [countriesSaveError, setCountriesSaveError] = useState("");
+  const [countriesSaveOk, setCountriesSaveOk] = useState("");
+  const [countriesSaving, setCountriesSaving] = useState(false);
+  const [factSaveError, setFactSaveError] = useState("");
+  const [factSaveOk, setFactSaveOk] = useState("");
+  const [factSaving, setFactSaving] = useState(false);
+  const [almacenesSaveError, setAlmacenesSaveError] = useState("");
+  const [almacenesSaveOk, setAlmacenesSaveOk] = useState("");
+  const [almacenesSaving, setAlmacenesSaving] = useState(false);
+  const [canalesSaveError, setCanalesSaveError] = useState("");
+  const [canalesSaveOk, setCanalesSaveOk] = useState("");
+  const [canalesSaving, setCanalesSaving] = useState(false);
+  const [billingCompany, setBillingCompany] = useState("");
+  const [billingAddress, setBillingAddress] = useState("");
+  const [billingCountry, setBillingCountry] = useState("");
+  const [billingCity, setBillingCity] = useState("");
+  const [billingPostalCode, setBillingPostalCode] = useState("");
+  const [billingPhone, setBillingPhone] = useState("");
+  const [billingTaxId, setBillingTaxId] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [billingPrefix, setBillingPrefix] = useState("DEM - 2026 -");
+  const [billingFiscalCountry, setBillingFiscalCountry] = useState("");
+  const [showInvoiceTemplatePreview, setShowInvoiceTemplatePreview] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const colorPickerRef = useRef<HTMLInputElement | null>(null);
+  const hasSavedWarehousesRef = useRef(false);
+  const hasSavedCanalesRef = useRef(false);
   const [profile, setProfile] = useState<StoreProfile>({
     name: "demarca",
     description: "Tienda de accesorios de marca",
@@ -217,7 +435,7 @@ export default function DashboardDemarcaPage() {
           return {
             id,
             label: flag ? `${name} ${flag}` : name,
-            tax: taxById.get(id) || "Normativa local",
+            tax: taxById.get(id) || fallbackTaxLabelByCountry(id),
           };
         })
         .sort((a, b) => a.label.localeCompare(b.label, "es"));
@@ -249,14 +467,29 @@ export default function DashboardDemarcaPage() {
       .sort((a, b) => a.label.localeCompare(b.label, "es"));
   }, []);
 
-  const fiscalCountryLabel = useMemo(
-    () => allCountryOptions.find((item) => item.id === fiscalCountry)?.label ?? "España 🇪🇸",
-    [allCountryOptions, fiscalCountry]
-  );
+  const fiscalCountryLabel = useMemo(() => {
+    const fromPaisesTab = facturacionCountryOptions.find((item) => item.id === fiscalCountry)?.label;
+    if (fromPaisesTab) return fromPaisesTab;
+    const fromGeneralFallback = allCountryOptions.find((item) => item.id === fiscalCountry)?.label;
+    if (fromGeneralFallback) return fromGeneralFallback;
+    return fiscalCountry || "España 🇪🇸";
+  }, [facturacionCountryOptions, allCountryOptions, fiscalCountry]);
   const fiscalCountryTax = useMemo(
     () => allCountryOptions.find((item) => item.id === fiscalCountry)?.tax ?? "IVA 21%",
     [allCountryOptions, fiscalCountry]
   );
+  const billingCityOptions = useMemo(() => {
+    const code = String(billingCountry || "").toUpperCase();
+    return BILLING_CITIES_BY_COUNTRY[code] || [];
+  }, [billingCountry]);
+  const fxAmountNumber = Number(fxAmountOriginal);
+  const fxManualRateNumber = Number(fxManualRate);
+  const activeFxRate =
+    exchangeMode === "api" ? fxApiRate : Number.isFinite(fxManualRateNumber) && fxManualRateNumber > 0 ? fxManualRateNumber : null;
+  const fxConvertedAmount =
+    Number.isFinite(fxAmountNumber) && fxAmountNumber > 0 && activeFxRate
+      ? Number((fxAmountNumber * activeFxRate).toFixed(2))
+      : null;
 
   useEffect(() => {
     const token = requireTokenOrRedirect();
@@ -268,13 +501,106 @@ export default function DashboardDemarcaPage() {
       return;
     }
 
+    try {
+      const savedMonedasRaw = localStorage.getItem(`store-monedas-config:${selectedStoreId}`);
+      if (savedMonedasRaw) {
+        const savedMonedas = JSON.parse(savedMonedasRaw) as {
+          baseCurrencyCode?: string;
+          additionalCurrencyCode?: string | null;
+          usesMultipleCurrencies?: boolean | null;
+          exchangeMode?: "api" | "manual";
+          notifyFxChange?: boolean;
+          notifyThresholdPercent?: string;
+          manualRate?: string | null;
+        };
+        if (savedMonedas.baseCurrencyCode) {
+          const base = String(savedMonedas.baseCurrencyCode).toUpperCase();
+          setSelectedBaseCurrency(base);
+          setProfile((prev) => ({ ...prev, baseCurrencyCode: base }));
+        }
+        if (savedMonedas.additionalCurrencyCode) setSelectedAdditionalCurrency(String(savedMonedas.additionalCurrencyCode).toUpperCase());
+        if (savedMonedas.usesMultipleCurrencies !== undefined) setUsesMultipleCurrencies(savedMonedas.usesMultipleCurrencies ?? null);
+        if (savedMonedas.exchangeMode === "api" || savedMonedas.exchangeMode === "manual") setExchangeMode(savedMonedas.exchangeMode);
+        if (typeof savedMonedas.notifyFxChange === "boolean") setNotifyFxChange(savedMonedas.notifyFxChange);
+        if (savedMonedas.notifyThresholdPercent) setFxThresholdPercent(String(savedMonedas.notifyThresholdPercent));
+        if (savedMonedas.manualRate) setFxManualRate(String(savedMonedas.manualRate));
+      }
+    } catch {}
+    try {
+      const savedCanalesRaw = localStorage.getItem(`store-marketplaces-config:${selectedStoreId}`);
+      if (savedCanalesRaw) {
+        const savedRows = JSON.parse(savedCanalesRaw) as Array<{ id?: string; label?: string; active?: boolean }>;
+        if (Array.isArray(savedRows) && savedRows.length) {
+          const normalized = sanitizeMarketplaceRows(savedRows);
+          if (normalized.length) {
+            hasSavedCanalesRef.current = true;
+            setMarketplaceRows(normalized);
+            setProfile((prev) => ({
+              ...prev,
+              marketplaces: normalized.filter((m) => m.active).map((m) => m.label),
+            }));
+          }
+        }
+      }
+    } catch {}
+    try {
+      const savedWarehousesRaw = localStorage.getItem(`store-warehouses-config:${selectedStoreId}`);
+      if (savedWarehousesRaw) {
+        const savedRows = JSON.parse(savedWarehousesRaw) as Array<{ id?: string; label?: string; active?: boolean }>;
+        if (Array.isArray(savedRows) && savedRows.length) {
+          const normalized = sanitizeWarehouseRows(savedRows);
+          if (normalized.length) {
+            hasSavedWarehousesRef.current = true;
+            setWarehouseRows(normalized);
+            setProfile((prev) => ({
+              ...prev,
+              warehouses: normalized.filter((w) => w.active).map((w) => w.label),
+            }));
+          }
+        }
+      }
+    } catch {}
+    try {
+      const savedFactRaw = localStorage.getItem(`store-facturacion-config:${selectedStoreId}`);
+      if (savedFactRaw) {
+        const savedFact = JSON.parse(savedFactRaw) as {
+          company?: string;
+          address?: string;
+          country?: string;
+          city?: string;
+          postalCode?: string;
+          phone?: string;
+          taxId?: string;
+          email?: string;
+          prefix?: string;
+          fiscalCountry?: string;
+        };
+        setBillingCompany(String(savedFact.company || ""));
+        setBillingAddress(String(savedFact.address || ""));
+        setBillingCountry(String(savedFact.country || ""));
+        setBillingCity(String(savedFact.city || ""));
+        setBillingPostalCode(String(savedFact.postalCode || ""));
+        setBillingPhone(String(savedFact.phone || ""));
+        setBillingTaxId(String(savedFact.taxId || ""));
+        setBillingEmail(String(savedFact.email || ""));
+        setBillingPrefix(String(savedFact.prefix || "DEM - 2026 -"));
+        setBillingFiscalCountry(String(savedFact.fiscalCountry || ""));
+      }
+    } catch {}
+
     (async () => {
       try {
-        const res = await fetch(`http://localhost:3001/stores/${selectedStoreId}/bootstrap`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!res.ok) return;
+        const [bootstrapRes, billingRes] = await Promise.all([
+          fetch(`http://localhost:3001/stores/${selectedStoreId}/bootstrap`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`http://localhost:3001/stores/${selectedStoreId}/billing-profile`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        const data = await bootstrapRes.json();
+        const billingData = await billingRes.json().catch(() => ({}));
+        if (!bootstrapRes.ok) return;
         const store = data?.store || {};
         const channels = Array.isArray(data?.channels) ? data.channels : [];
         const warehouses = Array.isArray(data?.warehouses) ? data.warehouses : [];
@@ -289,39 +615,120 @@ export default function DashboardDemarcaPage() {
           ...prev,
           name: String(store?.name || prev.name).toLowerCase(),
           description: String(store?.description || prev.description),
-          logoUrl: store?.logoUrl ? `http://localhost:3001${String(store.logoUrl)}` : prev.logoUrl,
+          logoUrl: toAbsoluteLogoUrl(store?.logoUrl) || prev.logoUrl,
+          themeColor: store?.themeColor ? String(store.themeColor) : prev.themeColor,
           baseCurrencyCode: String(store?.baseCurrencyCode || prev.baseCurrencyCode),
           salesCountryCodes: countryCodes,
           marketplaces: channels.map((c: { name?: string }) => String(c.name || "")).filter(Boolean),
-          warehouses: warehouses.map((w: { code?: string; name?: string }) => String(w.code || w.name || "")).filter(Boolean),
+          warehouses: warehouses
+            .map((w: { code?: string; name?: string }) => normalizeWarehouseLabel(String(w.code || w.name || "")))
+            .filter(isVisibleWarehouseLabel),
         }));
-        if (countryCodes[0]) setFiscalCountry(countryCodes[0]);
+        const baseCurrencyBoot = String(store?.baseCurrencyCode || "").trim().toUpperCase();
+        if (baseCurrencyBoot) setSelectedBaseCurrency(baseCurrencyBoot);
+        const billingProfile = billingData?.profile || null;
+        if (billingProfile) {
+          setBillingCompany(String(billingProfile.companyName || ""));
+          setBillingAddress(String(billingProfile.fiscalAddress || ""));
+          setBillingCountry(String(billingProfile.countryCode || ""));
+          setBillingCity(String(billingProfile.city || ""));
+          setBillingPostalCode(String(billingProfile.postalCode || ""));
+          setBillingPhone(String(billingProfile.phone || ""));
+          setBillingTaxId(String(billingProfile.taxId || ""));
+          setBillingEmail(String(billingProfile.billingEmail || ""));
+          setBillingPrefix(String(billingProfile.invoicePrefix || "DEM - 2026 -"));
+          setBillingFiscalCountry(String(billingProfile.fiscalCountry || ""));
+        } else if (store?.invoicePrefix) {
+          setBillingPrefix(String(store.invoicePrefix));
+        }
+        const incomingThemeColor = String(store?.themeColor || "").trim();
+        if (/^#[0-9A-Fa-f]{6}$/.test(incomingThemeColor)) {
+          const normalizedColor = incomingThemeColor.toUpperCase();
+          setBrandColors([normalizedColor]);
+          setSelectedBrandColor(normalizedColor);
+        }
+        const bootFiscal = String(store?.fiscalCountryCode || "").trim().toUpperCase();
+        if (bootFiscal) {
+          setFiscalCountry(bootFiscal);
+        } else if (countryCodes[0]) {
+          setFiscalCountry(countryCodes[0]);
+        }
         if (countryCodes.length) {
           setCountryRows((prev) =>
             prev.map((row) => ({ ...row, active: countryCodes.includes(row.id) }))
           );
         }
-        if (channels.length) {
+        if (channels.length && !hasSavedCanalesRef.current) {
           setMarketplaceRows(
-            channels.map((c: { name?: string }, idx: number) => ({
+            sanitizeMarketplaceRows(channels.map((c: { name?: string }, idx: number) => ({
               id: `${idx}-${String(c.name || "").toLowerCase()}`,
               label: String(c.name || "Canal"),
               active: true,
-            }))
+            })))
           );
         }
-        if (warehouses.length) {
-          setWarehouseRows(
+        if (warehouses.length && !hasSavedWarehousesRef.current) {
+          const incomingWarehouses = sanitizeWarehouseRows(
             warehouses.map((w: { code?: string; name?: string }, idx: number) => ({
-              id: `${idx}-${String(w.code || w.name || "").toLowerCase()}`,
-              label: String(w.code || w.name || "WH"),
+              id: `${idx}-${normalizeWarehouseLabel(String(w.code || w.name || "WH")).toLowerCase()}`,
+              label: normalizeWarehouseLabel(String(w.code || w.name || "WH")),
               active: true,
             }))
           );
+          const hasEsSeg = incomingWarehouses.some((w) => String(w.label).trim().toUpperCase() === "ES-SEG");
+          setWarehouseRows(hasEsSeg ? incomingWarehouses : [{ id: "es-seg", label: "ES-SEG", active: true }, ...incomingWarehouses]);
         }
       } catch {}
     })();
   }, [router, storeName]);
+
+  useEffect(() => {
+    const from = String(selectedAdditionalCurrency || "").toUpperCase();
+    const to = String(selectedBaseCurrency || "").toUpperCase();
+
+    if (exchangeMode !== "api" || !from || !to) {
+      setFxApiRate(null);
+      setFxError("");
+      return;
+    }
+    if (from === to) {
+      setFxApiRate(1);
+      setFxError("");
+      return;
+    }
+
+    const token = requireTokenOrRedirect();
+    if (!token) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setFxLoading(true);
+        setFxError("");
+        const res = await fetch(
+          `http://localhost:3001/stores/${selectedStoreId}/fx-rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(String(data?.error || `status ${res.status}`));
+        if (cancelled) return;
+        const rate = Number(data?.rate);
+        setFxApiRate(Number.isFinite(rate) && rate > 0 ? rate : null);
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setFxApiRate(null);
+        setFxError(err instanceof Error ? err.message : "No se pudo obtener tipo de cambio");
+      } finally {
+        if (!cancelled) setFxLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [exchangeMode, selectedAdditionalCurrency, selectedBaseCurrency]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -344,6 +751,33 @@ export default function DashboardDemarcaPage() {
     hour: "2-digit",
     minute: "2-digit",
   }).format(now);
+  const invoiceDateShort = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  }).format(now);
+  const invoiceNumberPreview = `${billingPrefix || "DEM-2026-"}000001`;
+  const invoiceCurrency = selectedBaseCurrency || profile.baseCurrencyCode || "EUR";
+  const currencySymbolByCode: Record<string, string> = {
+    EUR: "€",
+    USD: "$",
+    PEN: "S/",
+    CNY: "¥",
+    TRY: "₺",
+    PLN: "zł",
+  };
+  const invoiceSymbol = currencySymbolByCode[invoiceCurrency] || invoiceCurrency;
+  const sampleInvoiceItems = [
+    { description: "Item 1", price: 30, qty: 1 },
+    { description: "Item 2", price: 40, qty: 1 },
+    { description: "Item 3", price: 20, qty: 1 },
+    { description: "Item 4", price: 60, qty: 1 },
+  ];
+  const previewSubtotal = sampleInvoiceItems.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const taxMatch = String(fiscalCountryTax || "").match(/(\d+(?:[.,]\d+)?)/);
+  const previewTaxPercent = taxMatch ? Number(String(taxMatch[1]).replace(",", ".")) : 21;
+  const previewTaxAmount = Number((previewSubtotal * (previewTaxPercent / 100)).toFixed(2));
+  const previewTotal = Number((previewSubtotal + previewTaxAmount).toFixed(2));
 
   const activeItem = useMemo(
     () => menu.find((item) => item.key === activeKey) || menu[0],
@@ -356,9 +790,6 @@ export default function DashboardDemarcaPage() {
       const next = prev.map((item) => (item.id === id ? { ...item, active: !item.active } : item));
       const activeCodes = next.filter((item) => item.active).map((item) => item.id);
       setProfile((profilePrev) => ({ ...profilePrev, salesCountryCodes: activeCodes }));
-      if (activeCodes.length && !activeCodes.includes(fiscalCountry)) {
-        setFiscalCountry(activeCodes[0]);
-      }
       return next;
     });
   }
@@ -414,27 +845,39 @@ export default function DashboardDemarcaPage() {
     setShowStoreProfile(false);
   }
 
-  function addMarketplace() {
-    if (!profileEditable) return;
-    const value = newMarketplaceLabel.trim();
+  function addMarketplaceByValue(rawValue: string, force = false) {
+    if (!profileEditable && !force) return false;
+    const value = rawValue.trim();
     if (!value) return;
     const id = value.toLowerCase().replace(/\s+/g, "-");
     setMarketplaceRows((prev) => {
-      if (prev.some((item) => item.id === id || item.label.toLowerCase() === value.toLowerCase())) return prev;
-      const next = [...prev, { id, label: value, active: true }];
+      const existingIdx = prev.findIndex((item) => item.id === id || item.label.toLowerCase() === value.toLowerCase());
+      let next: ToggleItem[];
+      if (existingIdx >= 0) {
+        next = prev.map((item, idx) => (idx === existingIdx ? { ...item, active: true } : item));
+      } else {
+        next = [...prev, { id, label: value, active: true }];
+      }
       setProfile((profilePrev) => ({
         ...profilePrev,
         marketplaces: next.filter((item) => item.active).map((item) => item.label),
       }));
       return next;
     });
+    return true;
+  }
+
+  function addMarketplace() {
+    const added = addMarketplaceByValue(newMarketplaceLabel);
+    if (!added) return;
     setNewMarketplaceLabel("");
   }
 
   function addWarehouse() {
     if (!profileEditable) return;
-    const value = newWarehouseLabel.trim().toUpperCase();
+    const value = normalizeWarehouseLabel(newWarehouseLabel);
     if (!value) return;
+    if (!isVisibleWarehouseLabel(value)) return;
     const id = value.toLowerCase().replace(/\s+/g, "-");
     setWarehouseRows((prev) => {
       if (prev.some((item) => item.id === id || item.label.toLowerCase() === value.toLowerCase())) return prev;
@@ -448,7 +891,394 @@ export default function DashboardDemarcaPage() {
     setNewWarehouseLabel("");
   }
 
+  async function saveGeneralProfile() {
+    if (!profileEditable || generalSaving) return;
+    const token = requireTokenOrRedirect();
+    if (!token) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+
+    try {
+      setGeneralSaveError("");
+      setGeneralSaveOk("");
+      setGeneralSaving(true);
+
+      const res = await fetch(`${API_BASE}/stores/${selectedStoreId}/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: profile.name?.trim(),
+          description: profile.description?.trim(),
+          logoUrl: toApiLogoPath(profile.logoUrl),
+          themeColor: selectedBrandColor || brandColors[0] || null,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        store?: { name?: string; description?: string | null; logoUrl?: string | null; themeColor?: string | null };
+      };
+      if (!res.ok) {
+        if (res.status === 401) {
+          logout();
+          return;
+        }
+        throw new Error(payload.error || "No se pudo guardar la información general.");
+      }
+
+      const updatedName = String(payload.store?.name || profile.name).trim();
+      const updatedDescription = String(payload.store?.description || profile.description).trim();
+      const updatedLogo = toAbsoluteLogoUrl(payload.store?.logoUrl) || profile.logoUrl;
+      const updatedTheme = String(payload.store?.themeColor || selectedBrandColor || "").trim().toUpperCase();
+
+      setProfile((prev) => ({
+        ...prev,
+        name: updatedName,
+        description: updatedDescription,
+        logoUrl: updatedLogo,
+        themeColor: updatedTheme || prev.themeColor,
+      }));
+      if (updatedTheme) {
+        setBrandColors([updatedTheme]);
+        setSelectedBrandColor(updatedTheme);
+      }
+
+      try {
+        const storesRaw = localStorage.getItem("stores");
+        const currentStoreId = localStorage.getItem("selectedStoreId");
+        if (storesRaw && currentStoreId) {
+          const rows = JSON.parse(storesRaw) as Array<{ storeId: string; storeName: string }>;
+          const nextRows = rows.map((row) => (row.storeId === currentStoreId ? { ...row, storeName: updatedName } : row));
+          localStorage.setItem("stores", JSON.stringify(nextRows));
+        }
+      } catch {}
+
+      setProfileEditable(false);
+      setGeneralSaveOk("Información general guardada.");
+    } catch (err) {
+      setGeneralSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setGeneralSaving(false);
+    }
+  }
+
+  async function handleProfileLogoChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLogoUploadError("");
+    if (!file.type.startsWith("image/")) {
+      setLogoUploadError("Solo se permiten imágenes.");
+      event.target.value = "";
+      return;
+    }
+
+    const token = requireTokenOrRedirect();
+    if (!token) return;
+
+    try {
+      setLogoUploading(true);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch(`${API_BASE}/uploads/store-logo`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ dataUrl }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; path?: string };
+      if (!res.ok) {
+        if (res.status === 401) {
+          logout();
+          return;
+        }
+        throw new Error(payload.error || "No se pudo subir el logo.");
+      }
+      const nextUrl = payload.path ? toAbsoluteLogoUrl(payload.path) : "";
+      if (!nextUrl) throw new Error("No se recibió ruta de logo.");
+      setProfile((prev) => ({ ...prev, logoUrl: nextUrl }));
+    } catch (err) {
+      setLogoUploadError(err instanceof Error ? err.message : "Error al subir logo.");
+    } finally {
+      setLogoUploading(false);
+      event.target.value = "";
+    }
+  }
+
+  async function saveCountriesProfile() {
+    if (!profileEditable || countriesSaving) return;
+    const token = requireTokenOrRedirect();
+    if (!token) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+
+    try {
+      setCountriesSaveError("");
+      setCountriesSaveOk("");
+      setCountriesSaving(true);
+
+      const res = await fetch(`${API_BASE}/stores/${selectedStoreId}/profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          fiscalCountryCode: fiscalCountry,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; store?: { fiscalCountryCode?: string | null } };
+      if (!res.ok) {
+        if (res.status === 401) {
+          logout();
+          return;
+        }
+        throw new Error(payload.error || "No se pudo guardar países.");
+      }
+      const nextFiscal = String(payload.store?.fiscalCountryCode || "").trim().toUpperCase();
+      if (nextFiscal) setFiscalCountry(nextFiscal);
+
+      setProfileEditable(false);
+      setCountriesSaveOk("País base fiscal guardado.");
+    } catch (err) {
+      setCountriesSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setCountriesSaving(false);
+    }
+  }
+
+  async function saveMonedasProfile() {
+    if (!profileEditable || monedasSaving) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+
+    try {
+      setMonedasSaveError("");
+      setMonedasSaveOk("");
+      setMonedasSaving(true);
+
+      if (!selectedBaseCurrency) {
+        throw new Error("Selecciona la moneda base de la tienda.");
+      }
+
+      if (usesMultipleCurrencies && !selectedAdditionalCurrency) {
+        throw new Error("Selecciona una moneda adicional.");
+      }
+
+      let rateToSave: number | null = null;
+      if (selectedAdditionalCurrency) {
+        if (exchangeMode === "api") {
+          if (!fxApiRate || !Number.isFinite(fxApiRate) || fxApiRate <= 0) {
+            throw new Error("No hay tipo de cambio automático disponible para guardar.");
+          }
+          rateToSave = fxApiRate;
+        } else {
+          const parsedManualRate = Number(fxManualRate);
+          if (!Number.isFinite(parsedManualRate) || parsedManualRate <= 0) {
+            throw new Error("Ingresa una tasa manual válida mayor a 0.");
+          }
+          rateToSave = parsedManualRate;
+        }
+      }
+
+      const profileKey = `store-monedas-config:${selectedStoreId}`;
+      const pairKey = `store-fx-last-rate:${selectedStoreId}:${selectedAdditionalCurrency || "NA"}:${selectedBaseCurrency}`;
+      const prevRateRaw = localStorage.getItem(pairKey);
+      const prevRate = prevRateRaw ? Number(prevRateRaw) : null;
+
+      if (notifyFxChange && rateToSave && prevRate && Number.isFinite(prevRate) && prevRate > 0) {
+        const threshold = Number(fxThresholdPercent);
+        if (!Number.isFinite(threshold) || threshold <= 0) {
+          throw new Error("Ingresa un porcentaje válido para la alerta de variación.");
+        }
+        const deltaPercent = Math.abs(((rateToSave - prevRate) / prevRate) * 100);
+        if (deltaPercent > threshold) {
+          setMonedasSaveOk(
+            `Guardado con alerta: variación ${deltaPercent.toFixed(2)}% (umbral ${threshold.toFixed(2)}%).`
+          );
+        } else {
+          setMonedasSaveOk("Configuración de monedas guardada.");
+        }
+      } else {
+        setMonedasSaveOk("Configuración de monedas guardada.");
+      }
+
+      localStorage.setItem(
+        profileKey,
+        JSON.stringify({
+          baseCurrencyCode: selectedBaseCurrency,
+          additionalCurrencyCode: selectedAdditionalCurrency || null,
+          usesMultipleCurrencies,
+          exchangeMode,
+          notifyFxChange,
+          notifyThresholdPercent: fxThresholdPercent,
+          manualRate: fxManualRate || null,
+          savedAt: new Date().toISOString(),
+        })
+      );
+      if (rateToSave) localStorage.setItem(pairKey, String(rateToSave));
+
+      setProfile((prev) => ({
+        ...prev,
+        baseCurrencyCode: selectedBaseCurrency,
+      }));
+      setProfileEditable(false);
+    } catch (err) {
+      setMonedasSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setMonedasSaving(false);
+    }
+  }
+
+  async function saveFacturacionProfile() {
+    if (!profileEditable || factSaving) return;
+    const token = requireTokenOrRedirect();
+    if (!token) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      setFactSaveError("");
+      setFactSaveOk("");
+      setFactSaving(true);
+
+      const res = await fetch(`${API_BASE}/stores/${selectedStoreId}/billing-profile`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          companyName: billingCompany,
+          fiscalAddress: billingAddress,
+          countryCode: billingCountry || null,
+          city: billingCity,
+          postalCode: billingPostalCode,
+          phone: billingPhone,
+          taxId: billingTaxId,
+          billingEmail: billingEmail,
+          invoicePrefix: billingPrefix,
+          fiscalCountry: billingFiscalCountry || null,
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        if (res.status === 401) {
+          logout();
+          return;
+        }
+        if (res.status === 404) {
+          throw new Error("No se encontró endpoint de facturación (404). Reinicia API y aplica migraciones.");
+        }
+        if (res.status === 403) {
+          throw new Error(payload.error || "No tienes permisos para guardar facturación (403).");
+        }
+        throw new Error(payload.error || `No se pudo guardar facturación (status ${res.status}).`);
+      }
+
+      localStorage.setItem(
+        `store-facturacion-config:${selectedStoreId}`,
+        JSON.stringify({
+          company: billingCompany,
+          address: billingAddress,
+          country: billingCountry,
+          city: billingCity,
+          postalCode: billingPostalCode,
+          phone: billingPhone,
+          taxId: billingTaxId,
+          email: billingEmail,
+          prefix: billingPrefix,
+          fiscalCountry: billingFiscalCountry,
+          savedAt: new Date().toISOString(),
+        })
+      );
+
+      setProfileEditable(false);
+      setFactSaveOk("Datos de facturación guardados.");
+    } catch (err) {
+      setFactSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setFactSaving(false);
+    }
+  }
+
+  async function saveAlmacenesProfile() {
+    if (!profileEditable || almacenesSaving) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      setAlmacenesSaveError("");
+      setAlmacenesSaveOk("");
+      setAlmacenesSaving(true);
+
+      const rowsToSave = sanitizeWarehouseRows(warehouseRows);
+      localStorage.setItem(`store-warehouses-config:${selectedStoreId}`, JSON.stringify(rowsToSave));
+
+      setProfile((prev) => ({
+        ...prev,
+        warehouses: rowsToSave.filter((row) => row.active).map((row) => row.label),
+      }));
+      setProfileEditable(false);
+      setAlmacenesSaveOk("Almacenes guardados.");
+    } catch (err) {
+      setAlmacenesSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setAlmacenesSaving(false);
+    }
+  }
+
+  async function saveCanalesProfile() {
+    if (!profileEditable || canalesSaving) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      setCanalesSaveError("");
+      setCanalesSaveOk("");
+      setCanalesSaving(true);
+
+      const rowsToSave = sanitizeMarketplaceRows(marketplaceRows);
+      localStorage.setItem(`store-marketplaces-config:${selectedStoreId}`, JSON.stringify(rowsToSave));
+
+      setProfile((prev) => ({
+        ...prev,
+        marketplaces: rowsToSave.filter((row) => row.active).map((row) => row.label),
+      }));
+      setProfileEditable(false);
+      setCanalesSaveOk("Canales guardados.");
+    } catch (err) {
+      setCanalesSaveError(err instanceof Error ? err.message : "Error al guardar.");
+    } finally {
+      setCanalesSaving(false);
+    }
+  }
+
   const frameSrc = activeItem.path ? `${activeItem.path}?embed=demarca` : "";
+  const currentLogoSrc = profile.logoUrl || "/branding/logo_demarca02.png";
+  const isRemoteLogo = /^https?:\/\//.test(currentLogoSrc);
+  const canAddBrandColor = brandColors.length < MAX_EXTRA_BRAND_COLORS;
+  const menuIndentAt = (index: number) => Number(menu[index]?.indent || 0);
+  const menuHasChildren = (index: number) => menuIndentAt(index + 1) > menuIndentAt(index);
+  const menuHiddenByCollapsedAncestor = (index: number) => {
+    const currentIndent = menuIndentAt(index);
+    if (currentIndent <= 0) return false;
+    let ancestorIndent = currentIndent;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const candidateIndent = menuIndentAt(i);
+      if (candidateIndent < ancestorIndent) {
+        if (collapsedSections[menu[i].key]) return true;
+        ancestorIndent = candidateIndent;
+        if (ancestorIndent === 0) break;
+      }
+    }
+    return false;
+  };
 
   return (
     <main className={`${headingFont.variable} ${bodyFont.variable} h-screen overflow-hidden bg-[#DADCE0] p-6`}>
@@ -492,14 +1322,22 @@ export default function DashboardDemarcaPage() {
                 </button>
               </div>
               <div className="mt-2">
-                <Image
-                  src="/branding/logo_demarca02.png"
-                  alt={storeName.replace(/\.$/, "") || "demarca"}
-                  width={176}
-                  height={46}
-                  className="h-auto w-[176px] object-contain"
-                  priority
-                />
+                {isRemoteLogo ? (
+                  <img
+                    src={currentLogoSrc}
+                    alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
+                    className="h-auto w-[176px] object-contain"
+                  />
+                ) : (
+                  <Image
+                    src={currentLogoSrc}
+                    alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
+                    width={176}
+                    height={46}
+                    className="h-auto w-[176px] object-contain"
+                    priority
+                  />
+                )}
               </div>
 
               <div className="mt-5 text-[12px] uppercase tracking-wide text-[#6D748A]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
@@ -507,9 +1345,12 @@ export default function DashboardDemarcaPage() {
               </div>
 
               <div className="mt-3 space-y-1.5">
-                {menu.map((item) => {
+                {menu.map((item, index) => {
+                  if (menuHiddenByCollapsedAncestor(index)) return null;
                   const active = activeKey === item.key;
                   const indent = item.indent ? item.indent * 16 : 0;
+                  const hasChildren = menuHasChildren(index);
+                  const isCollapsed = !!collapsedSections[item.key];
                   return (
                     <button
                       key={item.key}
@@ -537,7 +1378,33 @@ export default function DashboardDemarcaPage() {
                         paddingLeft: `${16 + indent}px`,
                       }}
                     >
-                      {item.label}
+                      <span className="flex items-center justify-between gap-2">
+                        <span>{item.label}</span>
+                        {hasChildren ? (
+                          <span
+                            role="button"
+                            aria-label={isCollapsed ? "Expandir" : "Contraer"}
+                            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
+                              active ? "text-white/90 hover:bg-white/20" : "text-[#6A7288] hover:bg-[#E5E9F1]"
+                            }`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setCollapsedSections((prev) => ({ ...prev, [item.key]: !prev[item.key] }));
+                            }}
+                          >
+                            {isCollapsed ? (
+                              <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
+                                <path d="M7 5l6 5-6 5V5z" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
+                                <path d="M5 7l5 6 5-6H5z" />
+                              </svg>
+                            )}
+                          </span>
+                        ) : null}
+                      </span>
                     </button>
                   );
                 })}
@@ -694,7 +1561,7 @@ export default function DashboardDemarcaPage() {
                         { key: "paises", label: "2. Países" },
                         { key: "monedas", label: "3. Monedas" },
                         { key: "almacenes", label: "4. Almacenes" },
-                        { key: "marketplaces", label: "5. Marketplaces" },
+                        { key: "marketplaces", label: "5. Canales" },
                         { key: "facturacion", label: "6. Facturación" },
                       ].map((tab) => (
                         <button
@@ -726,12 +1593,33 @@ export default function DashboardDemarcaPage() {
                           />
 
                           <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Logo</div>
-                          <div className="mt-2 flex h-[130px] w-full items-center justify-center rounded-2xl border border-dashed border-[#9AA1B2] bg-[#ECEEF1]">
-                            <Image src={profile.logoUrl || "/branding/logo_demarca02.png"} alt="Logo tienda" width={180} height={56} className="h-auto w-[180px] object-contain opacity-80" />
-                          </div>
+                          <button
+                            type="button"
+                            disabled={!profileEditable || logoUploading}
+                            onClick={() => logoInputRef.current?.click()}
+                            className="mt-2 flex h-[130px] w-full items-center justify-center rounded-2xl border border-dashed border-[#9AA1B2] bg-[#ECEEF1] disabled:cursor-not-allowed disabled:opacity-85"
+                          >
+                            {isRemoteLogo ? (
+                              <img src={currentLogoSrc} alt="Logo tienda" className="h-auto w-[180px] object-contain opacity-80" />
+                            ) : (
+                              <Image src={currentLogoSrc} alt="Logo tienda" width={180} height={56} className="h-auto w-[180px] object-contain opacity-80" />
+                            )}
+                          </button>
+                          <input
+                            ref={logoInputRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={handleProfileLogoChange}
+                          />
                           <div className="mt-2 text-[14px] text-[#7D8498]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                            logo_demarca02 png
+                            {logoUploading ? "Subiendo logo..." : "Click para reemplazar logo"}
                           </div>
+                          {logoUploadError ? (
+                            <div className="mt-1 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {logoUploadError}
+                            </div>
+                          ) : null}
 
                           <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Descripción interna</div>
                           <input
@@ -744,220 +1632,166 @@ export default function DashboardDemarcaPage() {
                           <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Color identificativo</div>
                           <div className="mt-2 flex items-center gap-3">
                             {brandColors.map((color, idx) => (
-                              <button
-                                key={`${color}-${idx}`}
-                                type="button"
-                                disabled={!profileEditable}
-                                className="h-11 w-11 rounded-full disabled:cursor-not-allowed disabled:opacity-75"
-                                style={{ backgroundColor: color }}
-                                onClick={() => {
-                                  if (!profileEditable || idx < 3) return;
-                                  setBrandColors((prev) => prev.filter((_, i) => i !== idx));
-                                }}
-                              />
+                              <div key={`${color}-${idx}`} className="relative">
+                                <button
+                                  type="button"
+                                  disabled={!profileEditable}
+                                  className={`h-11 w-11 rounded-full disabled:cursor-not-allowed disabled:opacity-75 ${selectedBrandColor === color ? "ring-2 ring-[#1B2140] ring-offset-2 ring-offset-[#E6E8EA]" : ""}`}
+                                  style={{ backgroundColor: color }}
+                                  onClick={() => {
+                                    if (!profileEditable) return;
+                                    setSelectedBrandColor(color);
+                                    setEditingColorIndex(idx);
+                                    if (colorPickerRef.current) {
+                                      colorPickerRef.current.value = color;
+                                      colorPickerRef.current.click();
+                                    }
+                                  }}
+                                />
+                                {profileEditable ? (
+                                  <span
+                                    className="absolute -right-1 -top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-semibold text-[#5D6477] hover:bg-[#D3D7E2]"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBrandColors((prev) => {
+                                        const next = prev.filter((_, i) => i !== idx);
+                                        if (!next.includes(selectedBrandColor)) {
+                                          setSelectedBrandColor(next[0] || "#6456DF");
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                  >
+                                    x
+                                  </span>
+                                ) : null}
+                              </div>
                             ))}
                             <button
                               type="button"
                               disabled={!profileEditable}
-                              className="flex h-11 w-11 items-center justify-center rounded-full border border-dashed border-[#7B818F] text-[32px] text-[#2A3146] disabled:opacity-55"
+                              className={`flex h-11 w-11 items-center justify-center rounded-full border border-dashed text-[32px] disabled:opacity-55 ${canAddBrandColor ? "border-[#7B818F] text-[#2A3146]" : "border-[#B4BAC8] text-[#9CA3B4]"}`}
                               onClick={() => {
                                 if (!profileEditable) return;
-                                const palette = ["#A4D8F0", "#F4B1CC", "#7ED8C6", "#F7C15B"];
-                                const next = palette.find((p) => !brandColors.includes(p));
-                                if (next) setBrandColors((prev) => [...prev, next].slice(0, 6));
+                                if (!canAddBrandColor) return;
+                                setEditingColorIndex(null);
+                                colorPickerRef.current?.click();
                               }}
                             >
                               +
                             </button>
+                            <input
+                              ref={colorPickerRef}
+                              type="color"
+                              className="sr-only"
+                              onChange={(e) => {
+                                const color = e.target.value.toUpperCase();
+                                setBrandColors((prev) => {
+                                  if (editingColorIndex !== null) {
+                                    return prev.map((item, i) => (i === editingColorIndex ? color : item));
+                                  }
+                                  if (prev.length >= MAX_EXTRA_BRAND_COLORS) return prev;
+                                  return prev.includes(color) ? prev : [...prev, color];
+                                });
+                                setSelectedBrandColor(color);
+                                setEditingColorIndex(null);
+                              }}
+                            />
                           </div>
                         </div>
 
                         <div>
                           <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País base fiscal</div>
-                          <div className="relative mt-2">
-                            <select
-                              disabled={!profileEditable}
-                              value={fiscalCountry}
-                              onChange={(e) => setFiscalCountry(e.target.value)}
-                              className="h-[52px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                            >
-                              {allCountryOptions.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {item.label}
-                                </option>
-                              ))}
-                            </select>
-                            <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
-                          </div>
+                          <input
+                            readOnly
+                            value={fiscalCountryLabel}
+                            className="mt-2 h-[52px] w-full cursor-not-allowed rounded-full border-none bg-[#F3F4F6] px-5 text-[16px] text-[#8B90A0] outline-none"
+                          />
 
                           <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Moneda base de la tienda</div>
-                          <div className="relative mt-2">
-                            <select
-                              disabled={!profileEditable}
-                              value={profile.baseCurrencyCode}
-                              onChange={(e) => setProfile((prev) => ({ ...prev, baseCurrencyCode: e.target.value }))}
-                              className="h-[52px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                            >
-                              <option value="EUR">EUR</option>
-                              <option value="USD">USD</option>
-                              <option value="PEN">PEN</option>
-                              <option value="CNY">CNY</option>
-                              <option value="TRY">TRY</option>
-                              <option value="PLN">PLN</option>
-                            </select>
-                            <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
-                          </div>
+                          <input
+                            readOnly
+                            value={selectedBaseCurrency || profile.baseCurrencyCode || "EUR"}
+                            className="mt-2 h-[52px] w-full cursor-not-allowed rounded-full border-none bg-[#F3F4F6] px-5 text-[16px] text-[#8B90A0] outline-none"
+                          />
 
                           <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Países donde vende esta tienda</div>
-                          <div className="relative mt-2">
-                            <input disabled value="Buscar país" readOnly className="h-[48px] w-full rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none" />
-                            <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
-                          </div>
                           <div className="mt-4 grid grid-cols-2 gap-2.5">
-                            {countryRows.map((row) => (
-                              <button
-                                key={row.id}
-                                type="button"
-                                disabled={!profileEditable}
-                                onClick={() => toggleCountry(row.id)}
-                                className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
-                                style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
-                              >
-                                <span>{row.label}</span>
-                                <span className={`h-5 w-5 rounded-full ${row.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
-                              </button>
-                            ))}
+                            {countryRows
+                              .filter((row) => row.active)
+                              .map((row) => (
+                                <div
+                                  key={row.id}
+                                  className="flex h-[40px] cursor-not-allowed items-center justify-between rounded-full bg-[#F3F4F6] px-4 text-[14px] text-[#8B90A0]"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                >
+                                  <span>{countryLabelWithFlag(row.id, row.label, facturacionCountryOptions)}</span>
+                                  <span className="h-5 w-5 rounded-full bg-[#D7D9DE]" />
+                                </div>
+                              ))}
                           </div>
                         </div>
 
                         <div>
-                          <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Configura marketplaces activos</div>
-                          <button type="button" disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4] disabled:opacity-70" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }} onClick={addMarketplace}>
-                            + añadir marketplace
-                          </button>
-                          <div className="mt-2 flex gap-2">
-                            <input
-                              disabled={!profileEditable}
-                              value={newMarketplaceLabel}
-                              onChange={(e) => setNewMarketplaceLabel(e.target.value)}
-                              placeholder="Escribe marketplace"
-                              className="h-[40px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#4B5369] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
-                            />
-                            <button
-                              type="button"
-                              disabled={!profileEditable}
-                              className="h-[40px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white disabled:opacity-60"
-                              onClick={addMarketplace}
-                              style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                            >
-                              Agregar
-                            </button>
-                          </div>
+                          <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Canales activos</div>
                           <div className="mt-4 flex flex-wrap gap-2">
                             {marketplaceRows.map((mk) => (
-                              <button
+                              <div
                                 key={mk.id}
-                                type="button"
-                                disabled={!profileEditable}
-                                onClick={() => toggleMarketplace(mk.id)}
-                                className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
+                                className="flex h-[40px] cursor-not-allowed items-center justify-between rounded-full bg-[#F3F4F6] px-4 text-[14px] text-[#8B90A0]"
                                 style={{ minWidth: "120px", fontFamily: "var(--font-dashboarddemarca-body)" }}
                               >
                                 <span>{mk.label}</span>
-                                <span className="ml-3 flex items-center gap-2">
-                                  <span className={`h-5 w-5 rounded-full ${mk.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
-                                  {profileEditable && mk.id !== "shopify" ? (
-                                    <span
-                                      className="grid h-4 w-4 place-items-center rounded-full bg-[#DDE1E8] text-[11px] text-[#596078]"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setMarketplaceRows((prev) => {
-                                          const next = prev.filter((item) => item.id !== mk.id);
-                                          setProfile((profilePrev) => ({
-                                            ...profilePrev,
-                                            marketplaces: next.filter((item) => item.active).map((item) => item.label),
-                                          }));
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      x
-                                    </span>
-                                  ) : null}
+                                <span className="ml-3 flex items-center">
+                                  <span className="h-5 w-5 rounded-full bg-[#D7D9DE]" />
                                 </span>
-                              </button>
+                              </div>
                             ))}
                           </div>
 
-                          <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Agregar almacén activo</div>
-                          <button type="button" disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4] disabled:opacity-70" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }} onClick={addWarehouse}>
-                            + añadir almacén
-                          </button>
-                          <div className="mt-2 flex gap-2">
-                            <input
-                              disabled={!profileEditable}
-                              value={newWarehouseLabel}
-                              onChange={(e) => setNewWarehouseLabel(e.target.value)}
-                              placeholder="Escribe almacén"
-                              className="h-[40px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#4B5369] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
-                            />
-                            <button
-                              type="button"
-                              disabled={!profileEditable}
-                              className="h-[40px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white disabled:opacity-60"
-                              onClick={addWarehouse}
-                              style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                            >
-                              Agregar
-                            </button>
-                          </div>
+                          <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Almacenes activos</div>
                           <div className="mt-4 flex flex-wrap gap-2">
-                            {warehouseRows.map((wh) => (
-                              <button
-                                key={wh.id}
-                                type="button"
-                                disabled={!profileEditable}
-                                onClick={() => toggleWarehouse(wh.id)}
-                                className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
+                            {Array.from(
+                              new Set(
+                                (profile.warehouses || [])
+                                  .map((label) => normalizeWarehouseLabel(String(label || "")))
+                                  .filter(isVisibleWarehouseLabel)
+                              )
+                            ).map((label) => (
+                              <div
+                                key={`general-wh-${label}`}
+                                className="flex h-[40px] cursor-not-allowed items-center justify-between rounded-full bg-[#F3F4F6] px-4 text-[14px] text-[#8B90A0]"
                                 style={{ minWidth: "120px", fontFamily: "var(--font-dashboarddemarca-body)" }}
                               >
-                                <span>{wh.label}</span>
-                                <span className="ml-3 flex items-center gap-2">
-                                  <span className={`h-5 w-5 rounded-full ${wh.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
-                                  {profileEditable && wh.id !== "es-seg" ? (
-                                    <span
-                                      className="grid h-4 w-4 place-items-center rounded-full bg-[#DDE1E8] text-[11px] text-[#596078]"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setWarehouseRows((prev) => {
-                                          const next = prev.filter((item) => item.id !== wh.id);
-                                          setProfile((profilePrev) => ({
-                                            ...profilePrev,
-                                            warehouses: next.filter((item) => item.active).map((item) => item.label),
-                                          }));
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      x
-                                    </span>
-                                  ) : null}
+                                <span>{label}</span>
+                                <span className="ml-3 flex items-center">
+                                  <span className="h-5 w-5 rounded-full bg-[#D7D9DE]" />
                                 </span>
-                              </button>
+                              </div>
                             ))}
                           </div>
 
                         </div>
                         </div>
-                        <div className="mt-8 flex justify-end">
+                        <div className="mt-8 flex items-center justify-end">
+                          {generalSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {generalSaveError}
+                            </div>
+                          ) : null}
+                          {generalSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {generalSaveOk}
+                            </div>
+                          ) : null}
                           <button
                             type="button"
-                            disabled={!profileEditable}
+                            disabled={!profileEditable || generalSaving}
                             className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
                             style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                            onClick={() => setProfileEditable(false)}
+                            onClick={saveGeneralProfile}
                           >
-                            Confirmar
+                            {generalSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
                       </>
@@ -1017,25 +1851,45 @@ export default function DashboardDemarcaPage() {
                                   type="button"
                                   disabled={!profileEditable}
                                   onClick={() => toggleCountry(row.id)}
-                                  className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
+                                  className={`flex h-[40px] items-center justify-between rounded-full px-4 text-[14px] disabled:cursor-not-allowed ${
+                                    profileEditable ? "bg-white text-[#4B5369]" : "bg-[#F3F4F6] text-[#8B90A0]"
+                                  }`}
                                   style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
                                 >
-                                  <span>{row.label}</span>
-                                  <span className={`h-5 w-5 rounded-full ${row.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                                  <span>{countryLabelWithFlag(row.id, row.label, facturacionCountryOptions)}</span>
+                                  <span
+                                    className={`h-5 w-5 rounded-full ${
+                                      profileEditable
+                                        ? row.active
+                                          ? "bg-[#8A76E6]"
+                                          : "bg-[#D7D9DE]"
+                                        : "bg-[#D7D9DE]"
+                                    }`}
+                                  />
                                 </button>
                               ))}
                             </div>
                           </div>
                         </div>
-                        <div className="mt-8 flex justify-end">
+                        <div className="mt-8 flex items-center justify-end">
+                          {countriesSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {countriesSaveError}
+                            </div>
+                          ) : null}
+                          {countriesSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {countriesSaveOk}
+                            </div>
+                          ) : null}
                           <button
                             type="button"
-                            disabled={!profileEditable}
+                            disabled={!profileEditable || countriesSaving}
                             className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
                             style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                            onClick={() => setProfileEditable(false)}
+                            onClick={saveCountriesProfile}
                           >
-                            Confirmar
+                            {countriesSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
                       </>
@@ -1044,7 +1898,7 @@ export default function DashboardDemarcaPage() {
                         <div className="pt-6 text-[15px] text-[#2F3650]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
                           Define la monedas de la tienda :
                         </div>
-                        <div className="mt-10 grid grid-cols-2 gap-14 text-[#2B334B]">
+                        <div className="mt-10 grid max-w-[560px] grid-cols-1 gap-8 text-[#2B334B]">
                           <div>
                             <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
                               Moneda base de la tienda
@@ -1053,16 +1907,19 @@ export default function DashboardDemarcaPage() {
                               <select
                                 disabled={!profileEditable}
                                 value={selectedBaseCurrency}
-                                onChange={(e) => setSelectedBaseCurrency(e.target.value)}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  setSelectedBaseCurrency(next);
+                                  setProfile((prev) => ({ ...prev, baseCurrencyCode: next }));
+                                }}
                                 className="h-[54px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
                               >
                                 <option value="">Buscar moneda</option>
-                                <option value="EUR">EURO €</option>
-                                <option value="USD">DÓLAR $</option>
-                                <option value="PEN">SOLES S/</option>
-                                <option value="CNY">YUANES ¥</option>
-                                <option value="TRY">LIRA TURCA ₺</option>
-                                <option value="PLN">ZLOTY zł</option>
+                                {CURRENCY_OPTIONS.map((item) => (
+                                  <option key={`base-${item.code}`} value={item.code}>
+                                    {item.label}
+                                  </option>
+                                ))}
                               </select>
                               <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
                             </div>
@@ -1097,77 +1954,114 @@ export default function DashboardDemarcaPage() {
                               </button>
                             </div>
 
-                            <button
-                              type="button"
-                              disabled={!profileEditable}
-                              className="mt-8 h-[46px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4] disabled:opacity-70"
-                              style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
-                              onClick={() => setShowMonedasMarketplaceForm((prev) => !prev)}
-                            >
-                              + añadir marketplace
-                            </button>
-                            {showMonedasMarketplaceForm ? (
+                            {usesMultipleCurrencies === true ? (
                               <>
-                                <div className="mt-2 flex gap-2">
-                                  <input
-                                    disabled={!profileEditable}
-                                    value={newMarketplaceLabel}
-                                    onChange={(e) => setNewMarketplaceLabel(e.target.value)}
-                                    placeholder="Escribe marketplace"
-                                    className="h-[40px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#4B5369] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
-                                  />
-                                  <button
-                                    type="button"
-                                    disabled={!profileEditable}
-                                    className="h-[40px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white disabled:opacity-60"
-                                    onClick={addMarketplace}
-                                    style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                                  >
-                                    Agregar
-                                  </button>
+                                <div className="mt-8 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  Moneda adicional
                                 </div>
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {marketplaceRows
-                                    .filter((mk) => {
-                                      const label = mk.label.trim().toLowerCase();
-                                      return label !== "idealo de" && label !== "shopify es";
-                                    })
-                                    .map((mk) => (
+                                <div className="relative mt-2">
+                                  <select
+                                    disabled={!profileEditable}
+                                    value={selectedAdditionalCurrency}
+                                    onChange={(e) => setSelectedAdditionalCurrency(e.target.value)}
+                                    className="h-[48px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                  >
+                                    <option value="">Buscar Moneda</option>
+                                    {CURRENCY_OPTIONS.map((item) => (
+                                      <option key={`add-${item.code}`} value={item.code}>
+                                        {item.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
+                                </div>
+
+                                <div className="mt-8 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  ¿En qué canal usarás esta moneda adicional?
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={!profileEditable}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4] disabled:opacity-70"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                  onClick={() => setShowMonedasMarketplaceForm((prev) => !prev)}
+                                >
+                                  + añadir canal
+                                </button>
+                                {showMonedasMarketplaceForm ? (
+                                  <>
+                                    <div className="mt-2 flex gap-2">
+                                      <input
+                                        disabled={!profileEditable}
+                                        value={newMarketplaceLabel}
+                                        onChange={(e) => setNewMarketplaceLabel(e.target.value)}
+                                        placeholder="Escribe marketplace"
+                                        className="h-[40px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#4B5369] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                      />
                                       <button
-                                        key={`monedas-${mk.id}`}
                                         type="button"
                                         disabled={!profileEditable}
-                                        onClick={() => toggleMarketplace(mk.id)}
-                                        className="flex h-[36px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
-                                        style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                        className="h-[40px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white disabled:opacity-60"
+                                        onClick={addMarketplace}
+                                        style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
                                       >
-                                        <span>{mk.label}</span>
-                                        <span className={`ml-3 h-4 w-4 rounded-full ${mk.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                                        Agregar
                                       </button>
-                                    ))}
-                                </div>
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {marketplaceRows
+                                        .filter((mk) => {
+                                          const label = mk.label.trim().toLowerCase();
+                                          return label !== "idealo de" && label !== "shopify es";
+                                        })
+                                        .map((mk) => (
+                                          <button
+                                            key={`monedas-${mk.id}`}
+                                            type="button"
+                                            disabled={!profileEditable}
+                                            onClick={() => toggleMarketplace(mk.id)}
+                                            className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
+                                            style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                          >
+                                            <span>{mk.label}</span>
+                                            <span className="ml-3 flex items-center gap-2">
+                                              <span className={`h-5 w-5 rounded-full ${mk.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                                              {profileEditable ? (
+                                                <span
+                                                  className={`inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-semibold text-[#5D6477] ${
+                                                    profileEditable ? "hover:bg-[#D3D7E2]" : "opacity-60"
+                                                  }`}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (!profileEditable) return;
+                                                    setMarketplaceRows((prev) => {
+                                                      const next = prev.filter((item) => item.id !== mk.id);
+                                                      setProfile((profilePrev) => ({
+                                                        ...profilePrev,
+                                                        marketplaces: next.filter((item) => item.active).map((item) => item.label),
+                                                      }));
+                                                      return next;
+                                                    });
+                                                  }}
+                                                >
+                                                  x
+                                                </span>
+                                              ) : null}
+                                            </span>
+                                          </button>
+                                        ))}
+                                    </div>
+                                  </>
+                                ) : null}
                               </>
                             ) : null}
 
-                            <div className="mt-8 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                              Moneda adicional
-                            </div>
-                            <div className="relative mt-2">
-                              <select disabled={!profileEditable} className="h-[48px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]">
-                                <option>Buscar Moneda</option>
-                                <option>EURO €</option>
-                                <option>DÓLAR $</option>
-                                <option>SOLES S/</option>
-                                <option>YUANES ¥</option>
-                                <option>LIRA TURCA ₺</option>
-                                <option>ZLOTY zł</option>
-                              </select>
-                              <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[20px] text-[#3b4256]">▾</span>
-                            </div>
                           </div>
 
-                          <div>
-                            <div className="mt-8 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {usesMultipleCurrencies === true ? (
+                            <div>
+                            <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
                               Tipo de cambio
                             </div>
                             <div className="mt-4 space-y-3 text-[16px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
@@ -1199,18 +2093,110 @@ export default function DashboardDemarcaPage() {
                                   <span className={`h-6 w-6 rounded-full ${notifyFxChange ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
                                   <span>Notificar si varía más de</span>
                                 </button>
-                                <input
-                                  disabled={!profileEditable || !notifyFxChange}
-                                  className="h-[44px] w-[110px] rounded-full border-none bg-white px-3 text-center text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
-                                  defaultValue="%"
-                                />
+                                <div className="relative">
+                                  <input
+                                    disabled={!profileEditable || !notifyFxChange}
+                                    value={fxThresholdPercent}
+                                    onChange={(e) => {
+                                      const cleaned = e.target.value.replace(/[^\d.,]/g, "").replace(",", ".");
+                                      setFxThresholdPercent(cleaned);
+                                    }}
+                                    className="h-[44px] w-[110px] rounded-full border-none bg-white px-3 pr-8 text-center text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                    placeholder="0"
+                                  />
+                                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[14px] text-[#6D748A]">%</span>
+                                </div>
+                              </div>
+                              <div className="mt-3 rounded-2xl bg-white/70 p-3 text-[14px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                <div className="relative mb-2 flex items-center gap-2">
+                                  <span className="text-[16px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                    Simulación rápida
+                                  </span>
+                                  <span className="group relative inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-bold text-[#4B5369]">
+                                    i
+                                    <span className="pointer-events-none absolute left-1/2 top-6 z-20 hidden w-[540px] -translate-x-1/2 rounded-xl bg-[#1C233F] p-4 text-left text-[12px] font-normal leading-[1.55] text-white shadow-[0_12px_30px_rgba(0,0,0,0.25)] group-hover:block">
+                                      <span className="block text-[13px] font-semibold">Simulación rápida de tipo de cambio</span>
+                                      <span className="mt-2 block">Este bloque te ayuda a probar conversiones antes de guardar.</span>
+                                      <span className="mt-3 block">1. Monto 100: valor de ejemplo que quieres convertir.</span>
+                                      <span className="mt-1 block">2. Moneda adicional: moneda origen (por ejemplo USD).</span>
+                                      <span className="mt-1 block">3. Moneda base: moneda principal de tienda (por ejemplo EUR).</span>
+                                      <span className="mt-1 block">4. Resultado: cálculo en moneda base usando tasa API o tasa manual.</span>
+                                      <span className="mt-3 block text-[13px] font-semibold">Ejemplo</span>
+                                      <span className="mt-1 block">Moneda adicional = USD</span>
+                                      <span className="block">Moneda base = EUR</span>
+                                      <span className="block">Monto = 100</span>
+                                      <span className="block">Tasa = 0.92</span>
+                                      <span className="block">Resultado = 92 EUR</span>
+                                    </span>
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span>Monto</span>
+                                  <input
+                                    disabled={!profileEditable}
+                                    value={fxAmountOriginal}
+                                    onChange={(e) => setFxAmountOriginal(e.target.value)}
+                                    className="h-[34px] w-[120px] rounded-full border-none bg-white px-3 text-center text-[14px] outline-none disabled:bg-[#F3F4F6]"
+                                  />
+                                  <span>{selectedAdditionalCurrency || "MONEDA ADICIONAL"}</span>
+                                </div>
+                                <div className="mt-2">
+                                  {exchangeMode === "api" ? (
+                                    fxLoading ? (
+                                      <span>Cargando tipo de cambio automático...</span>
+                                    ) : fxError ? (
+                                      <span className="text-[#C9382A]">{fxError}</span>
+                                    ) : activeFxRate ? (
+                                      <span>
+                                        Tipo aplicado: 1 {selectedAdditionalCurrency || "MONEDA"} = {activeFxRate.toFixed(6)}{" "}
+                                        {selectedBaseCurrency || "BASE"}
+                                      </span>
+                                    ) : (
+                                      <span>Selecciona moneda base y moneda adicional.</span>
+                                    )
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span>Tasa manual</span>
+                                      <input
+                                        disabled={!profileEditable}
+                                        value={fxManualRate}
+                                        onChange={(e) => setFxManualRate(e.target.value)}
+                                        placeholder="Ej: 0.92"
+                                        className="h-[34px] w-[110px] rounded-full border-none bg-white px-3 text-center text-[14px] outline-none disabled:bg-[#F3F4F6]"
+                                      />
+                                      <span>(1 {selectedAdditionalCurrency || "MONEDA"} en {selectedBaseCurrency || "BASE"})</span>
+                                    </div>
+                                  )}
+                                </div>
+                                {fxConvertedAmount !== null ? (
+                                  <div className="mt-2 font-semibold">
+                                    Resultado: {fxAmountOriginal} {selectedAdditionalCurrency || "MONEDA"} = {fxConvertedAmount}{" "}
+                                    {selectedBaseCurrency || "BASE"}
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
-                          </div>
+                            </div>
+                          ) : null}
                         </div>
-                        <div className="mt-8 flex justify-end">
-                          <button type="button" disabled={!profileEditable} className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60">
-                            Confirmar
+                        <div className="mt-8 flex items-center justify-end">
+                          {monedasSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {monedasSaveError}
+                            </div>
+                          ) : null}
+                          {monedasSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {monedasSaveOk}
+                            </div>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={!profileEditable || monedasSaving}
+                            onClick={saveMonedasProfile}
+                            className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
+                          >
+                            {monedasSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
                       </>
@@ -1235,6 +2221,11 @@ export default function DashboardDemarcaPage() {
                                 className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
                               >
                                 <option>Buscar almacén</option>
+                                {warehouseRows.map((row) => (
+                                  <option key={`buscar-almacen-${row.id}`} value={row.id}>
+                                    {row.label}
+                                  </option>
+                                ))}
                               </select>
                               <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[18px] text-[#3b4256]">▾</span>
                             </div>
@@ -1263,10 +2254,7 @@ export default function DashboardDemarcaPage() {
                           ) : null}
                           <div className="col-span-2 mt-1 flex flex-wrap gap-2">
                             {warehouseRows
-                              .filter((wh) => {
-                                const label = wh.label.trim().toUpperCase();
-                                return label !== "ES-MAD" && label !== "IT-MIL";
-                              })
+                              .filter((wh) => isVisibleWarehouseLabel(wh.label))
                               .map((wh) => (
                               <button
                                 key={`almacenes-${wh.id}`}
@@ -1276,41 +2264,179 @@ export default function DashboardDemarcaPage() {
                                 className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
                               >
                                 <span>{wh.label}</span>
-                                <span className={`ml-3 h-5 w-5 rounded-full ${wh.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                                <span className="ml-3 flex items-center gap-2">
+                                  <span
+                                    className={`h-5 w-5 rounded-full ${
+                                      profileEditable
+                                        ? wh.active
+                                          ? "bg-[#8A76E6]"
+                                          : "bg-[#D7D9DE]"
+                                        : "bg-[#D7D9DE]"
+                                    }`}
+                                  />
+                                  {profileEditable && wh.id !== "es-seg" ? (
+                                    <span
+                                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-semibold text-[#5D6477] hover:bg-[#D3D7E2]"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setWarehouseRows((prev) => {
+                                          const next = prev.filter((item) => item.id !== wh.id);
+                                          setProfile((profilePrev) => ({
+                                            ...profilePrev,
+                                            warehouses: next.filter((item) => item.active).map((item) => item.label),
+                                          }));
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      x
+                                    </span>
+                                  ) : null}
+                                </span>
                               </button>
                             ))}
                           </div>
                         </div>
-                        <div className="mt-8 flex justify-end">
-                          <button type="button" className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white">
-                            Confirmar
+                        <div className="mt-8 flex items-center justify-end">
+                          {almacenesSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {almacenesSaveError}
+                            </div>
+                          ) : null}
+                          {almacenesSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {almacenesSaveOk}
+                            </div>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={!profileEditable || almacenesSaving}
+                            onClick={saveAlmacenesProfile}
+                            className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
+                          >
+                            {almacenesSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
                       </>
                     ) : profileTab === "marketplaces" ? (
                       <>
                         <div className="pt-6 text-[15px] text-[#2F3650]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                          Configura marketplaces activos de la tienda.
+                          Configura canales activos de la tienda.
                         </div>
                         <div className="mt-8 grid grid-cols-2 gap-8">
-                          <button type="button" className="h-[46px] rounded-full bg-[#4449CC26] px-5 text-[16px] text-[#6142C4]">
-                            + añadir marketplace
+                          <button
+                            type="button"
+                            disabled={!profileEditable}
+                            onClick={() => setShowMarketplacesAddForm((prev) => !prev)}
+                            className="h-[46px] rounded-full bg-[#4449CC26] px-5 text-[16px] text-[#6142C4] disabled:opacity-70"
+                          >
+                            + añadir canales
                           </button>
-                          <button type="button" className="h-[46px] rounded-full bg-white px-5 text-left text-[16px] text-[#3E465C]">
-                            Buscar marketplace
-                          </button>
-                          <button type="button" className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369]">
-                            <span>Shopify</span>
-                            <span className="h-5 w-5 rounded-full bg-[#8A76E6]" />
-                          </button>
-                          <button type="button" className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369]">
-                            <span>Idealo ES</span>
-                            <span className="h-5 w-5 rounded-full bg-[#8A76E6]" />
-                          </button>
+                          <div className="relative">
+                            <select
+                              disabled={!profileEditable}
+                              value={selectedMarketplaceOption}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setSelectedMarketplaceOption(value);
+                                if (!value) return;
+                                addMarketplaceByValue(value);
+                                setSelectedMarketplaceOption("");
+                              }}
+                              className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-12 text-[16px] text-[#8B90A0] outline-none disabled:cursor-not-allowed disabled:bg-[#F3F4F6]"
+                            >
+                              <option value="">Buscar marketplace</option>
+                              {MARKETPLACE_SEARCH_OPTIONS.map((name) => (
+                                <option key={name} value={name}>
+                                  {name}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[18px] text-[#3b4256]">▾</span>
+                          </div>
+                          {showMarketplacesAddForm ? (
+                            <div className="col-start-1 -mt-6">
+                              <div className="mt-0 flex max-w-[560px] gap-2">
+                                <input
+                                  disabled={!profileEditable}
+                                  value={newMarketplaceLabel}
+                                  onChange={(e) => setNewMarketplaceLabel(e.target.value)}
+                                  placeholder="Escribe marketplace"
+                                  className="h-[40px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#4B5369] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!profileEditable}
+                                  className="h-[40px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white disabled:opacity-60"
+                                  onClick={addMarketplace}
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
+                                >
+                                  Agregar
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div className="col-start-1 mt-3 flex max-w-[560px] flex-wrap gap-2">
+                            {marketplaceRows.map((mk) => (
+                              <button
+                                key={`marketplaces-tab-${mk.id}`}
+                                type="button"
+                                disabled={!profileEditable}
+                                onClick={() => toggleMarketplace(mk.id)}
+                                className="flex h-[40px] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#4B5369] disabled:cursor-not-allowed"
+                              >
+                                <span>{mk.label}</span>
+                                <span className="ml-3 flex items-center gap-2">
+                                  <span
+                                    className={`h-4 w-4 rounded-full ${
+                                      profileEditable
+                                        ? mk.active
+                                          ? "bg-[#8A76E6]"
+                                          : "bg-[#D7D9DE]"
+                                        : "bg-[#D7D9DE]"
+                                    }`}
+                                  />
+                                  {profileEditable ? (
+                                    <span
+                                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-semibold text-[#5D6477] hover:bg-[#D3D7E2]"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMarketplaceRows((prev) => {
+                                          const next = prev.filter((item) => item.id !== mk.id);
+                                          setProfile((profilePrev) => ({
+                                            ...profilePrev,
+                                            marketplaces: next.filter((item) => item.active).map((item) => item.label),
+                                          }));
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      x
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <div className="mt-8 flex justify-end">
-                          <button type="button" className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white">
-                            Confirmar
+                        <div className="mt-8 flex items-center justify-end">
+                          {canalesSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {canalesSaveError}
+                            </div>
+                          ) : null}
+                          {canalesSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {canalesSaveOk}
+                            </div>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={!profileEditable || canalesSaving}
+                            onClick={saveCanalesProfile}
+                            className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
+                          >
+                            {canalesSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
                       </>
@@ -1325,11 +2451,21 @@ export default function DashboardDemarcaPage() {
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Razón social / Empresa</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingCompany ?? ""}
+                                  onChange={(e) => setBillingCompany(e.target.value)}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Dirección fiscal</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingAddress ?? ""}
+                                  onChange={(e) => setBillingAddress(e.target.value)}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                             </div>
                           </div>
@@ -1340,8 +2476,17 @@ export default function DashboardDemarcaPage() {
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País</div>
                                 <div className="relative mt-2">
-                                  <select disabled={!profileEditable} className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-10 text-[15px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]">
-                                    <option>Buscar país</option>
+                                  <select
+                                    disabled={!profileEditable}
+                                    value={billingCountry ?? ""}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      setBillingCountry(next);
+                                      setBillingCity("");
+                                    }}
+                                    className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-10 text-[15px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                  >
+                                    <option value="">Buscar país</option>
                                     {facturacionCountryOptions.map((item) => (
                                       <option key={`fact-pais-${item.id}`} value={item.id}>{item.label}</option>
                                     ))}
@@ -1351,15 +2496,42 @@ export default function DashboardDemarcaPage() {
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ciudad</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                <div className="relative mt-2">
+                                  <select
+                                    disabled={!profileEditable || !billingCountry}
+                                    value={billingCity ?? ""}
+                                    onChange={(e) => setBillingCity(e.target.value)}
+                                    className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-10 text-[15px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                  >
+                                    <option value="">
+                                      {billingCountry ? "Selecciona ciudad" : "Primero elige país"}
+                                    </option>
+                                    {billingCityOptions.map((city) => (
+                                      <option key={`fact-city-${billingCountry}-${city}`} value={city}>
+                                        {city}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[16px] text-[#3b4256]">▾</span>
+                                </div>
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Código postal</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingPostalCode ?? ""}
+                                  onChange={(e) => setBillingPostalCode(e.target.value)}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Teléfono (interno)</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingPhone ?? ""}
+                                  onChange={(e) => setBillingPhone(e.target.value)}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                             </div>
                           </div>
@@ -1369,11 +2541,21 @@ export default function DashboardDemarcaPage() {
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Número de identificación fiscal (CIF / NIF / VAT)</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingTaxId ?? ""}
+                                  onChange={(e) => setBillingTaxId(e.target.value)}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Correo electrónico para facturación (interno)</div>
-                                <input disabled={!profileEditable} className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingEmail ?? ""}
+                                  onChange={(e) => setBillingEmail(e.target.value)}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#6E7486] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                             </div>
                           </div>
@@ -1382,13 +2564,23 @@ export default function DashboardDemarcaPage() {
                             <div className="grid grid-cols-3 gap-4">
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Prefijo</div>
-                                <input disabled={!profileEditable} defaultValue="DEM - 2026 -" className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#8B90A0] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]" />
+                                  <input
+                                    disabled={!profileEditable}
+                                  value={billingPrefix ?? ""}
+                                  onChange={(e) => setBillingPrefix(e.target.value)}
+                                  className="mt-2 h-[46px] w-full rounded-full border-none bg-white px-5 text-[15px] text-[#8B90A0] outline-none placeholder:text-[#9AA1B2] disabled:bg-[#F3F4F6]"
+                                />
                               </div>
                               <div>
                                 <div className="text-[15px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País fiscal</div>
                                 <div className="relative mt-2">
-                                  <select disabled={!profileEditable} className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-10 text-[15px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]">
-                                    <option>Buscar país</option>
+                                  <select
+                                    disabled={!profileEditable}
+                                    value={billingFiscalCountry ?? ""}
+                                    onChange={(e) => setBillingFiscalCountry(e.target.value)}
+                                    className="h-[46px] w-full appearance-none rounded-full border-none bg-white px-5 pr-10 text-[15px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                  >
+                                    <option value="">Buscar país</option>
                                     {facturacionCountryOptions.map((item) => (
                                       <option key={`fact-pais-fiscal-${item.id}`} value={item.id}>{item.label}</option>
                                     ))}
@@ -1397,18 +2589,159 @@ export default function DashboardDemarcaPage() {
                                 </div>
                               </div>
                               <div className="flex items-end">
-                                <button type="button" disabled={!profileEditable} className="h-[46px] w-full rounded-full border-none bg-[#4449CC26] px-5 text-[15px] text-[#6142C4] disabled:opacity-70" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                                  + plantilla factura
+                                <button
+                                  type="button"
+                                  className="h-[46px] w-full rounded-full border-none bg-[#4449CC26] px-5 text-[15px] text-[#6142C4] hover:bg-[#4449CC33]"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                  onClick={() => setShowInvoiceTemplatePreview(true)}
+                                >
+                                  Ver plantilla
                                 </button>
                               </div>
                             </div>
                           </div>
                         </div>
-                        <div className="mt-8 flex justify-end">
-                          <button type="button" disabled={!profileEditable} className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60">
-                            Confirmar
+                        <div className="mt-8 flex items-center justify-end">
+                          {factSaveError ? (
+                            <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {factSaveError}
+                            </div>
+                          ) : null}
+                          {factSaveOk ? (
+                            <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              {factSaveOk}
+                            </div>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={!profileEditable || factSaving}
+                            onClick={saveFacturacionProfile}
+                            className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
+                          >
+                            {factSaving ? "Guardando..." : "Confirmar"}
                           </button>
                         </div>
+                        {showInvoiceTemplatePreview ? (
+                          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6">
+                            <div className="w-full max-w-[760px] rounded-2xl bg-white p-5 shadow-[0_20px_55px_rgba(0,0,0,0.2)]">
+                              <div className="mb-4 flex items-center justify-between">
+                                <h3 className="text-[24px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  Plantilla de factura (vista previa)
+                                </h3>
+                                <button
+                                  type="button"
+                                  className="h-9 rounded-full bg-[#0B1230] px-4 text-[13px] text-white"
+                                  onClick={() => setShowInvoiceTemplatePreview(false)}
+                                >
+                                  Cerrar
+                                </button>
+                              </div>
+                              <div
+                                className="max-h-[78vh] overflow-auto rounded-xl border border-[#D8DCE4] bg-white p-4 text-[#101426]"
+                                style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div>
+                                    {isRemoteLogo ? (
+                                      <img src={currentLogoSrc} alt="Logo" className="h-[38px] w-auto object-contain" />
+                                    ) : (
+                                      <Image src={currentLogoSrc} alt="Logo" width={96} height={38} className="h-[38px] w-auto object-contain" />
+                                    )}
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="text-[11px] uppercase tracking-[0.18em] text-[#7A8297]">Invoice</div>
+                                    <div className="text-[16px] font-semibold text-[#1B2140]">{invoiceNumberPreview}</div>
+                                  </div>
+                                </div>
+                                <div className="mt-3 border-b border-[#C5CBDA]" />
+
+                                <div className="mt-4 grid grid-cols-[1fr_auto] gap-5 text-[12px]">
+                                  <div className="rounded-xl border border-[#DDE2EE] bg-[#F8FAFF] px-3 py-2">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[#7A8297]">Invoice to</div>
+                                    <div className="mt-1 text-[14px] font-semibold text-[#1B2140]">John Doe</div>
+                                    <div className="text-[#444C66]">123 Main Street</div>
+                                    <div className="text-[#444C66]">Dublin, D02 XY47</div>
+                                    <div className="text-[#444C66]">+353 000 000 000</div>
+                                    <div className="mt-1 text-[#444C66]">Client VAT ID: IE1234567A</div>
+                                  </div>
+                                  <div className="rounded-xl border border-[#DDE2EE] bg-[#F8FAFF] px-3 py-2 text-right">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[#7A8297]">Date</div>
+                                    <div className="text-[14px] font-semibold text-[#1B2140]">{invoiceDateShort}</div>
+                                    <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[#7A8297]">Currency</div>
+                                    <div className="text-[14px] font-semibold text-[#1B2140]">{invoiceCurrency}</div>
+                                  </div>
+                                </div>
+
+                                <div className="mt-5 overflow-hidden rounded-xl border border-[#D8DCE4]">
+                                  <div className="grid grid-cols-[1fr_96px_64px_96px] bg-[#F2F5FC] text-[12px] font-semibold uppercase tracking-[0.08em] text-[#4C556E]">
+                                    <div className="px-3 py-2">Description</div>
+                                    <div className="border-l border-[#D8DCE4] px-3 py-2 text-center">Price</div>
+                                    <div className="border-l border-[#D8DCE4] px-3 py-2 text-center">Qty</div>
+                                    <div className="border-l border-[#D8DCE4] px-3 py-2 text-center">Total</div>
+                                  </div>
+                                  <div className="divide-y divide-[#E7EBF3] text-[13px]">
+                                    {sampleInvoiceItems.map((item) => (
+                                      <div key={`preview-row-${item.description}`} className="grid grid-cols-[1fr_96px_64px_96px]">
+                                        <div className="px-3 py-2.5">{item.description}</div>
+                                        <div className="border-l border-[#E7EBF3] px-3 py-2.5 text-center">
+                                          {invoiceSymbol}
+                                          {item.price.toFixed(2)}
+                                        </div>
+                                        <div className="border-l border-[#E7EBF3] px-3 py-2.5 text-center">{item.qty}</div>
+                                        <div className="border-l border-[#E7EBF3] px-3 py-2.5 text-center">
+                                          {invoiceSymbol}
+                                          {(item.price * item.qty).toFixed(2)}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="mt-8 flex items-end justify-between gap-5">
+                                  <div className="max-w-[390px] text-[11px] leading-[1.5] text-[#48506A]">
+                                    <div className="border-t border-[#C5CBDA] pt-2 font-semibold uppercase tracking-[0.05em] text-[#1B2140]">
+                                      {(billingCompany || "BIMSOFT LIMITED LTD") + " - Registered Office"}
+                                    </div>
+                                    <div>{billingAddress || "18/19 College Green, Dublin 2, Dublin"}</div>
+                                    <div>
+                                      {(billingFiscalCountry || billingCountry || fiscalCountryLabel || "IRLANDA") +
+                                        " " +
+                                        (billingPostalCode || "D02EY47") +
+                                        " - VAT " +
+                                        (billingTaxId || "IE3375540IH")}
+                                    </div>
+                                  </div>
+                                  <div className="w-[220px] space-y-1.5 text-[12px]">
+                                    <div className="grid grid-cols-[1fr_120px] items-center gap-3">
+                                      <div className="text-right text-[#4C556E]">Subtotal:</div>
+                                      <div className="rounded-md border border-[#C5CBDA] bg-[#FBFCFF] px-3 py-1.5 text-right font-medium">
+                                        {previewSubtotal.toFixed(2)} {invoiceSymbol}
+                                      </div>
+                                    </div>
+                                    <div className="grid grid-cols-[1fr_120px] items-center gap-3">
+                                      <div className="text-right text-[#4C556E]">{`IVA ${previewTaxPercent}%:`}</div>
+                                      <div className="rounded-md border border-[#C5CBDA] bg-[#FBFCFF] px-3 py-1.5 text-right font-medium">
+                                        {previewTaxAmount.toFixed(2)} {invoiceSymbol}
+                                      </div>
+                                    </div>
+                                    <div className="grid grid-cols-[1fr_120px] items-center gap-3">
+                                      <div className="text-right text-[13px] font-semibold text-[#1B2140]">TOTAL:</div>
+                                      <div className="rounded-md border border-[#1B2140] bg-[#F1F4FF] px-3 py-1.5 text-right text-[13px] font-semibold text-[#1B2140]">
+                                        {previewTotal.toFixed(2)} {invoiceSymbol}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="mt-4 rounded-lg border border-[#D8DCE4] bg-[#F8F9FB] p-3 text-[11px] leading-[1.55] text-[#525A70]">
+                                  <div className="font-semibold text-[#1B2140]">Nota</div>
+                                  <div className="mt-1">
+                                    Esta es una vista previa de plantilla. Los datos salen de la ficha de facturación y el detalle de líneas se completará con pedidos reales, así como el impuesto correcto de cada país correspondiente donde se realiza la compra.
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
                       </>
                     ) : (
                       <div className="rounded-2xl bg-white p-6 text-[16px] text-[#70778E]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
@@ -1416,6 +2749,14 @@ export default function DashboardDemarcaPage() {
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+            ) : activeKey === "almacenes-agregar" ? (
+              <div className="h-full p-5">
+                <div className="h-full rounded-2xl bg-[#E8EAEC] p-6">
+                  <h2 className="text-[36px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                    Agregar Almacén
+                  </h2>
                 </div>
               </div>
             ) : activeItem.path ? (

@@ -88,12 +88,32 @@ async function main() {
       country: "ES",
       status: "active",
       type: "own",
-      isDefault: true,
+      isDefault: false,
     },
     create: {
       storeId: store.id,
       code: "ES-MAD",
       name: "Madrid Warehouse",
+      country: "ES",
+      status: "active",
+      type: "own",
+      isDefault: false,
+    },
+  });
+
+  const warehouseSEG = await prisma.warehouse.upsert({
+    where: { storeId_code: { storeId: store.id, code: "ES-SEG" } },
+    update: {
+      name: "Segovia Warehouse",
+      country: "ES",
+      status: "active",
+      type: "own",
+      isDefault: true,
+    },
+    create: {
+      storeId: store.id,
+      code: "ES-SEG",
+      name: "Segovia Warehouse",
       country: "ES",
       status: "active",
       type: "own",
@@ -122,9 +142,9 @@ async function main() {
   });
 
   const locationA1 = await prisma.warehouseLocation.upsert({
-    where: { warehouseId_code: { warehouseId: warehouseES.id, code: "A1" } },
+    where: { warehouseId_code: { warehouseId: warehouseSEG.id, code: "A1" } },
     update: { name: "Estanteria A1", isActive: true },
-    create: { warehouseId: warehouseES.id, code: "A1", name: "Estanteria A1", isActive: true },
+    create: { warehouseId: warehouseSEG.id, code: "A1", name: "Estanteria A1", isActive: true },
   });
 
   await prisma.warehouseLocation.upsert({
@@ -560,7 +580,7 @@ async function main() {
       id: "seed-lot-armani-es-001",
       storeId: store.id,
       productId: product.id,
-      warehouseId: warehouseES.id,
+      warehouseId: warehouseSEG.id,
       locationId: locationA1.id,
       lotCode: "LOT-2026-ES-0001",
       sourceType: "manual_init",
@@ -583,7 +603,7 @@ async function main() {
       storeId: store.id,
       productId: product.id,
       lotId: lot.id,
-      warehouseId: warehouseES.id,
+      warehouseId: warehouseSEG.id,
       movementType: "lot_create",
       quantity: 10,
       unitCostEurFrozen: "110.4000",
@@ -808,7 +828,7 @@ async function main() {
       status: "processed",
       quantity: 1,
       returnCostEur: "4.50",
-      warehouseId: warehouseES.id,
+      warehouseId: warehouseSEG.id,
       processedByUserId: admin.id,
       processedAt: new Date("2026-03-02T00:00:00.000Z"),
     },
@@ -826,7 +846,7 @@ async function main() {
       status: "processed",
       quantity: 1,
       returnCostEur: "4.50",
-      warehouseId: warehouseES.id,
+      warehouseId: warehouseSEG.id,
       processedByUserId: admin.id,
       processedAt: new Date("2026-03-02T00:00:00.000Z"),
     },

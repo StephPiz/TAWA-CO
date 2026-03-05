@@ -12,6 +12,12 @@ export function requireTokenOrRedirect(): string | null {
   return token;
 }
 
+export function handleUnauthorized(status: number): boolean {
+  if (status !== 401) return false;
+  logout();
+  return true;
+}
+
 export function logout() {
   if (typeof window === "undefined") return;
   localStorage.removeItem("accessToken");

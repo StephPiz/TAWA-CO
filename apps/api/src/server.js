@@ -2200,6 +2200,7 @@ app.get("/stores/:storeId/bootstrap", requireAuth, async (req, res) => {
           status: true,
           description: true,
           logoUrl: true,
+          themeColor: true,
           baseCurrencyCode: true,
           invoicePrefix: true,
         },
@@ -2214,9 +2215,300 @@ app.get("/stores/:storeId/bootstrap", requireAuth, async (req, res) => {
       }),
     ]);
 
-    return res.json({ store, roleKey: membership.roleKey, warehouses, channels });
+    const fiscalCountryCode =
+      (warehouses.find((w) => w.isDefault)?.country || warehouses[0]?.country || channels[0]?.countryCode || null);
+
+    return res.json({
+      store: {
+        ...store,
+        fiscalCountryCode: fiscalCountryCode ? String(fiscalCountryCode).toUpperCase() : null,
+      },
+      roleKey: membership.roleKey,
+      warehouses,
+      channels,
+    });
   } catch (err) {
     console.error("GET /stores/:storeId/bootstrap error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/stores/:storeId/fx-rate", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.params;
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const fromRaw = String(req.query.from || "").trim().toUpperCase();
+    const toRaw = String(req.query.to || "").trim().toUpperCase();
+    const from = parseCurrencyCode(fromRaw);
+    const to = parseCurrencyCode(toRaw);
+    if (!from || !to) return res.status(400).json({ error: "Invalid from/to currencyCode" });
+
+    if (from === to) {
+      return res.json({ from, to, rate: 1, source: "same_currency" });
+    }
+
+    const [fromToEur, toToEur] = await Promise.all([
+      getLatestFxToEur(storeId, from),
+      getLatestFxToEur(storeId, to),
+    ]);
+
+    const computed = Number(fromToEur) / Number(toToEur || 1);
+    const rate = Number.isFinite(computed) && computed > 0 ? Number(computed.toFixed(8)) : 1;
+
+    return res.json({
+      from,
+      to,
+      rate,
+      source: "store_fx_rates",
+      asOf: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("GET /stores/:storeId/fx-rate error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/stores/:storeId/profile", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.params;
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const canWrite = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage store profile" });
+
+    const { name, description, logoUrl, themeColor, fiscalCountryCode } = req.body || {};
+    const updates = {};
+
+    if (name !== undefined) {
+      const value = String(name || "").trim();
+      if (!value) return res.status(400).json({ error: "Store name is required" });
+      updates.name = value;
+    }
+    if (description !== undefined) {
+      updates.description = description ? String(description).trim() : null;
+    }
+    if (logoUrl !== undefined) {
+      updates.logoUrl = logoUrl ? String(logoUrl).trim() : null;
+    }
+    if (themeColor !== undefined) {
+      const value = String(themeColor || "").trim();
+      if (value && !/^#[0-9A-Fa-f]{6}$/.test(value)) {
+        return res.status(400).json({ error: "Invalid theme color format" });
+      }
+      updates.themeColor = value || null;
+    }
+    let normalizedFiscalCountry = null;
+    if (fiscalCountryCode !== undefined) {
+      const value = String(fiscalCountryCode || "").trim().toUpperCase();
+      if (value && !/^[A-Z]{2}$/.test(value)) {
+        return res.status(400).json({ error: "Invalid fiscal country code" });
+      }
+      normalizedFiscalCountry = value || null;
+    }
+    const updated = await prisma.$transaction(async (tx) => {
+      const storeUpdated =
+        Object.keys(updates).length > 0
+          ? await tx.store.update({
+              where: { id: storeId },
+              data: updates,
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                logoUrl: true,
+                themeColor: true,
+              },
+            })
+          : await tx.store.findUnique({
+              where: { id: storeId },
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                logoUrl: true,
+                themeColor: true,
+              },
+            });
+
+      if (fiscalCountryCode !== undefined) {
+        const defaultWh = await tx.warehouse.findFirst({
+          where: { storeId, isDefault: true },
+          select: { id: true },
+        });
+        if (defaultWh) {
+          await tx.warehouse.update({
+            where: { id: defaultWh.id },
+            data: { country: normalizedFiscalCountry },
+          });
+        } else {
+          const anyWh = await tx.warehouse.findFirst({
+            where: { storeId },
+            select: { id: true },
+          });
+          if (anyWh) {
+            await tx.warehouse.update({
+              where: { id: anyWh.id },
+              data: { country: normalizedFiscalCountry },
+            });
+          }
+        }
+      }
+
+      const whDefault = await tx.warehouse.findFirst({
+        where: { storeId, isDefault: true },
+        select: { country: true },
+      });
+      const whAny = whDefault?.country
+        ? null
+        : await tx.warehouse.findFirst({
+            where: { storeId },
+            select: { country: true },
+          });
+      const resolvedFiscalCountry = String(whDefault?.country || whAny?.country || "").trim().toUpperCase() || null;
+
+      return {
+        ...storeUpdated,
+        fiscalCountryCode: resolvedFiscalCountry,
+      };
+    });
+
+    return res.json({ ok: true, store: updated });
+  } catch (err) {
+    console.error("PATCH /stores/:storeId/profile error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/stores/:storeId/billing-profile", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.params;
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const profile = await prisma.storeBillingProfile.findUnique({
+      where: { storeId },
+      select: {
+        storeId: true,
+        companyName: true,
+        fiscalAddress: true,
+        countryCode: true,
+        city: true,
+        postalCode: true,
+        phone: true,
+        taxId: true,
+        billingEmail: true,
+        invoicePrefix: true,
+        fiscalCountry: true,
+        updatedAt: true,
+      },
+    });
+
+    return res.json({ profile: profile || null });
+  } catch (err) {
+    console.error("GET /stores/:storeId/billing-profile error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/stores/:storeId/billing-profile", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId } = req.params;
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const canWrite = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage billing profile" });
+
+    const {
+      companyName,
+      fiscalAddress,
+      countryCode,
+      city,
+      postalCode,
+      phone,
+      taxId,
+      billingEmail,
+      invoicePrefix,
+      fiscalCountry,
+    } = req.body || {};
+
+    const normalizeStr = (v) => {
+      if (v === undefined) return undefined;
+      const s = String(v || "").trim();
+      return s || null;
+    };
+    const normalizeCountry = (v) => {
+      if (v === undefined) return undefined;
+      const s = String(v || "").trim().toUpperCase();
+      if (!s) return null;
+      if (!/^[A-Z]{2}$/.test(s)) return "__INVALID__";
+      return s;
+    };
+
+    const normCountryCode = normalizeCountry(countryCode);
+    if (normCountryCode === "__INVALID__") return res.status(400).json({ error: "Invalid countryCode" });
+    const normFiscalCountry = normalizeCountry(fiscalCountry);
+    if (normFiscalCountry === "__INVALID__") return res.status(400).json({ error: "Invalid fiscalCountry" });
+
+    const data = {
+      companyName: normalizeStr(companyName),
+      fiscalAddress: normalizeStr(fiscalAddress),
+      countryCode: normCountryCode,
+      city: normalizeStr(city),
+      postalCode: normalizeStr(postalCode),
+      phone: normalizeStr(phone),
+      taxId: normalizeStr(taxId),
+      billingEmail: normalizeStr(billingEmail),
+      invoicePrefix: normalizeStr(invoicePrefix),
+      fiscalCountry: normFiscalCountry,
+    };
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const profile = await tx.storeBillingProfile.upsert({
+        where: { storeId },
+        create: {
+          storeId,
+          ...data,
+        },
+        update: data,
+      });
+
+      if (data.invoicePrefix !== undefined) {
+        await tx.store.update({
+          where: { id: storeId },
+          data: { invoicePrefix: data.invoicePrefix },
+        });
+      }
+
+      return profile;
+    });
+
+    return res.json({
+      ok: true,
+      profile: {
+        storeId: updated.storeId,
+        companyName: updated.companyName,
+        fiscalAddress: updated.fiscalAddress,
+        countryCode: updated.countryCode,
+        city: updated.city,
+        postalCode: updated.postalCode,
+        phone: updated.phone,
+        taxId: updated.taxId,
+        billingEmail: updated.billingEmail,
+        invoicePrefix: updated.invoicePrefix,
+        fiscalCountry: updated.fiscalCountry,
+        updatedAt: updated.updatedAt,
+      },
+    });
+  } catch (err) {
+    console.error("PATCH /stores/:storeId/billing-profile error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });

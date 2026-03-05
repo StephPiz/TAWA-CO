@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { logout, requireTokenOrRedirect } from "../lib/auth";
+import { handleUnauthorized, logout, requireTokenOrRedirect } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { useStorePermissions } from "../lib/access";
 import { usePresence } from "../lib/presence";
@@ -60,6 +60,7 @@ export default function Topbar({ title, storeName }: Props) {
         const res = await fetch(`${API_BASE}/notifications?${qs}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (handleUnauthorized(res.status)) return;
         const data = await res.json();
         if (!res.ok || !active) return;
 

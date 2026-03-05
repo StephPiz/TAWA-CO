@@ -763,7 +763,7 @@ export default function AddStorePage() {
               </div>
 
               <div className="mt-8 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
-                Configura marketplaces activos
+                Configura canales activos
               </div>
               <button
                 type="button"
@@ -771,7 +771,7 @@ export default function AddStorePage() {
                 style={{ fontFamily: "var(--font-add-store-body)" }}
                 onClick={() => setShowMarketplaceInput((prev) => !prev)}
               >
-                + anadir marketplace
+                + añadir canales
               </button>
               {showMarketplaceInput && (
                 <div className="mt-3 flex gap-2">
@@ -1235,7 +1235,7 @@ export default function AddStorePage() {
 
               <div className="col-span-4">
                 <div className="text-[16px] text-[#3b4256]" style={{ fontFamily: "var(--font-add-store-body)" }}>
-                  Configura marketplaces activos
+                  Configura canales activos
                 </div>
                 <button
                   type="button"
@@ -1243,7 +1243,7 @@ export default function AddStorePage() {
                   style={{ fontFamily: "var(--font-add-store-body)" }}
                   onClick={() => setShowMarketplaceInput((prev) => !prev)}
                 >
-                  + anadir marketplace
+                  + añadir canales
                 </button>
 
                 {showMarketplaceInput && (
@@ -1410,7 +1410,7 @@ export default function AddStorePage() {
                           <span
                             role="button"
                             aria-label={`Eliminar ${warehouse.name}`}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3E5EA] text-[12px] font-semibold text-[#5D6477] hover:bg-[#D3D7E2]"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#8A76E6] text-[13px] font-semibold text-white hover:bg-[#7B67DF]"
                             onClick={(e) => {
                               e.stopPropagation();
                               setActiveWarehouses((prev) =>
