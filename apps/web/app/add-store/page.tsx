@@ -16,6 +16,11 @@ const bodyFont = localFont({
   variable: "--font-add-store-body",
 });
 
+const swinstonRegularFont = localFont({
+  src: "../fonts/SwinstonSansDemo-Regular.ttf",
+  variable: "--font-add-store-swinston-regular",
+});
+
 const countryOptions = [
   { code: "DE", name: "Alemania" },
   { code: "SA", name: "Arabia Saudita" },
@@ -67,7 +72,7 @@ const countryOptions = [
   { code: "NZ", name: "Nueva Zelanda" },
   { code: "PA", name: "Panama" },
   { code: "PY", name: "Paraguay" },
-  { code: "PE", name: "Peru" },
+  { code: "PE", name: "Perú" },
   { code: "PL", name: "Polonia" },
   { code: "PT", name: "Portugal" },
   { code: "GB", name: "Reino Unido" },
@@ -115,6 +120,7 @@ type SuccessState = {
 
 export default function AddStorePage() {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const colorPickerRef = useRef<HTMLInputElement | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const [storeNameInput, setStoreNameInput] = useState("");
@@ -205,29 +211,41 @@ export default function AddStorePage() {
   ]);
   const [showWarehouseInput, setShowWarehouseInput] = useState(false);
   const [warehouseInput, setWarehouseInput] = useState("");
+  const [mobileStep, setMobileStep] = useState(1);
   const [activeWarehouses, setActiveWarehouses] = useState([
     { name: "ES-SEG", active: true, isDefault: true },
   ]);
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const todayLabelRaw = new Intl.DateTimeFormat("es-ES", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  })
-    .format(now)
-    .replace(",", "");
-  const todayLabel = todayLabelRaw.charAt(0).toUpperCase() + todayLabelRaw.slice(1);
-  const timeLabel = new Intl.DateTimeFormat("es-ES", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(now);
+  const todayLabel = now
+    ? (() => {
+        const raw = new Intl.DateTimeFormat("es-ES", {
+          weekday: "long",
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+        })
+          .format(now)
+          .replace(",", "");
+        return raw.charAt(0).toUpperCase() + raw.slice(1);
+      })()
+    : "";
+  const timeLabel = now
+    ? new Intl.DateTimeFormat("es-ES", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(now)
+    : "";
 
   useEffect(() => {
     if (!successState) {
@@ -323,64 +341,68 @@ export default function AddStorePage() {
     }
   }
 
+  if (!mounted) {
+    return (
+      <main className={`${headingFont.variable} ${bodyFont.variable} ${swinstonRegularFont.variable} h-[100dvh] overflow-hidden bg-[#E8EAEC] p-4 md:h-screen md:bg-[#DADCE0] md:p-6`} />
+    );
+  }
+
   if (successState) {
     return (
-      <main
-        className={`${headingFont.variable} ${bodyFont.variable} flex min-h-screen items-center justify-center bg-[#4449CD] p-6`}
-      >
-        <div className="w-full max-w-[1280px] text-center">
-          <Image
-            src="/branding/releases-illustration.png"
-            alt="Tienda agregada"
-            width={160}
-            height={160}
-            className="mx-auto h-auto w-[150px]"
-            priority
-          />
-          <h1 className="mt-6 text-[38px] leading-none text-[#11152F]" style={{ fontFamily: "var(--font-add-store-heading)" }}>
-            Tienda agregada correctamente
-          </h1>
+      <main className={`${headingFont.variable} ${bodyFont.variable} h-[100dvh] overflow-hidden bg-[#4449CD] md:min-h-screen md:p-6`}>
+        <div className="mx-auto flex h-full w-full max-w-[1280px] flex-col text-center">
+          <div className="flex h-full flex-col items-center px-6 pt-16 md:hidden">
+            <Image
+              src="/branding/releases-illustration.png"
+              alt="Tienda agregada"
+              width={140}
+              height={140}
+              className="h-auto w-[128px]"
+              priority
+            />
+            <h1 className="mt-6 text-[50px] leading-[1.06] text-[#11152F]" style={{ fontFamily: "var(--font-add-store-heading)" }}>
+              Tienda agregada
+              <br />
+              correctamente
+            </h1>
 
-          <div
-            className={`mx-auto mt-10 min-h-[520px] rounded-[38px] bg-[#E8EAEC] px-12 py-12 text-left text-[#11152F] shadow-[0_22px_55px_rgba(0,0,0,0.2)] transition-all duration-700 ${
-              showSuccessCard
-                ? "translate-y-0 opacity-100"
-                : "pointer-events-none translate-y-12 opacity-0"
-            }`}
-          >
-            <div className="mt-10">
-              <h2 className="text-center text-[30px] leading-none" style={{ fontFamily: "var(--font-add-store-heading)" }}>
+            <div
+              className={`mt-auto w-[calc(100%+3rem)] rounded-t-[30px] bg-[#E8EAEC] px-8 pb-10 pt-12 text-left text-[#11152F] transition-all duration-700 ${
+                showSuccessCard ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-16 opacity-0"
+              }`}
+            >
+              <h2 className="text-center text-[32px] leading-none" style={{ fontFamily: "var(--font-add-store-heading)" }}>
                 Bienvenido {successState.storeName}
               </h2>
 
-              <div className="mx-auto mt-10 max-w-[620px] space-y-3 text-[18px]" style={{ fontFamily: "var(--font-add-store-body)" }}>
-                <div className="flex items-center gap-4">
-                  <span className="relative left-[145px]">🇪🇸</span>
-                  <span className="w-[270px] text-right">Base fiscal</span>
+              <div className="mx-auto mt-10 max-w-[280px] space-y-3 text-[18px]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                <div className="grid grid-cols-[22px_1fr_auto_1fr] items-center gap-3">
+                  <span>🇪🇸</span>
+                  <span>Base fiscal</span>
                   <span>:</span>
                   <span>{successState.fiscalCountryName}</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="relative left-[145px]">💰</span>
-                  <span className="w-[270px] text-right">Moneda base</span>
+                <div className="grid grid-cols-[22px_1fr_auto_1fr] items-center gap-3">
+                  <span>💰</span>
+                  <span>Moneda base</span>
                   <span>:</span>
                   <span>{successState.baseCurrencyLabel}</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="relative left-[145px]">🗄️</span>
-                  <span className="w-[270px] text-right">Almacenes</span>
+                <div className="grid grid-cols-[22px_1fr_auto_1fr] items-center gap-3">
+                  <span>🗄️</span>
+                  <span>Almacenes</span>
                   <span>:</span>
                   <span>{successState.warehousesCount}</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="relative left-[145px]">🛒</span>
-                  <span className="w-[270px] text-right">Marketplaces</span>
+                <div className="grid grid-cols-[22px_1fr_auto_1fr] items-center gap-3">
+                  <span>🛒</span>
+                  <span>Marketplaces</span>
                   <span>:</span>
                   <span>{successState.marketplacesCount}</span>
                 </div>
               </div>
 
-              <div className="mt-12 flex justify-center">
+              <div className="mt-10 flex justify-center">
                 <button
                   type="button"
                   className="h-[52px] rounded-full bg-[#0B1230] px-10 text-[18px] text-white"
@@ -392,14 +414,510 @@ export default function AddStorePage() {
               </div>
             </div>
           </div>
+
+          <div className="hidden w-full md:block">
+            <Image
+              src="/branding/releases-illustration.png"
+              alt="Tienda agregada"
+              width={160}
+              height={160}
+              className="mx-auto h-auto w-[150px]"
+              priority
+            />
+            <h1 className="mt-6 text-[38px] leading-none text-[#11152F]" style={{ fontFamily: "var(--font-add-store-heading)" }}>
+              Tienda agregada correctamente
+            </h1>
+
+            <div
+              className={`mx-auto mt-10 min-h-[520px] rounded-[38px] bg-[#E8EAEC] px-12 py-12 text-left text-[#11152F] shadow-[0_22px_55px_rgba(0,0,0,0.2)] transition-all duration-700 ${
+                showSuccessCard ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-12 opacity-0"
+              }`}
+            >
+              <div className="mt-10">
+                <h2 className="text-center text-[30px] leading-none" style={{ fontFamily: "var(--font-add-store-heading)" }}>
+                  Bienvenido {successState.storeName}
+                </h2>
+
+                <div className="mx-auto mt-10 max-w-[620px] space-y-3 text-[18px]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                  <div className="flex items-center gap-4">
+                    <span className="relative left-[145px]">🇪🇸</span>
+                    <span className="w-[270px] text-right">Base fiscal</span>
+                    <span>:</span>
+                    <span>{successState.fiscalCountryName}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="relative left-[145px]">💰</span>
+                    <span className="w-[270px] text-right">Moneda base</span>
+                    <span>:</span>
+                    <span>{successState.baseCurrencyLabel}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="relative left-[145px]">🗄️</span>
+                    <span className="w-[270px] text-right">Almacenes</span>
+                    <span>:</span>
+                    <span>{successState.warehousesCount}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="relative left-[145px]">🛒</span>
+                    <span className="w-[270px] text-right">Marketplaces</span>
+                    <span>:</span>
+                    <span>{successState.marketplacesCount}</span>
+                  </div>
+                </div>
+
+                <div className="mt-12 flex justify-center">
+                  <button
+                    type="button"
+                    className="h-[52px] rounded-full bg-[#0B1230] px-10 text-[18px] text-white"
+                    style={{ fontFamily: "var(--font-add-store-heading)" }}
+                    onClick={() => router.push("/select-store")}
+                  >
+                    Ver tienda
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     );
   }
 
   return (
-    <main className={`${headingFont.variable} ${bodyFont.variable} h-screen overflow-hidden bg-[#DADCE0] p-4 md:p-6`}>
-      <div className="mx-auto flex h-full max-w-[1520px] gap-4 md:gap-5">
+    <main suppressHydrationWarning className={`${headingFont.variable} ${bodyFont.variable} ${swinstonRegularFont.variable} h-[100dvh] overflow-hidden bg-[#E8EAEC] p-4 md:h-screen md:bg-[#DADCE0] md:p-6`}>
+      <section className="mx-auto h-[calc(100dvh-2rem)] max-w-[380px] md:hidden">
+        <div className="flex h-full flex-col px-2 pb-3 pt-2 text-[#121633]">
+          <div className="mb-4 flex items-center justify-between text-[15px] leading-none text-[#555b70]" style={{ fontFamily: "var(--font-add-store-swinston-regular)" }}>
+            <span>&gt; Paso {mobileStep} de 3</span>
+            <button
+              type="button"
+              className="text-[15px] text-[#666] hover:text-[#121633]"
+              style={{ fontFamily: "var(--font-add-store-swinston-regular)" }}
+              onClick={() => {
+                if (mobileStep > 1) {
+                  setMobileStep((prev) => Math.max(1, prev - 1));
+                } else {
+                  router.back();
+                }
+              }}
+            >
+              Volver
+            </button>
+          </div>
+
+          {mobileStep === 1 ? (
+            <div className="mt-8">
+              <h1 className="text-[32px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-add-store-heading)" }}>
+                Agregar Tienda
+              </h1>
+              <p className="mt-2 text-[14px] leading-[1.25] text-[#2c3248]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Crea una nueva tienda dentro de TAWA
+              </p>
+
+              <input
+                className="mt-10 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#727780] outline-none"
+                placeholder="Ingresar el nombre de la tienda"
+                style={{ fontFamily: "var(--font-add-store-body)" }}
+                value={storeNameInput}
+                onChange={(e) => setStoreNameInput(e.target.value)}
+              />
+
+              <div className="mt-4 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Logo
+              </div>
+              <button
+                type="button"
+                className="mt-2 flex h-[120px] w-full items-center justify-center rounded-[16px] border-2 border-dashed border-[#7e8598] bg-[#ECEEF1]"
+                onClick={() => logoInputRef.current?.click()}
+              >
+                {logoPreviewUrl ? (
+                  <div className="flex h-full w-full items-center gap-3 px-4">
+                    <img src={logoPreviewUrl} alt="Logo de tienda" className="h-16 w-16 rounded-xl object-contain bg-white p-1" />
+                    <div className="text-left text-[12px] leading-[1.2] text-[#4f5568]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                      Logo subido correctamente
+                      <br />
+                      Click para reemplazar
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center">
+                    <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#CFC7F5] text-[34px] text-[#6142C4]">
+                      {logoUploading ? "…" : "+"}
+                    </div>
+                    <div className="mt-2 text-[12px] leading-[1.2] text-[#4f5568]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                      {logoUploading ? "Subiendo imagen..." : "Subir imagen (512x512 PNG / SVG)"}
+                      <br />
+                      Fondo transparente recomendado
+                    </div>
+                  </div>
+                )}
+              </button>
+              <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" onChange={handleLogoChange} />
+              {logoUploadError ? (
+                <div className="mt-2 text-[22px] text-[#C0392B]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                  {logoUploadError}
+                </div>
+              ) : null}
+
+              <div className="mt-4 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Descripcion interna
+              </div>
+              <input
+                className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#727780] outline-none"
+                placeholder="Ejm Tienda de accesorio lujo"
+                style={{ fontFamily: "var(--font-add-store-body)" }}
+                value={internalDescription}
+                onChange={(e) => setInternalDescription(e.target.value)}
+              />
+
+              <div className="mt-4 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Color identificativo
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                {brandColors.map((color, index) => (
+                  <div key={`${color}-${index}`} className="relative">
+                    <button
+                      type="button"
+                      className="h-14 w-14 rounded-full"
+                      style={{ backgroundColor: color }}
+                      onClick={() => {
+                        setEditingColorIndex(index);
+                        if (colorPickerRef.current) {
+                          colorPickerRef.current.value = color;
+                          colorPickerRef.current.click();
+                        }
+                      }}
+                      aria-label="Editar color"
+                    />
+                    {index >= fixedBrandColorsCount && (
+                      <button
+                        type="button"
+                        className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#1B2140] text-[10px] leading-none text-white"
+                        aria-label="Eliminar color"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setBrandColors((prev) => prev.filter((_, idx) => idx !== index));
+                        }}
+                      >
+                        x
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className={`flex h-14 w-14 items-center justify-center rounded-full border border-dashed text-[40px] ${
+                    canAddBrandColor ? "border-[#7B818F] text-[#2A3146]" : "border-[#B4BAC8] text-[#9CA3B4]"
+                  }`}
+                  onClick={() => {
+                    if (!canAddBrandColor) return;
+                    setEditingColorIndex(null);
+                    colorPickerRef.current?.click();
+                  }}
+                  disabled={!canAddBrandColor}
+                >
+                  +
+                </button>
+                <input
+                  ref={colorPickerRef}
+                  type="color"
+                  className="sr-only"
+                  onChange={(e) => {
+                    const color = e.target.value.toUpperCase();
+                    setBrandColors((prev) => {
+                      if (editingColorIndex !== null) {
+                        return prev.map((item, idx) => (idx === editingColorIndex ? color : item));
+                      }
+                      if (prev.length >= maxBrandColors) {
+                        return prev;
+                      }
+                      return prev.includes(color) ? prev : [...prev, color];
+                    });
+                    setEditingColorIndex(null);
+                  }}
+                />
+              </div>
+            </div>
+          ) : mobileStep === 2 ? (
+            <div className="mt-2">
+              <p className="mt-4 max-w-[320px] text-[16px] leading-[1.3] text-[#1a213d]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Define el país base y los países donde esta tienda vende
+              </p>
+
+              <div className="mt-10 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                País base fiscal
+              </div>
+              <div className="relative mt-2">
+                <select
+                  className={`h-[52px] w-full appearance-none rounded-full border-none bg-white px-6 pr-12 text-[16px] outline-none ${
+                    fiscalCountry ? "text-[#3b4256]" : "text-[#A3A6AE]"
+                  }`}
+                  style={{ fontFamily: "var(--font-add-store-body)" }}
+                  value={fiscalCountry}
+                  onChange={(e) => setFiscalCountry(e.target.value)}
+                >
+                  <option value="" disabled>
+                    Buscar país
+                  </option>
+                  {countryOptions.map((country) => (
+                    <option key={country.code} value={country.code}>
+                      {country.name} {getFlagEmoji(country.code)}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 text-[16px] text-[#3b4256]">
+                  ▾
+                </span>
+              </div>
+
+              <div className="mt-8 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Países donde vende esta tienda
+              </div>
+              <div className="relative mt-2">
+                <select
+                  className={`h-[52px] w-full appearance-none rounded-full border-none bg-white px-6 pr-12 text-[16px] outline-none ${
+                    salesCountry ? "text-[#3b4256]" : "text-[#A3A6AE]"
+                  }`}
+                  style={{ fontFamily: "var(--font-add-store-body)" }}
+                  value={salesCountry}
+                  onChange={(e) => {
+                    const nextCountry = e.target.value;
+                    setSalesCountry("");
+                    setSalesCountries((prev) =>
+                      prev.some((country) => country.code === nextCountry)
+                        ? prev
+                        : [...prev, { code: nextCountry, active: true }]
+                    );
+                  }}
+                >
+                  <option value="" disabled>
+                    Buscar país
+                  </option>
+                  {countryOptions.map((country) => (
+                    <option key={country.code} value={country.code}>
+                      {country.name} {getFlagEmoji(country.code)}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 text-[16px] text-[#3b4256]">
+                  ▾
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
+                {salesCountries.map((country) => {
+                  const countryData = countryOptions.find((option) => option.code === country.code);
+                  if (!countryData) return null;
+
+                  return (
+                    <button
+                      key={country.code}
+                      type="button"
+                      className={`flex h-[48px] items-center justify-between rounded-full px-5 text-[14px] ${
+                        country.active ? "bg-[#FFFFFF]" : "bg-[#F3F4F6]"
+                      }`}
+                      style={{ fontFamily: "var(--font-add-store-body)" }}
+                      onClick={() =>
+                        setSalesCountries((prev) =>
+                          prev.map((item) =>
+                            item.code === country.code ? { ...item, active: !item.active } : item
+                          )
+                        )
+                      }
+                    >
+                      <span>
+                        {countryData.name} {getFlagEmoji(country.code)}
+                      </span>
+                      <span className={`h-7 w-7 rounded-full ${country.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2">
+              <div className="mt-4 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Moneda Base de la Tienda
+              </div>
+              <div className="relative mt-2">
+                <select
+                  className={`h-[52px] w-full appearance-none rounded-full border-none bg-white px-6 pr-12 text-[16px] outline-none ${
+                    baseCurrency ? "text-[#3b4256]" : "text-[#A3A6AE]"
+                  }`}
+                  style={{ fontFamily: "var(--font-add-store-body)" }}
+                  value={baseCurrency}
+                  onChange={(e) => setBaseCurrency(e.target.value)}
+                >
+                  <option value="" disabled>
+                    Buscar Moneda
+                  </option>
+                  {currencyOptions.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 text-[16px] text-[#3b4256]">
+                  ▾
+                </span>
+              </div>
+
+              <div className="mt-8 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Configura marketplaces activos
+              </div>
+              <button
+                type="button"
+                className="mt-2 h-[48px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4]"
+                style={{ fontFamily: "var(--font-add-store-body)" }}
+                onClick={() => setShowMarketplaceInput((prev) => !prev)}
+              >
+                + anadir marketplace
+              </button>
+              {showMarketplaceInput && (
+                <div className="mt-3 flex gap-2">
+                  <input
+                    className="h-[42px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#3b4256] outline-none"
+                    style={{ fontFamily: "var(--font-add-store-body)" }}
+                    placeholder="Escribe marketplace"
+                    value={marketplaceInput}
+                    onChange={(e) => setMarketplaceInput(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="h-[42px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white"
+                    style={{ fontFamily: "var(--font-add-store-heading)" }}
+                    onClick={() => {
+                      const normalizedName = marketplaceInput.trim();
+                      if (!normalizedName) return;
+                      setMarketplaces((prev) =>
+                        prev.some((item) => item.name.toLowerCase() === normalizedName.toLowerCase())
+                          ? prev
+                          : [...prev, { name: normalizedName, active: true, isDefault: false }]
+                      );
+                      setMarketplaceInput("");
+                    }}
+                  >
+                    Agregar
+                  </button>
+                </div>
+              )}
+              <div className="mt-3 flex flex-col gap-2.5">
+                {marketplaces.map((marketplace) => (
+                  <button
+                    key={marketplace.name}
+                    type="button"
+                    className="flex h-[42px] w-[48%] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#3B4256]"
+                    style={{ fontFamily: "var(--font-add-store-body)" }}
+                    onClick={() =>
+                      setMarketplaces((prev) =>
+                        prev.map((item) =>
+                          item.name === marketplace.name ? { ...item, active: !item.active } : item
+                        )
+                      )
+                    }
+                  >
+                    <span>{marketplace.name}</span>
+                    <span className={`h-5 w-5 rounded-full ${marketplace.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-6 text-[16px] text-[#1f253c]" style={{ fontFamily: "var(--font-add-store-body)" }}>
+                Agregar almacén activo
+              </div>
+              <button
+                type="button"
+                className="mt-2 h-[48px] w-full rounded-full border-none bg-[#4449CC26] text-[16px] text-[#6142C4]"
+                style={{ fontFamily: "var(--font-add-store-body)" }}
+                onClick={() => setShowWarehouseInput((prev) => !prev)}
+              >
+                + añadir almacén
+              </button>
+              {showWarehouseInput && (
+                <div className="mt-3 flex gap-2">
+                  <input
+                    className="h-[42px] flex-1 rounded-full border-none bg-white px-4 text-[14px] text-[#3b4256] outline-none"
+                    style={{ fontFamily: "var(--font-add-store-body)" }}
+                    placeholder="Escribe almacén"
+                    value={warehouseInput}
+                    onChange={(e) => setWarehouseInput(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="h-[42px] rounded-full bg-[#0B1230] px-4 text-[14px] text-white"
+                    style={{ fontFamily: "var(--font-add-store-heading)" }}
+                    onClick={() => {
+                      const normalizedName = warehouseInput.trim();
+                      if (!normalizedName) return;
+                      setActiveWarehouses((prev) =>
+                        prev.some((item) => item.name.toLowerCase() === normalizedName.toLowerCase())
+                          ? prev
+                          : [...prev, { name: normalizedName, active: true, isDefault: false }]
+                      );
+                      setWarehouseInput("");
+                    }}
+                  >
+                    Agregar
+                  </button>
+                </div>
+              )}
+              <div className="mt-3 flex flex-col gap-2.5">
+                {activeWarehouses.map((warehouse) => (
+                  <button
+                    key={warehouse.name}
+                    type="button"
+                    className="flex h-[42px] w-[48%] items-center justify-between rounded-full bg-white px-4 text-[14px] text-[#3B4256]"
+                    style={{ fontFamily: "var(--font-add-store-body)" }}
+                    onClick={() =>
+                      setActiveWarehouses((prev) =>
+                        prev.map((item) =>
+                          item.name === warehouse.name ? { ...item, active: !item.active } : item
+                        )
+                      )
+                    }
+                  >
+                    <span>{warehouse.name}</span>
+                    <span className={`h-5 w-5 rounded-full ${warehouse.active ? "bg-[#8A76E6]" : "bg-[#D7D9DE]"}`} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-auto flex items-center justify-between pt-5">
+            <div className="flex items-center gap-2">
+              {[1, 2, 3].map((step) => (
+                <span
+                  key={step}
+                  className={`h-3.5 w-3.5 rounded-full ${
+                    step <= mobileStep ? "bg-[#1A2140]" : "bg-[#BFC3CD]"
+                  }`}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              className="h-[42px] rounded-full bg-[#0B1230] px-7 text-[12px] text-white"
+              style={{ fontFamily: "var(--font-add-store-heading)" }}
+              onClick={() => {
+                if (mobileStep === 1) {
+                  setMobileStep(2);
+                  return;
+                }
+                if (mobileStep === 2) {
+                  setMobileStep(3);
+                  return;
+                }
+                handleConfirmStore();
+              }}
+            >
+              {mobileStep === 3 ? "Guardar" : "Siguiente"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="mx-auto hidden h-full max-w-[1520px] gap-4 md:flex md:gap-5">
         <aside className="hidden w-[300px] rounded-2xl bg-[#FFFFFF] p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)] md:block">
           <div className="flex items-center gap-3 border-b pb-4">
             <Image src="/branding/logo_tawa02.png" alt="TAWA Co" width={114} height={36} className="h-auto w-[114px]" priority />
@@ -582,7 +1100,7 @@ export default function AddStorePage() {
                 </div>
 
                 <div className="mt-7 text-[16px] text-[#3b4256]" style={{ fontFamily: "var(--font-add-store-body)" }}>
-                  Pais base fiscal
+                  País base fiscal
                 </div>
                 <div className="relative mt-2">
                   <select
@@ -594,7 +1112,7 @@ export default function AddStorePage() {
                     onChange={(e) => setFiscalCountry(e.target.value)}
                   >
                     <option value="" disabled>
-                      Buscar pais
+                      Buscar país
                     </option>
                     {countryOptions.map((country) => (
                       <option key={country.code} value={country.code}>
@@ -636,7 +1154,7 @@ export default function AddStorePage() {
                 </div>
 
                 <div className="mt-10 text-[16px] text-[#3b4256]" style={{ fontFamily: "var(--font-add-store-body)" }}>
-                  Paises donde vende esta tienda
+                  Países donde vende esta tienda
                 </div>
                 <div className="relative mt-2">
                   <select
@@ -656,7 +1174,7 @@ export default function AddStorePage() {
                     }}
                   >
                     <option value="" disabled>
-                      Buscar pais
+                      Buscar país
                     </option>
                     {countryOptions.map((country) => (
                       <option key={country.code} value={country.code}>

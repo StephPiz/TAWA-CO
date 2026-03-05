@@ -65,7 +65,7 @@ export default function SelectStorePage() {
 
   function chooseStore(storeId: string) {
     localStorage.setItem("selectedStoreId", storeId);
-    router.push("/dashboard");
+    router.push("/store/dashboarddemarca");
   }
 
   const orderedStores = [...stores].sort((a, b) => a.storeName.localeCompare(b.storeName, "es"));
