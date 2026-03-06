@@ -158,6 +158,11 @@ async function canManagePurchases(userId, storeId, roleKey) {
   return hasPermission(userId, storeId, "purchases.write");
 }
 
+async function canManageInventory(userId, storeId, roleKey) {
+  if (getRoleCapabilities(roleKey).inventoryWrite) return true;
+  return hasPermission(userId, storeId, "inventory.write");
+}
+
 async function canManageTasks(userId, storeId, roleKey) {
   if (getRoleCapabilities(roleKey).tasksWrite) return true;
   return hasPermission(userId, storeId, "tasks.write");
@@ -5711,6 +5716,7 @@ app.get("/inventory", requireAuth, async (req, res) => {
       select: {
         id: true,
         type: true,
+        category: true,
         brand: true,
         model: true,
         name: true,
@@ -5734,10 +5740,36 @@ app.get("/inventory", requireAuth, async (req, res) => {
       select: {
         productId: true,
         warehouseId: true,
+        locationId: true,
         quantityAvailable: true,
         warehouse: { select: { id: true, code: true, name: true } },
+        location: { select: { id: true, code: true, name: true } },
       },
     });
+
+    const transferMovements = await prisma.inventoryMovement.findMany({
+      where: {
+        storeId,
+        productId: { in: productIds },
+        referenceType: "transfer",
+        movementType: { in: ["transfer_out", "transfer_in"] },
+      },
+      select: {
+        productId: true,
+        movementType: true,
+        quantity: true,
+      },
+    });
+
+    const inTransitByProduct = new Map();
+    for (const mv of transferMovements) {
+      const current = Number(inTransitByProduct.get(mv.productId) || 0);
+      if (mv.movementType === "transfer_out") {
+        inTransitByProduct.set(mv.productId, current + Math.abs(Number(mv.quantity || 0)));
+      } else if (mv.movementType === "transfer_in") {
+        inTransitByProduct.set(mv.productId, Math.max(current - Math.abs(Number(mv.quantity || 0)), 0));
+      }
+    }
 
     const stockByProduct = new Map();
     for (const lot of lots) {
@@ -5755,8 +5787,20 @@ app.get("/inventory", requireAuth, async (req, res) => {
         warehouseCode: lot.warehouse.code,
         warehouseName: lot.warehouse.name,
         qty: 0,
+        locations: new Map(),
       };
       currentWh.qty += Number(lot.quantityAvailable);
+      if (lot.locationId && lot.location?.code) {
+        const key = lot.locationId;
+        const locCurrent = currentWh.locations.get(key) || {
+          locationId: lot.location.id,
+          code: lot.location.code,
+          name: lot.location.name || null,
+          qty: 0,
+        };
+        locCurrent.qty += Number(lot.quantityAvailable);
+        currentWh.locations.set(key, locCurrent);
+      }
       wh.set(lot.warehouseId, currentWh);
 
       if (!warehouseId || lot.warehouseId === warehouseId) {
@@ -5767,7 +5811,13 @@ app.get("/inventory", requireAuth, async (req, res) => {
     return res.json({
       items: products.map((p) => {
         const stock = stockByProduct.get(p.id) || { total: 0, selected: 0, warehouses: new Map() };
-        const byWarehouse = Array.from(stock.warehouses.values());
+        const byWarehouse = Array.from(stock.warehouses.values()).map((w) => ({
+          warehouseId: w.warehouseId,
+          warehouseCode: w.warehouseCode,
+          warehouseName: w.warehouseName,
+          qty: w.qty,
+          locations: Array.from(w.locations.values()),
+        }));
 
         const availableElsewhere = byWarehouse.filter((w) => {
           if (!warehouseId) return false;
@@ -5777,6 +5827,7 @@ app.get("/inventory", requireAuth, async (req, res) => {
         return {
           id: p.id,
           type: p.type,
+          category: p.category,
           brand: p.brand,
           model: p.model,
           name: p.name,
@@ -5787,6 +5838,7 @@ app.get("/inventory", requireAuth, async (req, res) => {
           stockTotalStore: stock.total,
           stockByWarehouse: byWarehouse,
           availableElsewhere,
+          inTransitQty: Number(inTransitByProduct.get(p.id) || 0),
         };
       }),
     });
@@ -6429,6 +6481,536 @@ app.post("/inventory/out", requireAuth, async (req, res) => {
     return res.json({ ok: true, consumedLots: result.consumedLots });
   } catch (err) {
     console.error("POST /inventory/out error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/inventory/movements", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    const warehouseId = String(req.query.warehouseId || "").trim();
+    const productId = String(req.query.productId || "").trim();
+    const movementType = String(req.query.movementType || "").trim();
+    const limitRaw = Number(req.query.limit || 120);
+    const limit = Math.max(1, Math.min(400, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 120));
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const rows = await prisma.inventoryMovement.findMany({
+      where: {
+        storeId,
+        ...(warehouseId ? { warehouseId } : {}),
+        ...(productId ? { productId } : {}),
+        ...(movementType ? { movementType } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      include: {
+        product: { select: { id: true, ean: true, brand: true, model: true, name: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
+        location: { select: { id: true, code: true, name: true } },
+        createdBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    return res.json({
+      movements: rows.map((mv) => ({
+        ...mv,
+        unitCostEurFrozen: normalizeMoney(mv.unitCostEurFrozen),
+      })),
+    });
+  } catch (err) {
+    console.error("GET /inventory/movements error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/inventory/adjust", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, productId, warehouseId, locationId, quantityDelta, reason } = req.body || {};
+
+    if (!storeId || !productId || !warehouseId || quantityDelta === undefined) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const delta = Number(quantityDelta);
+    if (!Number.isInteger(delta) || delta === 0) {
+      return res.status(400).json({ error: "quantityDelta must be a non-zero integer" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageInventory(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to adjust inventory" });
+
+    const [product, warehouse] = await Promise.all([
+      prisma.product.findFirst({ where: { id: productId, storeId }, select: { id: true } }),
+      prisma.warehouse.findFirst({ where: { id: warehouseId, storeId }, select: { id: true } }),
+    ]);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    if (!warehouse) return res.status(404).json({ error: "Warehouse not found" });
+
+    if (locationId) {
+      const location = await prisma.warehouseLocation.findFirst({
+        where: { id: String(locationId), warehouseId },
+        select: { id: true },
+      });
+      if (!location) return res.status(400).json({ error: "Invalid locationId for selected warehouse" });
+    }
+
+    if (delta > 0) {
+      const result = await prisma.$transaction(async (tx) => {
+        const lot = await tx.inventoryLot.create({
+          data: {
+            storeId,
+            productId,
+            warehouseId,
+            locationId: locationId || null,
+            lotCode: `ADJ-${new Date().toISOString().slice(0, 10)}-${Date.now()}`,
+            sourceType: "manual_adjustment",
+            quantityReceived: delta,
+            quantityAvailable: delta,
+            unitCostOriginal: "0",
+            costCurrencyCode: "EUR",
+            fxToEur: "1",
+            unitCostEurFrozen: "0",
+            note: reason || "Ajuste manual",
+          },
+        });
+
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            storeId,
+            productId,
+            warehouseId,
+            locationId: locationId || null,
+            lotId: lot.id,
+            movementType: "adjustment",
+            quantity: delta,
+            unitCostEurFrozen: "0",
+            referenceType: "manual_adjustment",
+            referenceId: lot.id,
+            reason: reason || "Ajuste manual (+)",
+            createdByUserId: userId,
+          },
+        });
+
+        await createAuditLogSafe({
+          storeId,
+          userId,
+          action: "inventory.adjust",
+          entityType: "inventory_adjustment",
+          entityId: movement.id,
+          message: "Manual inventory adjustment (+)",
+          payload: { productId, warehouseId, locationId: locationId || null, quantityDelta: delta, reason: reason || null },
+        });
+
+        return { lot, movement };
+      });
+
+      return res.status(201).json({ ok: true, direction: "in", lot: result.lot, movement: result.movement });
+    }
+
+    const qtyNeeded = Math.abs(delta);
+    const lots = await prisma.inventoryLot.findMany({
+      where: {
+        storeId,
+        productId,
+        warehouseId,
+        status: "available",
+        quantityAvailable: { gt: 0 },
+      },
+      orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
+    });
+    const totalAvailable = lots.reduce((sum, lot) => sum + Number(lot.quantityAvailable), 0);
+    if (totalAvailable < qtyNeeded) {
+      return res.status(409).json({ error: "INSUFFICIENT_STOCK", available: totalAvailable, requested: qtyNeeded });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      let remaining = qtyNeeded;
+      const movements = [];
+      for (const lot of lots) {
+        if (remaining <= 0) break;
+        const current = Number(lot.quantityAvailable);
+        if (current <= 0) continue;
+        const used = Math.min(current, remaining);
+        remaining -= used;
+
+        await tx.inventoryLot.update({
+          where: { id: lot.id },
+          data: { quantityAvailable: current - used },
+        });
+
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            storeId,
+            productId,
+            warehouseId,
+            locationId: lot.locationId || null,
+            lotId: lot.id,
+            movementType: "adjustment",
+            quantity: -used,
+            unitCostEurFrozen: lot.unitCostEurFrozen,
+            referenceType: "manual_adjustment",
+            referenceId: lot.id,
+            reason: reason || "Ajuste manual (-)",
+            createdByUserId: userId,
+          },
+        });
+        movements.push(movement);
+      }
+
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "inventory.adjust",
+        entityType: "inventory_adjustment",
+        entityId: productId,
+        message: "Manual inventory adjustment (-)",
+        payload: { productId, warehouseId, locationId: locationId || null, quantityDelta: delta, reason: reason || null },
+      });
+
+      return { movements };
+    });
+
+    return res.status(201).json({ ok: true, direction: "out", movements: result.movements });
+  } catch (err) {
+    console.error("POST /inventory/adjust error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/inventory/transfers", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.query.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+
+    const rows = await prisma.inventoryMovement.findMany({
+      where: {
+        storeId,
+        movementType: { in: ["transfer_out", "transfer_in"] },
+        referenceType: "transfer",
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        product: { select: { id: true, ean: true, brand: true, model: true, name: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
+      },
+    });
+
+    const grouped = new Map();
+    for (const mv of rows) {
+      const refId = String(mv.referenceId || "").trim();
+      if (!refId) continue;
+      const current =
+        grouped.get(refId) ||
+        {
+          id: refId,
+          productId: mv.productId,
+          product: mv.product,
+          fromWarehouseId: null,
+          fromWarehouseCode: null,
+          toWarehouseId: null,
+          toWarehouseCode: null,
+          qtyOut: 0,
+          qtyIn: 0,
+          transferCostEur: 0,
+          createdAt: mv.createdAt,
+          updatedAt: mv.createdAt,
+        };
+
+      if (mv.movementType === "transfer_out") {
+        current.qtyOut += Math.abs(Number(mv.quantity || 0));
+        current.fromWarehouseId = mv.warehouseId || current.fromWarehouseId;
+        current.fromWarehouseCode = mv.warehouse?.code || current.fromWarehouseCode;
+      } else if (mv.movementType === "transfer_in") {
+        current.qtyIn += Math.abs(Number(mv.quantity || 0));
+        current.toWarehouseId = mv.warehouseId || current.toWarehouseId;
+        current.toWarehouseCode = mv.warehouse?.code || current.toWarehouseCode;
+        current.transferCostEur += numberOrZero(mv.unitCostEurFrozen) * Math.abs(Number(mv.quantity || 0));
+      }
+
+      if (new Date(mv.createdAt).getTime() < new Date(current.createdAt).getTime()) current.createdAt = mv.createdAt;
+      if (new Date(mv.createdAt).getTime() > new Date(current.updatedAt).getTime()) current.updatedAt = mv.createdAt;
+
+      grouped.set(refId, current);
+    }
+
+    const transfers = Array.from(grouped.values())
+      .map((it) => ({
+        ...it,
+        pendingQty: Math.max(it.qtyOut - it.qtyIn, 0),
+        status: it.qtyOut > it.qtyIn ? "in_transit" : "confirmed",
+        transferCostEur: roundMoney(it.transferCostEur || 0),
+      }))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    return res.json({ transfers });
+  } catch (err) {
+    console.error("GET /inventory/transfers error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/inventory/transfers", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, productId, fromWarehouseId, toWarehouseId, quantity, note } = req.body || {};
+
+    if (!storeId || !productId || !fromWarehouseId || !toWarehouseId || !quantity) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    if (String(fromWarehouseId) === String(toWarehouseId)) {
+      return res.status(400).json({ error: "fromWarehouseId and toWarehouseId must be different" });
+    }
+    const qty = Number(quantity);
+    if (!Number.isInteger(qty) || qty <= 0) return res.status(400).json({ error: "quantity must be a positive integer" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageInventory(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to transfer inventory" });
+
+    const [product, fromWh, toWh] = await Promise.all([
+      prisma.product.findFirst({ where: { id: productId, storeId }, select: { id: true } }),
+      prisma.warehouse.findFirst({ where: { id: fromWarehouseId, storeId }, select: { id: true, code: true } }),
+      prisma.warehouse.findFirst({ where: { id: toWarehouseId, storeId }, select: { id: true, code: true } }),
+    ]);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    if (!fromWh || !toWh) return res.status(404).json({ error: "Warehouse not found" });
+
+    const lots = await prisma.inventoryLot.findMany({
+      where: {
+        storeId,
+        productId,
+        warehouseId: fromWarehouseId,
+        status: "available",
+        quantityAvailable: { gt: 0 },
+      },
+      orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
+    });
+    const totalAvailable = lots.reduce((sum, lot) => sum + Number(lot.quantityAvailable), 0);
+    if (totalAvailable < qty) {
+      return res.status(409).json({ error: "INSUFFICIENT_STOCK", available: totalAvailable, requested: qty });
+    }
+
+    const transferId = `TRF-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const result = await prisma.$transaction(async (tx) => {
+      let remaining = qty;
+      const outMovements = [];
+
+      for (const lot of lots) {
+        if (remaining <= 0) break;
+        const current = Number(lot.quantityAvailable);
+        if (current <= 0) continue;
+        const used = Math.min(current, remaining);
+        remaining -= used;
+
+        await tx.inventoryLot.update({
+          where: { id: lot.id },
+          data: { quantityAvailable: current - used },
+        });
+
+        const mv = await tx.inventoryMovement.create({
+          data: {
+            storeId,
+            productId,
+            lotId: lot.id,
+            warehouseId: fromWarehouseId,
+            locationId: lot.locationId || null,
+            movementType: "transfer_out",
+            quantity: -used,
+            unitCostEurFrozen: lot.unitCostEurFrozen,
+            referenceType: "transfer",
+            referenceId: transferId,
+            reason: note || `Transfer ${fromWh.code} -> ${toWh.code}`,
+            createdByUserId: userId,
+          },
+        });
+        outMovements.push(mv);
+      }
+
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "inventory.transfer.create",
+        entityType: "inventory_transfer",
+        entityId: transferId,
+        message: "Inventory transfer created",
+        payload: { productId, fromWarehouseId, toWarehouseId, quantity: qty, note: note || null },
+      });
+
+      return { transferId, outMovements };
+    });
+
+    return res.status(201).json({
+      ok: true,
+      transfer: {
+        id: result.transferId,
+        productId,
+        fromWarehouseId,
+        fromWarehouseCode: fromWh.code,
+        toWarehouseId,
+        toWarehouseCode: toWh.code,
+        quantity: qty,
+        status: "in_transit",
+      },
+      outMovements: result.outMovements,
+    });
+  } catch (err) {
+    console.error("POST /inventory/transfers error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/inventory/transfers/:transferId/confirm", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { transferId } = req.params;
+    const { storeId, toWarehouseId, locationId, quantity, transferCostEur, note } = req.body || {};
+
+    if (!storeId || !toWarehouseId) return res.status(400).json({ error: "Missing storeId or toWarehouseId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageInventory(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to confirm transfers" });
+
+    const outRows = await prisma.inventoryMovement.findMany({
+      where: {
+        storeId,
+        movementType: "transfer_out",
+        referenceType: "transfer",
+        referenceId: transferId,
+      },
+      orderBy: { createdAt: "asc" },
+      include: { product: { select: { id: true } } },
+    });
+    if (outRows.length === 0) return res.status(404).json({ error: "Transfer not found" });
+
+    const productId = outRows[0].productId;
+    const outQty = outRows.reduce((sum, mv) => sum + Math.abs(Number(mv.quantity || 0)), 0);
+    const outCostTotal = outRows.reduce(
+      (sum, mv) => sum + Math.abs(Number(mv.quantity || 0)) * numberOrZero(mv.unitCostEurFrozen),
+      0
+    );
+    const inRows = await prisma.inventoryMovement.findMany({
+      where: {
+        storeId,
+        productId,
+        movementType: "transfer_in",
+        referenceType: "transfer",
+        referenceId: transferId,
+      },
+      select: { id: true, quantity: true },
+    });
+    const inQty = inRows.reduce((sum, mv) => sum + Math.abs(Number(mv.quantity || 0)), 0);
+    const pendingQty = Math.max(outQty - inQty, 0);
+    if (pendingQty <= 0) return res.status(409).json({ error: "Transfer already fully confirmed" });
+
+    const receiveQty = quantity === undefined || quantity === null || quantity === ""
+      ? pendingQty
+      : Number(quantity);
+    if (!Number.isInteger(receiveQty) || receiveQty <= 0 || receiveQty > pendingQty) {
+      return res.status(400).json({ error: "Invalid quantity to confirm" });
+    }
+
+    const targetWh = await prisma.warehouse.findFirst({
+      where: { id: toWarehouseId, storeId },
+      select: { id: true, code: true },
+    });
+    if (!targetWh) return res.status(404).json({ error: "Destination warehouse not found" });
+
+    if (locationId) {
+      const loc = await prisma.warehouseLocation.findFirst({
+        where: { id: locationId, warehouseId: toWarehouseId },
+        select: { id: true },
+      });
+      if (!loc) return res.status(400).json({ error: "Invalid locationId for destination warehouse" });
+    }
+
+    const avgUnitOutCost = outQty > 0 ? outCostTotal / outQty : 0;
+    const parsedTransferCostEur = transferCostEur === undefined || transferCostEur === null || transferCostEur === ""
+      ? 0
+      : numberOrZero(transferCostEur);
+    const extraPerUnit = receiveQty > 0 ? parsedTransferCostEur / receiveQty : 0;
+    const finalUnitEur = roundMoney(avgUnitOutCost + extraPerUnit);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lot = await tx.inventoryLot.create({
+        data: {
+          storeId,
+          productId,
+          warehouseId: toWarehouseId,
+          locationId: locationId || null,
+          lotCode: `TRF-IN-${Date.now()}`,
+          sourceType: "transfer",
+          quantityReceived: receiveQty,
+          quantityAvailable: receiveQty,
+          unitCostOriginal: String(finalUnitEur),
+          costCurrencyCode: "EUR",
+          fxToEur: "1",
+          unitCostEurFrozen: String(finalUnitEur),
+          note: note || `Confirm transfer ${transferId}`,
+        },
+      });
+
+      const movement = await tx.inventoryMovement.create({
+        data: {
+          storeId,
+          productId,
+          lotId: lot.id,
+          warehouseId: toWarehouseId,
+          locationId: locationId || null,
+          movementType: "transfer_in",
+          quantity: receiveQty,
+          unitCostEurFrozen: String(finalUnitEur),
+          referenceType: "transfer",
+          referenceId: transferId,
+          reason: note || `Transfer confirmed into ${targetWh.code}`,
+          createdByUserId: userId,
+        },
+      });
+
+      await createAuditLogSafe({
+        storeId,
+        userId,
+        action: "inventory.transfer.confirm",
+        entityType: "inventory_transfer",
+        entityId: transferId,
+        message: "Inventory transfer confirmed",
+        payload: {
+          productId,
+          toWarehouseId,
+          quantity: receiveQty,
+          transferCostEur: parsedTransferCostEur,
+          note: note || null,
+        },
+      });
+
+      return { lot, movement };
+    });
+
+    return res.status(201).json({
+      ok: true,
+      transferId,
+      confirmedQty: receiveQty,
+      pendingQtyAfter: pendingQty - receiveQty,
+      transferCostEur: roundMoney(parsedTransferCostEur),
+      lot: result.lot,
+      movement: result.movement,
+    });
+  } catch (err) {
+    console.error("POST /inventory/transfers/:transferId/confirm error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });

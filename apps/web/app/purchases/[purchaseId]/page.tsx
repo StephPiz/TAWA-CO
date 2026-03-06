@@ -3,11 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import Topbar from "../../components/topbar";
+import localFont from "next/font/local";
 import { requireTokenOrRedirect } from "../../lib/auth";
 import { useStorePermissions } from "../../lib/access";
 
 const API_BASE = "http://localhost:3001";
+const headingFont = localFont({
+  src: "../../fonts/HFHySans_Black.ttf",
+  variable: "--font-purchase-detail-heading",
+});
+const bodyFont = localFont({
+  src: "../../fonts/HFHySans_Regular.ttf",
+  variable: "--font-purchase-detail-body",
+});
 
 const STATUS_FLOW = [
   "draft",
@@ -333,38 +341,47 @@ export default function PurchaseDetailPage() {
     }
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
+  if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
   if (!permissions.financeRead) {
     return (
-      <div className="min-h-screen bg-gray-100 p-6">
+      <div className="min-h-screen bg-[#E8EAEC] p-6">
         <div className="max-w-3xl mx-auto bg-white p-4 rounded-2xl shadow-md">No autorizado para Compras.</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="max-w-7xl mx-auto space-y-4">
-        <Topbar title="Detalle PO" storeName={storeName} />
+        <div className="mb-2">
+          <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+            Detalle PO
+          </h1>
+          <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+            {storeName ? `Tienda: ${storeName}` : "Seguimiento de orden de compra"}
+          </p>
+        </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <Link href="/store/purchases" className="underline text-sm">
+        <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <Link href="/store/purchases" className="text-sm underline text-[#25304F]">
             Volver a Compras
           </Link>
-          <h2 className="font-semibold text-lg mt-2">{purchase?.poNumber || "-"}</h2>
-          <div className="text-sm text-gray-700">
+          <h2 className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+            {purchase?.poNumber || "-"}
+          </h2>
+          <div className="text-sm text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
             Proveedor: {purchase?.supplier?.name || "-"} | Total EUR: {purchase?.totalAmountEur ?? "-"} | Estado: {purchase?.status || "-"}
           </div>
-          {purchase?.trackingCode ? <div className="text-sm text-gray-700">Tracking: {purchase.trackingCode}</div> : null}
+          {purchase?.trackingCode ? <div className="text-sm text-[#4F5568]">Tracking: {purchase.trackingCode}</div> : null}
           {purchase?.trackingUrl ? (
-            <a className="text-sm underline" href={purchase.trackingUrl} target="_blank" rel="noreferrer">
+            <a className="text-sm underline text-[#25304F]" href={purchase.trackingUrl} target="_blank" rel="noreferrer">
               Abrir tracking
             </a>
           ) : null}
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
+        <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h3 className="font-semibold mb-2">Resumen financiero estimado</h3>
           <div className="grid md:grid-cols-3 gap-3 text-sm">
             <div className="border rounded p-3">
@@ -397,7 +414,7 @@ export default function PurchaseDetailPage() {
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
+        <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h3 className="font-semibold mb-2">Timeline estado</h3>
           <div className="flex flex-wrap gap-2 mb-3">
             {STATUS_FLOW.map((step) => (
@@ -423,7 +440,7 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
+        <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h3 className="font-semibold mb-2">Recepción</h3>
           <div className="flex gap-2 items-center mb-3">
             <select className="border rounded px-3 py-2" value={receiveWarehouseId} onChange={(e) => setReceiveWarehouseId(e.target.value)}>
@@ -496,7 +513,7 @@ export default function PurchaseDetailPage() {
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
-          <div className="bg-white p-4 rounded-2xl shadow-md">
+          <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <h3 className="font-semibold mb-2">Pagos PO</h3>
             <form className="grid grid-cols-5 gap-2 mb-3" onSubmit={createPayment}>
               <input className="border rounded px-2 py-1" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
@@ -520,7 +537,7 @@ export default function PurchaseDetailPage() {
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl shadow-md">
+          <div className="bg-white p-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <h3 className="font-semibold mb-2">3PL tramos</h3>
             <form className="grid grid-cols-3 gap-2 mb-2" onSubmit={createShipment}>
               <input className="border rounded px-2 py-1" placeholder="Referencia 3PL" value={shipmentRef} onChange={(e) => setShipmentRef(e.target.value)} />

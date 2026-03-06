@@ -199,6 +199,29 @@ async function main() {
     },
   });
 
+  await prisma.salesChannel.upsert({
+    where: { storeId_code: { storeId: store.id, code: "IDEALO-ES" } },
+    update: {
+      name: "Idealo ES",
+      type: "idealo",
+      status: "active",
+      feePercent: "7.5000",
+      countryCode: "ES",
+      currencyCode: "EUR",
+    },
+    create: {
+      storeId: store.id,
+      code: "IDEALO-ES",
+      name: "Idealo ES",
+      type: "idealo",
+      status: "active",
+      feePercent: "7.5000",
+      payoutTerms: "20 business days",
+      countryCode: "ES",
+      currencyCode: "EUR",
+    },
+  });
+
   await prisma.storeIntegration.upsert({
     where: { storeId_provider: { storeId: store.id, provider: "shopify" } },
     update: {

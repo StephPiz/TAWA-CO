@@ -28,6 +28,22 @@ type MenuItem = {
 };
 
 type ProfileTabKey = "general" | "paises" | "monedas" | "almacenes" | "marketplaces" | "facturacion";
+type WarehouseMapBlock = {
+  key: string;
+  label: string;
+  itemCount: number;
+  rows: number[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type WarehouseBoxSelection = {
+  code: string;
+  items: number;
+  category: string;
+};
 
 type StoreProfile = {
   name: string;
@@ -38,6 +54,25 @@ type StoreProfile = {
   salesCountryCodes: string[];
   marketplaces: string[];
   warehouses: string[];
+};
+
+type WarehouseProfile = {
+  name: string;
+  code: string;
+  type: "OWN" | "THIRD_PARTY_3PL" | "RETURNS" | "TEMPORARY";
+  status: "ACTIVE" | "INACTIVE";
+  countryCode: string;
+  city: string;
+  address: string;
+  reference: string;
+  managerName: string;
+  phone: string;
+  email: string;
+  openingHour: string;
+  closingHour: string;
+  capacityUnits: string;
+  color: string;
+  description: string;
 };
 
 type ToggleItem = {
@@ -264,6 +299,20 @@ const menu: MenuItem[] = [
   { key: "logout", label: "Logout", action: "logout", isMain: true },
 ];
 
+const WAREHOUSE_MAP_BLOCKS: WarehouseMapBlock[] = [
+  { key: "A", label: "BLOQUE A", itemCount: 24, rows: [1], x: 19, y: 24, w: 11, h: 9 },
+  { key: "B", label: "BLOQUE B", itemCount: 19, rows: [1], x: 19, y: 34, w: 11, h: 9 },
+  { key: "C", label: "BLOQUE C", itemCount: 21, rows: [1], x: 19, y: 44, w: 11, h: 9 },
+  { key: "D", label: "BLOQUE D", itemCount: 58, rows: [14, 12, 1, 1], x: 6, y: 24, w: 11, h: 43 },
+  { key: "E", label: "BLOQUE E", itemCount: 16, rows: [5, 1, 4, 1, 1, 1], x: 31, y: 9, w: 40, h: 13 },
+  { key: "F", label: "BLOQUE F", itemCount: 11, rows: [1], x: 73, y: 9, w: 17, h: 13 },
+  { key: "G", label: "BLOQUE G", itemCount: 8, rows: [1], x: 79, y: 33, w: 11, h: 9 },
+  { key: "H", label: "BLOQUE H", itemCount: 6, rows: [1], x: 79, y: 43.5, w: 11, h: 9 },
+  { key: "I", label: "BLOQUE I", itemCount: 7, rows: [1], x: 79, y: 54, w: 11, h: 9 },
+  { key: "J", label: "BLOQUE J", itemCount: 5, rows: [1], x: 79, y: 64.5, w: 11, h: 9 },
+  { key: "K", label: "BLOQUE K", itemCount: 2, rows: [1, 1], x: 63, y: 76, w: 27, h: 11 },
+];
+
 function menuIcon(key: string) {
   const base = "h-5 w-5";
   switch (key) {
@@ -379,6 +428,30 @@ export default function DashboardDemarcaPage() {
   const [billingPrefix, setBillingPrefix] = useState("DEM - 2026 -");
   const [billingFiscalCountry, setBillingFiscalCountry] = useState("");
   const [showInvoiceTemplatePreview, setShowInvoiceTemplatePreview] = useState(false);
+  const [selectedMapBlock, setSelectedMapBlock] = useState("F");
+  const [selectedMapBox, setSelectedMapBox] = useState<WarehouseBoxSelection | null>(null);
+  const [warehouseEditable, setWarehouseEditable] = useState(false);
+  const [warehouseSaving, setWarehouseSaving] = useState(false);
+  const [warehouseSaveError, setWarehouseSaveError] = useState("");
+  const [warehouseSaveOk, setWarehouseSaveOk] = useState("");
+  const [warehouseProfile, setWarehouseProfile] = useState<WarehouseProfile>({
+    name: "Segovia Warehouse",
+    code: "ES-SEG",
+    type: "OWN",
+    status: "ACTIVE",
+    countryCode: "ES",
+    city: "Segovia",
+    address: "Polígono Industrial, Nave 8",
+    reference: "Zona logística norte",
+    managerName: "Responsable almacén",
+    phone: "+34 900 000 000",
+    email: "warehouse.seg@demarca.local",
+    openingHour: "08:00",
+    closingHour: "18:00",
+    capacityUnits: "1200",
+    color: "#6456DF",
+    description: "Almacén principal para preparación de pedidos y stock operativo.",
+  });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const colorPickerRef = useRef<HTMLInputElement | null>(null);
   const hasSavedWarehousesRef = useRef(false);
@@ -417,6 +490,75 @@ export default function DashboardDemarcaPage() {
     }
   });
   const [now, setNow] = useState<Date>(() => new Date());
+  const warehouseMapTotalItems = useMemo(
+    () => WAREHOUSE_MAP_BLOCKS.reduce((sum, block) => sum + Number(block.itemCount || 0), 0),
+    []
+  );
+  const selectedWarehouseMapBlock = useMemo(
+    () => WAREHOUSE_MAP_BLOCKS.find((block) => block.key === selectedMapBlock) || WAREHOUSE_MAP_BLOCKS[5],
+    [selectedMapBlock]
+  );
+  const warehouseCategories = ["Bolsos", "Relojes", "Perfumes", "Accesorios", "Vintage"];
+
+  function selectWarehouseBox(code: string) {
+    const seed = [...code].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+    const items = (seed % 24) + 1;
+    const category = warehouseCategories[seed % warehouseCategories.length];
+    setSelectedMapBox({ code, items, category });
+  }
+
+  function warehouseBoxButtonClass(code: string, size: "normal" | "large" = "normal") {
+    const selected = selectedMapBox?.code === code;
+    const height = size === "large" ? "h-[71px]" : "h-[34px]";
+    return `${height} w-full rounded-lg border px-1.5 text-[12px] font-semibold tracking-[0.01em] transition ${
+      selected
+        ? "border-[#121633] bg-white text-[#1B2140] shadow-[0_6px_14px_rgba(18,22,51,0.18)]"
+        : "border-[#E3E7EE] bg-[#EEF1F6] text-[#6A738B] hover:border-[#CBD2DF] hover:bg-white"
+    }`;
+  }
+
+  useEffect(() => {
+    setSelectedMapBox(null);
+  }, [selectedMapBlock]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      const raw = localStorage.getItem(`warehouse-profile:${selectedStoreId}:ES-SEG`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<WarehouseProfile>;
+      setWarehouseProfile((prev) => ({
+        ...prev,
+        ...parsed,
+      }));
+    } catch {}
+  }, []);
+
+  async function saveWarehouseProfile() {
+    if (!warehouseEditable || warehouseSaving) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      setWarehouseSaveError("");
+      setWarehouseSaveOk("");
+      setWarehouseSaving(true);
+      localStorage.setItem(
+        `warehouse-profile:${selectedStoreId}:ES-SEG`,
+        JSON.stringify({
+          ...warehouseProfile,
+          savedAt: new Date().toISOString(),
+        })
+      );
+      setWarehouseEditable(false);
+      setWarehouseSaveOk("Ficha de almacén guardada.");
+    } catch (err) {
+      setWarehouseSaveError(err instanceof Error ? err.message : "No se pudo guardar almacén.");
+    } finally {
+      setWarehouseSaving(false);
+    }
+  }
   const allCountryOptions = useMemo(() => {
     if (typeof Intl === "undefined") return COUNTRY_OPTIONS;
     const intlWithSupportedValues = Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] };
@@ -1281,8 +1423,8 @@ export default function DashboardDemarcaPage() {
   };
 
   return (
-    <main className={`${headingFont.variable} ${bodyFont.variable} h-screen overflow-hidden bg-[#DADCE0] p-6`}>
-      <div className="mx-auto flex h-full max-w-[1520px] gap-4">
+    <main suppressHydrationWarning className={`${headingFont.variable} ${bodyFont.variable} h-screen overflow-hidden bg-[#DADCE0] p-6`}>
+      <div suppressHydrationWarning className="mx-auto flex h-full max-w-[1520px] gap-4">
         <aside className={`overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)] transition-all duration-300 ${sidebarCollapsed ? "w-[96px]" : "w-[320px]"}`}>
           <div className={`flex items-center border-b border-[#DADCE0] px-3 py-5 ${sidebarCollapsed ? "justify-center" : "justify-between gap-3 px-5"}`}>
             <Image
@@ -2751,12 +2893,488 @@ export default function DashboardDemarcaPage() {
                   </div>
                 </div>
               </div>
+            ) : activeKey === "es-seg" ? (
+              <div className="h-full p-5">
+                <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
+                  <div className="flex items-start justify-between px-10 pt-7">
+                    <div>
+                      <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                        Almacén ES-SEG
+                      </h2>
+                      <p className="mt-2 text-[16px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                        Ficha operativa del almacén para configuración y control.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-[16px] text-[#3E455C] hover:text-[#121633]"
+                      style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                      onClick={() => setWarehouseEditable((prev) => !prev)}
+                    >
+                      {warehouseEditable ? "Bloquear ficha" : "Editar ficha"}
+                    </button>
+                  </div>
+
+                  <div className="mt-6 flex min-h-0 flex-1 flex-col rounded-b-2xl bg-[#E6E8EA]">
+                    <div className="border-b border-[#666666] px-2">
+                      <div className="rounded-t-2xl bg-[#BFBFBF] px-4 py-3 text-[14px] text-[#1A213D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                        Información del almacén
+                      </div>
+                    </div>
+
+                    <div className="min-h-0 w-full flex-1 overflow-y-auto px-10 pb-24 pt-6">
+                    <div className="grid grid-cols-3 gap-8 text-[#2B334B]">
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Nombre de almacén</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.name}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, name: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Código interno</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.code}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Color identificativo</div>
+                        <div className="mt-2 flex items-center gap-3">
+                          <span className="h-11 w-11 rounded-full" style={{ backgroundColor: warehouseProfile.color }} />
+                          <input
+                            disabled={!warehouseEditable}
+                            type="color"
+                            value={warehouseProfile.color}
+                            onChange={(e) => setWarehouseProfile((p) => ({ ...p, color: e.target.value.toUpperCase() }))}
+                            className="h-[44px] w-[76px] cursor-pointer rounded-xl border-none bg-white px-2 disabled:cursor-not-allowed"
+                          />
+                        </div>
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Descripción</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.description}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, description: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Tipo de almacén</div>
+                        <select
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.type}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, type: e.target.value as WarehouseProfile["type"] }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        >
+                          <option value="OWN">Propio</option>
+                          <option value="THIRD_PARTY_3PL">3PL</option>
+                          <option value="RETURNS">Devoluciones</option>
+                          <option value="TEMPORARY">Temporal</option>
+                        </select>
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Estado</div>
+                        <select
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.status}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, status: e.target.value as WarehouseProfile["status"] }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        >
+                          <option value="ACTIVE">Activo</option>
+                          <option value="INACTIVE">Inactivo</option>
+                        </select>
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País</div>
+                        <select
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.countryCode}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, countryCode: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        >
+                          {facturacionCountryOptions.map((item) => (
+                            <option key={`wh-country-${item.id}`} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ciudad</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.city}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, city: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Dirección</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.address}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, address: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Referencia interna</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.reference}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, reference: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+
+                        <div className="mt-6 grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Apertura</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              type="time"
+                              value={warehouseProfile.openingHour}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, openingHour: e.target.value }))}
+                              className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Cierre</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              type="time"
+                              value={warehouseProfile.closingHour}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, closingHour: e.target.value }))}
+                              className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Capacidad máxima (unidades)</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.capacityUnits}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, capacityUnits: e.target.value.replace(/[^\d]/g, "") }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-8 grid grid-cols-3 gap-8 text-[#2B334B]">
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Responsable</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.managerName}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, managerName: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Teléfono</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.phone}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, phone: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Email</div>
+                        <input
+                          disabled={!warehouseEditable}
+                          value={warehouseProfile.email}
+                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, email: e.target.value }))}
+                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-8 flex items-center justify-end">
+                      {warehouseSaveError ? (
+                        <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {warehouseSaveError}
+                        </div>
+                      ) : null}
+                      {warehouseSaveOk ? (
+                        <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {warehouseSaveOk}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={!warehouseEditable || warehouseSaving}
+                        className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
+                        style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
+                        onClick={saveWarehouseProfile}
+                      >
+                        {warehouseSaving ? "Guardando..." : "Confirmar"}
+                      </button>
+                    </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : activeKey === "almacenes-agregar" ? (
               <div className="h-full p-5">
                 <div className="h-full rounded-2xl bg-[#E8EAEC] p-6">
                   <h2 className="text-[36px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
                     Agregar Almacén
                   </h2>
+                </div>
+              </div>
+            ) : activeKey === "almacenes-mapa" ? (
+              <div className="h-full px-5 pb-5 pt-1">
+                <div className="h-full rounded-2xl bg-white p-4">
+                  <div className="grid h-full grid-cols-[minmax(0,1fr)_420px] gap-5">
+                    <div className="rounded-2xl bg-[#E8EAEC] p-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-[16px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                          Plano visual • ES-SEG
+                        </div>
+                        <div className="text-[12px] text-[#6B7286]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          Click en un bloque para abrir detalle
+                        </div>
+                      </div>
+                      <div className="relative h-[585px] rounded-2xl border border-[#CBD1DC] bg-white">
+                        {WAREHOUSE_MAP_BLOCKS.map((block) => {
+                          const active = block.key === selectedWarehouseMapBlock.key;
+                          return (
+                            <button
+                              key={`warehouse-map-${block.key}`}
+                              type="button"
+                              onClick={() => setSelectedMapBlock(block.key)}
+                              title={`${block.label} · ${block.itemCount} ítems`}
+                              className={`absolute rounded-xl border text-center transition ${
+                                active
+                                  ? "border-[#121633] bg-white text-[#121633] shadow-[0_8px_24px_rgba(18,22,51,0.2)]"
+                                  : "border-[#D2D6DF] bg-[#F6F7F9] text-[#9BA2B4] hover:border-[#ADB4C5] hover:bg-white"
+                              }`}
+                              style={{
+                                left: `${block.x}%`,
+                                top: `${block.y}%`,
+                                width: `${block.w}%`,
+                                height: `${block.h}%`,
+                              }}
+                            >
+                              <div className="flex h-full flex-col items-center justify-center">
+                                <div
+                                  className={`text-[22px] leading-none ${active ? "text-[#121633]" : "text-[#BBC0CD]"}`}
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
+                                >
+                                  {block.key}
+                                </div>
+                                <div className={`mt-1 text-[11px] ${active ? "text-[#58607A]" : "text-[#A5ABBA]"}`} style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {block.itemCount} ítems
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between px-1">
+                        <div className="text-[24px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                          TOTAL : {warehouseMapTotalItems} ítems
+                        </div>
+                        <div className="text-[13px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          Formato: Bloque - Piso - Caja (D-01-01)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-rows-[auto_1fr] gap-3">
+                        <div className="rounded-2xl bg-white p-5">
+                          <div className="text-center text-[34px] leading-[38px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            {selectedWarehouseMapBlock.label}
+                          </div>
+                          <div className="mt-3 text-center text-[13px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            {selectedWarehouseMapBlock.itemCount} ítems
+                          </div>
+                          <div className="mt-4 rounded-xl bg-[#F4F6FA] px-3 py-2 text-center">
+                            {selectedMapBox ? (
+                              <>
+                                <div className="text-[12px] text-[#4F5B78]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  {selectedMapBox.code}
+                                </div>
+                                <div className="mt-0.5 text-[12px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {selectedMapBox.items} ítems - {selectedMapBox.category}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-[12px] text-[#8B91A3]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                Haz click en una caja para ver detalle
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      <div className="rounded-2xl bg-white p-5">
+                        <div className="sticky top-0 z-10 -mx-1 mb-3 rounded-xl bg-[#F4F6FA] px-3 py-2">
+                          <div className="text-[13px] text-[#43506E]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            Detalle por pisos y cajas
+                          </div>
+                          <div className="mt-1 text-[11px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            {selectedWarehouseMapBlock.rows.length} pisos · {selectedWarehouseMapBlock.rows.reduce((a, b) => a + b, 0)} cajas
+                          </div>
+                        </div>
+                        <div className="max-h-[445px] space-y-2 overflow-y-auto pr-0.5">
+                          {selectedWarehouseMapBlock.rows.map((slotCount, rowIdx) => (
+                            <div key={`row-${selectedWarehouseMapBlock.key}-${rowIdx}`} className="rounded-xl border border-[#E2E6ED] bg-[#F8F9FC] p-2">
+                              <div className="mb-2 flex items-center justify-between rounded-lg bg-white px-2 py-1">
+                                <div className="text-[11px] text-[#4F5B78]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  Piso {String(rowIdx + 1).padStart(2, "0")}
+                                </div>
+                                <div className="text-[10px] text-[#8A92A6]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {slotCount} caja{slotCount === 1 ? "" : "s"}
+                                </div>
+                              </div>
+                              {selectedWarehouseMapBlock.key === "D" && rowIdx === 0 ? (
+                                <div className="grid grid-cols-5 gap-1.5">
+                                  {[0, 1, 2, 3].map((groupIdx) => (
+                                    <div key={`d-row1-group-${groupIdx}`} className="space-y-1.5">
+                                      {[0, 1, 2].map((cellIdx) => {
+                                        const boxNumber = groupIdx * 3 + cellIdx + 1;
+                                        const code = `D-01-${String(boxNumber).padStart(2, "0")}`;
+                                        return (
+                                          <button
+                                            key={`slot-${code}`}
+                                            type="button"
+                                            title={`${code} · caja`}
+                                            onClick={() => selectWarehouseBox(code)}
+                                            className={warehouseBoxButtonClass(code)}
+                                            style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                          >
+                                            {code}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  ))}
+                                  <div className="space-y-1.5">
+                                    <button
+                                      type="button"
+                                      title="D-01-13 · caja"
+                                      onClick={() => selectWarehouseBox("D-01-13")}
+                                      className={warehouseBoxButtonClass("D-01-13")}
+                                      style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                    >
+                                      D-01-13
+                                    </button>
+                                    <button
+                                      type="button"
+                                      title="D-01-14 · caja grande"
+                                      onClick={() => selectWarehouseBox("D-01-14")}
+                                      className={warehouseBoxButtonClass("D-01-14", "large")}
+                                      style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                    >
+                                      D-01-14
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : selectedWarehouseMapBlock.key === "D" && rowIdx === 1 ? (
+                                <div className="grid grid-cols-5 gap-1.5">
+                                  <div className="space-y-1.5">
+                                    {[1, 2, 3].map((n) => {
+                                      const code = `D-02-${String(n).padStart(2, "0")}`;
+                                      return (
+                                        <button
+                                          key={`slot-${code}`}
+                                          type="button"
+                                          title={`${code} · caja grande`}
+                                          onClick={() => selectWarehouseBox(code)}
+                                          className={warehouseBoxButtonClass(code, "large")}
+                                          style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                        >
+                                          {code}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="mt-[108px] space-y-1.5">
+                                    {[4, 5, 6].map((n) => {
+                                      const code = `D-02-${String(n).padStart(2, "0")}`;
+                                      return (
+                                        <button
+                                          key={`slot-${code}`}
+                                          type="button"
+                                          title={`${code} · caja`}
+                                          onClick={() => selectWarehouseBox(code)}
+                                          className={warehouseBoxButtonClass(code)}
+                                          style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                        >
+                                          {code}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="mt-[68px] space-y-1.5">
+                                    {[7, 8, 9, 10].map((n) => {
+                                      const code = `D-02-${String(n).padStart(2, "0")}`;
+                                      return (
+                                        <button
+                                          key={`slot-${code}`}
+                                          type="button"
+                                          title={`${code} · caja`}
+                                          onClick={() => selectWarehouseBox(code)}
+                                          className={warehouseBoxButtonClass(code)}
+                                          style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                        >
+                                          {code}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="mt-20 space-y-1.5">
+                                    <button
+                                      type="button"
+                                      title="D-02-11 · caja grande"
+                                      onClick={() => selectWarehouseBox("D-02-11")}
+                                      className={warehouseBoxButtonClass("D-02-11", "large")}
+                                      style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                    >
+                                      D-02-11
+                                    </button>
+                                  </div>
+                                  <div className="mt-20 space-y-1.5">
+                                    <button
+                                      type="button"
+                                      title="D-02-12 · caja grande"
+                                      onClick={() => selectWarehouseBox("D-02-12")}
+                                      className={warehouseBoxButtonClass("D-02-12", "large")}
+                                      style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                    >
+                                      D-02-12
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className={`grid gap-1.5 ${slotCount >= 5 ? "grid-cols-5" : slotCount === 4 ? "grid-cols-4" : slotCount === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+                                  {Array.from({ length: Math.max(slotCount, 1) }).map((_, colIdx) => {
+                                    const code = `${selectedWarehouseMapBlock.key}-${String(rowIdx + 1).padStart(2, "0")}-${String(colIdx + 1).padStart(2, "0")}`;
+                                    const estimatedItems = Math.max(
+                                      0,
+                                      Math.floor(selectedWarehouseMapBlock.itemCount / Math.max(selectedWarehouseMapBlock.rows.reduce((a, b) => a + b, 0), 1))
+                                    );
+                                    return (
+                                      <button
+                                        key={`slot-${code}`}
+                                        type="button"
+                                        title={`${code} · ${estimatedItems} ítems aprox.`}
+                                        onClick={() => selectWarehouseBox(code)}
+                                        className={warehouseBoxButtonClass(code)}
+                                        style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                      >
+                                        {code}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : activeItem.path ? (
