@@ -23,6 +23,14 @@ type Payout = {
 type Order = { id: string; orderNumber: string; grossAmountEurFrozen: number };
 type Channel = { id: string; name: string };
 
+function inputClass() {
+  return "h-11 w-full rounded-full border-none bg-white px-4 text-[14px] text-[#25304F] outline-none shadow-[inset_0_0_0_1px_rgba(18,22,48,0.08)] placeholder:text-[#8B90A0]";
+}
+
+function cardClass() {
+  return "rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
+}
+
 export default function PayoutsPage() {
   const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [payouts, setPayouts] = useState<Payout[]>([]);
@@ -79,25 +87,19 @@ export default function PayoutsPage() {
   }
 
   useEffect(() => {
-    if (loading) return;
-    if (!storeId || !permissions.financeRead) return;
+    if (loading || !storeId || !permissions.financeRead) return;
     queueMicrotask(() => {
       void loadAll(storeId);
     });
   }, [loading, storeId, permissions.financeRead]);
 
-  if (loading) {
-    return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  }
-
-  if (permissionsError) {
-    return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
-  }
+  if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
+  if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
 
   if (!permissions.financeRead) {
     return (
-      <div className="min-h-screen bg-gray-100 p-6">
-        <div className="max-w-3xl mx-auto bg-white p-4 rounded-2xl shadow-md">No autorizado para Payouts.</div>
+      <div className="min-h-screen bg-[#E8EAEC] p-6">
+        <div className="mx-auto max-w-3xl rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">No autorizado para Payouts.</div>
       </div>
     );
   }
@@ -212,89 +214,78 @@ export default function PayoutsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-7xl mx-auto space-y-4">
-        <Topbar title="Payouts / Conciliacion" storeName={storeName} />
-        {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
+    <div className="min-h-screen bg-[#E8EAEC] p-6">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <Topbar title="Payouts / Conciliación" storeName={storeName} />
+        {error ? <div className="rounded-2xl bg-[#FDECEC] p-3 text-[#B42318]">{error}</div> : null}
+
         {summary ? (
-          <div className="bg-white p-3 rounded-2xl shadow-md text-sm flex flex-wrap gap-4">
-            <div>Esperado neto: {summary.netExpectedEur?.toFixed(2)} EUR</div>
-            <div>Conciliado: {summary.reconciledEur?.toFixed(2)} EUR</div>
-            <div className={Math.abs(summary.discrepancyEur) > 0.5 ? "text-red-700" : "text-green-700"}>
-              Diferencia: {summary.discrepancyEur?.toFixed(2)} EUR
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className={cardClass()}>
+              <div className="text-[12px] text-[#6E768E]">Esperado neto</div>
+              <div className="mt-1 text-[28px] text-[#141A39]">{summary.netExpectedEur?.toFixed(2)} EUR</div>
+            </div>
+            <div className={cardClass()}>
+              <div className="text-[12px] text-[#6E768E]">Conciliado</div>
+              <div className="mt-1 text-[28px] text-[#141A39]">{summary.reconciledEur?.toFixed(2)} EUR</div>
+            </div>
+            <div className={cardClass()}>
+              <div className="text-[12px] text-[#6E768E]">Diferencia</div>
+              <div className={`mt-1 text-[28px] ${Math.abs(summary.discrepancyEur) > 0.5 ? "text-[#B42318]" : "text-[#1F7A3E]"}`}>
+                {summary.discrepancyEur?.toFixed(2)} EUR
+              </div>
             </div>
           </div>
         ) : null}
+
         {alerts.length ? (
-          <div className="bg-amber-100 text-amber-800 p-3 rounded-2xl shadow-md text-sm space-y-1">
+          <div className="rounded-2xl bg-[#FFF6E7] p-4 text-[#9A6700] shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <div className="font-semibold">Alertas de discrepancia</div>
-            {alerts.map((a, i) => (
-              <div key={i}>{a}</div>
-            ))}
+            <div className="mt-2 space-y-1 text-sm">
+              {alerts.map((a, i) => (
+                <div key={i}>{a}</div>
+              ))}
+            </div>
           </div>
         ) : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h2 className="font-semibold mb-3">Registrar payout</h2>
-          <form className="grid md:grid-cols-7 gap-2" onSubmit={createPayout}>
-            <input
-              className="border rounded px-3 py-2"
-              placeholder="PAY-2026-03-01"
-              value={payoutRef}
-              onChange={(e) => setPayoutRef(e.target.value)}
-              required
-            />
-            <input className="border rounded px-3 py-2" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <input className="border rounded px-3 py-2" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            <select className="border rounded px-3 py-2" value={channelId} onChange={(e) => setChannelId(e.target.value)}>
-              <option value="">Canal</option>
-              {channels.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <select className="border rounded px-3 py-2" value={matchOrderId} onChange={(e) => setMatchOrderId(e.target.value)}>
-              <option value="">Order match</option>
-              {orders.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.orderNumber}
-                </option>
-              ))}
-            </select>
-            <input className="border rounded px-3 py-2" value={matchAmount} onChange={(e) => setMatchAmount(e.target.value)} />
-            <button className="rounded bg-black text-white px-3 py-2" type="submit">
-              Crear
-            </button>
-          </form>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="bg-white p-4 rounded-2xl shadow-md space-y-2">
-            <div className="font-semibold">Importar CSV pegado</div>
-            <p className="text-xs text-gray-600">Cabeceras: payoutRef,payoutDate,amount,fees,adjustments,channelCode,fx</p>
-            <form className="space-y-2" onSubmit={importCsv}>
-              <input type="file" accept=".csv,text/csv" onChange={onFileUpload} className="text-sm" />
-              {uploadName ? <div className="text-xs text-gray-600">Seleccionado: {uploadName}</div> : null}
-              <textarea
-                className="w-full border rounded px-3 py-2 font-mono text-xs min-h-[140px]"
-                value={csvText}
-                onChange={(e) => setCsvText(e.target.value)}
-              />
-              <div className="flex gap-2 items-center">
-                <button className="rounded bg-black text-white px-3 py-2" type="submit">
-                  Importar
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className={cardClass()}>
+            <h2 className="mb-3 text-[20px] text-[#141A39]">Registrar payout</h2>
+            <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" onSubmit={createPayout}>
+              <input className={inputClass()} placeholder="PAY-2026-03-01" value={payoutRef} onChange={(e) => setPayoutRef(e.target.value)} required />
+              <input className={inputClass()} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <input className={inputClass()} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Monto" />
+              <select className={inputClass()} value={channelId} onChange={(e) => setChannelId(e.target.value)}>
+                <option value="">Canal</option>
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <select className={inputClass()} value={matchOrderId} onChange={(e) => setMatchOrderId(e.target.value)}>
+                <option value="">Pedido a conciliar</option>
+                {orders.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.orderNumber}
+                  </option>
+                ))}
+              </select>
+              <input className={inputClass()} value={matchAmount} onChange={(e) => setMatchAmount(e.target.value)} placeholder="Monto conciliado" />
+              <div className="xl:col-span-2 flex justify-end">
+                <button className="h-11 rounded-full bg-[#0B1230] px-6 text-[14px] text-white hover:bg-[#1A2348]" type="submit">
+                  Crear
                 </button>
-                <span className="text-sm text-gray-700">{importResult}</span>
               </div>
             </form>
           </div>
 
-          <div className="bg-white p-4 rounded-2xl shadow-md space-y-2">
-            <div className="font-semibold">Conciliar en bloque (orderNumber;amount)</div>
-            <form className="space-y-2" onSubmit={autoMatch}>
-              <select className="border rounded px-3 py-2 w-full" value={bulkPayoutId} onChange={(e) => setBulkPayoutId(e.target.value)}>
-                <option value="">Payout</option>
+          <div className={cardClass()}>
+            <h2 className="mb-3 text-[20px] text-[#141A39]">Conciliación en bloque</h2>
+            <form className="space-y-3" onSubmit={autoMatch}>
+              <select className={inputClass()} value={bulkPayoutId} onChange={(e) => setBulkPayoutId(e.target.value)}>
+                <option value="">Selecciona payout</option>
                 {payouts.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.payoutRef}
@@ -302,65 +293,93 @@ export default function PayoutsPage() {
                 ))}
               </select>
               <textarea
-                className="w-full border rounded px-3 py-2 font-mono text-xs min-h-[140px]"
+                className="min-h-[140px] w-full rounded-2xl border-none bg-[#F7F9FC] px-4 py-3 font-mono text-xs text-[#25304F] outline-none shadow-[inset_0_0_0_1px_rgba(18,22,48,0.08)]"
                 value={bulkMatches}
                 onChange={(e) => setBulkMatches(e.target.value)}
               />
-              <div className="flex gap-2 items-center">
-                <button className="rounded bg-black text-white px-3 py-2" type="submit">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm text-[#6E768E]">{bulkResult}</div>
+                <button className="h-11 rounded-full bg-[#0B1230] px-6 text-[14px] text-white hover:bg-[#1A2348]" type="submit">
                   Conciliar
                 </button>
-                <span className="text-sm text-gray-700">{bulkResult}</span>
               </div>
             </form>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-md overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b text-sm">
-            <div>Payouts</div>
-            <button className="rounded border px-3 py-1 text-sm" onClick={downloadDiscrepanciesCsv}>
-              Descargar discrepancias
-            </button>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className={cardClass()}>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-[20px] text-[#141A39]">Importar CSV</h2>
+                <p className="mt-1 text-[13px] text-[#616984]">Cabeceras: payoutRef, payoutDate, amount, fees, adjustments, channelCode</p>
+              </div>
+            </div>
+            <form className="space-y-3" onSubmit={importCsv}>
+              <input type="file" accept=".csv,text/csv" onChange={onFileUpload} className="text-sm" />
+              {uploadName ? <div className="text-xs text-[#6E768E]">Seleccionado: {uploadName}</div> : null}
+              <textarea
+                className="min-h-[160px] w-full rounded-2xl border-none bg-[#F7F9FC] px-4 py-3 font-mono text-xs text-[#25304F] outline-none shadow-[inset_0_0_0_1px_rgba(18,22,48,0.08)]"
+                value={csvText}
+                onChange={(e) => setCsvText(e.target.value)}
+              />
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm text-[#6E768E]">{importResult}</div>
+                <button className="h-11 rounded-full bg-[#0B1230] px-6 text-[14px] text-white hover:bg-[#1A2348]" type="submit">
+                  Importar
+                </button>
+              </div>
+            </form>
           </div>
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="text-left px-3 py-2">Ref</th>
-                <th className="text-left px-3 py-2">Date</th>
-                <th className="text-left px-3 py-2">Channel</th>
-                <th className="text-left px-3 py-2">Amount EUR</th>
-                <th className="text-left px-3 py-2">Fees</th>
-                <th className="text-left px-3 py-2">Adjust</th>
-                <th className="text-left px-3 py-2">Reconciled</th>
-                <th className="text-left px-3 py-2">Dif.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payouts.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-3 py-4 text-gray-500">
-                    Sin payouts
-                  </td>
-                </tr>
-              ) : (
-                payouts.map((p) => (
-                  <tr key={p.id} className="border-b">
-                    <td className="px-3 py-2">{p.payoutRef}</td>
-                    <td className="px-3 py-2">{new Date(p.payoutDate).toISOString().slice(0, 10)}</td>
-                    <td className="px-3 py-2">{p.channel?.name || "-"}</td>
-                    <td className="px-3 py-2">{p.amountEurFrozen}</td>
-                    <td className="px-3 py-2">{p.feesEur}</td>
-                    <td className="px-3 py-2">{p.adjustmentsEur}</td>
-                    <td className="px-3 py-2">{p.reconciledEur}</td>
-                    <td className={`px-3 py-2 ${Math.abs(p.discrepancyEur) > 0.5 ? "text-red-700" : "text-green-700"}`}>
-                      {p.discrepancyEur.toFixed(2)}
-                    </td>
+
+          <div className={cardClass()}>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-[20px] text-[#141A39]">Payouts</h2>
+              <button className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-sm text-[#25304F] hover:bg-[#F7F9FC]" onClick={downloadDiscrepanciesCsv}>
+                Descargar discrepancias
+              </button>
+            </div>
+            <div className="overflow-hidden rounded-2xl border border-[#E2E6EF]">
+              <table className="min-w-full text-sm">
+                <thead className="border-b bg-[#F7F9FC]">
+                  <tr className="text-left text-[#4F5568]">
+                    <th className="px-3 py-3">Ref</th>
+                    <th className="px-3 py-3">Fecha</th>
+                    <th className="px-3 py-3">Canal</th>
+                    <th className="px-3 py-3">Monto EUR</th>
+                    <th className="px-3 py-3">Fees</th>
+                    <th className="px-3 py-3">Ajustes</th>
+                    <th className="px-3 py-3">Conciliado</th>
+                    <th className="px-3 py-3">Dif.</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {payouts.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-4 text-[#6E768E]">
+                        Sin payouts
+                      </td>
+                    </tr>
+                  ) : (
+                    payouts.map((p) => (
+                      <tr key={p.id} className="border-b border-[#EEF1F6] last:border-b-0">
+                        <td className="px-3 py-3 text-[#25304F]">{p.payoutRef}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{new Date(p.payoutDate).toISOString().slice(0, 10)}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{p.channel?.name || "-"}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{p.amountEurFrozen}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{p.feesEur}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{p.adjustmentsEur}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{p.reconciledEur}</td>
+                        <td className={`px-3 py-3 ${Math.abs(p.discrepancyEur) > 0.5 ? "text-[#B42318]" : "text-[#1F7A3E]"}`}>
+                          {p.discrepancyEur.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>

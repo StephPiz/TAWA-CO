@@ -20,11 +20,33 @@ type ProductRow = {
   id: string;
   ean: string;
   brand: string;
+  modelRef?: string | null;
   model: string;
   name: string;
   type: string;
   status: string;
 };
+
+function productTypeLabel(type: string) {
+  switch (String(type || "").toLowerCase()) {
+    case "watch":
+      return "Reloj";
+    case "bag":
+      return "Bolso";
+    case "perfume":
+      return "Perfume";
+    case "accessory":
+      return "Accesorio";
+    case "vintage":
+      return "Vintage";
+    case "refurbished":
+      return "Reacondicionado";
+    case "other":
+      return "Otro";
+    default:
+      return type || "-";
+  }
+}
 
 export default function ProductsPage() {
   const router = useRouter();
@@ -182,13 +204,13 @@ export default function ProductsPage() {
               onChange={(e) => setEan(e.target.value)}
             />
             <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={type} onChange={(e) => setType(e.target.value)}>
-              <option value="watch">watch</option>
-              <option value="bag">bag</option>
-              <option value="perfume">perfume</option>
-              <option value="accessory">accessory</option>
-              <option value="vintage">vintage</option>
-              <option value="refurbished">refurbished</option>
-              <option value="other">other</option>
+              <option value="watch">Reloj</option>
+              <option value="bag">Bolso</option>
+              <option value="perfume">Perfume</option>
+              <option value="accessory">Accesorio</option>
+              <option value="vintage">Vintage</option>
+              <option value="refurbished">Reacondicionado</option>
+              <option value="other">Otro</option>
             </select>
             <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white" type="submit">
               {t("create")}
@@ -203,6 +225,7 @@ export default function ProductsPage() {
               <tr>
                 <th className="text-left px-3 py-2">EAN</th>
                 <th className="text-left px-3 py-2">Marca</th>
+                <th className="text-left px-3 py-2">Modelo #</th>
                 <th className="text-left px-3 py-2">Modelo</th>
                 <th className="text-left px-3 py-2">Tipo</th>
                 <th className="text-left px-3 py-2">Estado</th>
@@ -211,13 +234,13 @@ export default function ProductsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-4 text-[#6E768E]">
+                  <td colSpan={6} className="px-3 py-4 text-[#6E768E]">
                     Cargando...
                   </td>
                 </tr>
               ) : products.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-4 text-[#6E768E]">
+                  <td colSpan={6} className="px-3 py-4 text-[#6E768E]">
                     Sin productos
                   </td>
                 </tr>
@@ -230,8 +253,9 @@ export default function ProductsPage() {
                   >
                     <td className="px-3 py-2 font-mono text-[12px] text-[#3C4562]">{p.ean}</td>
                     <td className="px-3 py-2 text-[#212A45]">{p.brand}</td>
+                    <td className="px-3 py-2 font-medium text-[#212A45]">{p.modelRef || "-"}</td>
                     <td className="px-3 py-2 font-medium text-[#131936]">{p.model}</td>
-                    <td className="px-3 py-2 text-[#212A45]">{p.type}</td>
+                    <td className="px-3 py-2 text-[#212A45]">{productTypeLabel(p.type)}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex rounded-full bg-[#EEF2FF] px-2.5 py-1 text-[12px] font-medium text-[#3730A3]">{p.status}</span>
                     </td>

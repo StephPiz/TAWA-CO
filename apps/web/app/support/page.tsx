@@ -2,11 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import localFont from "next/font/local";
 import Topbar from "../components/topbar";
 import { requireTokenOrRedirect } from "../lib/auth";
 import { useStorePermissions } from "../lib/access";
 
 const API_BASE = "http://localhost:3001";
+const headingFont = localFont({
+  src: "../fonts/HFHySans_Black.ttf",
+  variable: "--font-support-heading",
+});
+const bodyFont = localFont({
+  src: "../fonts/HFHySans_Regular.ttf",
+  variable: "--font-support-body",
+});
 
 type TicketStatus = "open" | "in_progress" | "waiting_customer" | "resolved" | "closed";
 type TicketPriority = "low" | "medium" | "high" | "urgent";
@@ -66,6 +75,56 @@ const TICKET_TEMPLATES = [
   "Cliente indica producto dañado. Solicitar evidencia y validar devolución.",
   "Incidencia de facturación. Revisar invoice y método de pago.",
 ];
+
+const STATUS_LABELS: Record<TicketStatus, string> = {
+  open: "Abierto",
+  in_progress: "En curso",
+  waiting_customer: "Esperando cliente",
+  resolved: "Resuelto",
+  closed: "Cerrado",
+};
+
+const PRIORITY_LABELS: Record<TicketPriority, string> = {
+  low: "Baja",
+  medium: "Media",
+  high: "Alta",
+  urgent: "Urgente",
+};
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function statusBadge(status: TicketStatus) {
+  switch (status) {
+    case "open":
+      return "bg-[#EEF2FF] text-[#3730A3]";
+    case "in_progress":
+      return "bg-[#FFF3E8] text-[#B54708]";
+    case "waiting_customer":
+      return "bg-[#F4F3FF] text-[#6941C6]";
+    case "resolved":
+      return "bg-[#ECFDF3] text-[#027A48]";
+    case "closed":
+      return "bg-[#F2F4F7] text-[#475467]";
+  }
+}
+
+function priorityBadge(priority: TicketPriority) {
+  switch (priority) {
+    case "low":
+      return "bg-[#F2F4F7] text-[#475467]";
+    case "medium":
+      return "bg-[#EEF2FF] text-[#3730A3]";
+    case "high":
+      return "bg-[#FFF6ED] text-[#C4320A]";
+    case "urgent":
+      return "bg-[#FEF3F2] text-[#B42318]";
+  }
+}
 
 export default function SupportPage() {
   const router = useRouter();
@@ -226,170 +285,192 @@ export default function SupportPage() {
     await loadAll(storeId);
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  if (loading) return <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>Cargando permisos...</div>;
+  if (permissionsError) return <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6 text-red-700`}>{permissionsError}</div>;
   if (!permissions.supportWrite) {
     return (
-      <div className="min-h-screen bg-gray-100 p-6">
-        <div className="max-w-3xl mx-auto bg-white p-4 rounded-2xl shadow-md">No autorizado para Soporte.</div>
+      <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
+        <div className="mx-auto max-w-3xl rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">No autorizado para Soporte.</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="max-w-7xl mx-auto space-y-4">
         <Topbar title="Tickets / Quejas" storeName={storeName} />
-        {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
-        {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
+        {error ? <div className="rounded-xl bg-[#FDECEC] p-3 text-[#B42318]">{error}</div> : null}
+        {info ? <div className="rounded-xl bg-[#ECFDF3] p-3 text-[#027A48]">{info}</div> : null}
 
         {metrics ? (
-          <div className="bg-white p-4 rounded-2xl shadow-md grid md:grid-cols-6 gap-2 text-sm">
-            <div className="border rounded p-2">Total: {metrics.total}</div>
-            <div className="border rounded p-2">Abiertos: {metrics.openCount}</div>
-            <div className="border rounded p-2">SLA vencidos: {metrics.breachedOpenCount}</div>
-            <div className="border rounded p-2">Resueltos/cerrados: {metrics.resolvedCount}</div>
-            <div className="border rounded p-2">1ª respuesta (h): {metrics.avgFirstResponseHours}</div>
-            <div className="border rounded p-2">Resolución (h): {metrics.avgResolutionHours}</div>
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>Total</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.total}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>Abiertos</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.openCount}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>SLA vencidos</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.breachedOpenCount}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>Resueltos</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.resolvedCount}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>1ª respuesta (h)</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.avgFirstResponseHours}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-support-body)" }}>Resolución (h)</div>
+              <div className="mt-2 text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>{metrics.avgResolutionHours}</div>
+            </div>
           </div>
         ) : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h2 className="font-semibold mb-2">Nuevo ticket</h2>
-          <form className="grid md:grid-cols-7 gap-2" onSubmit={createTicket}>
-            <input className="border rounded px-3 py-2 md:col-span-2" placeholder="Título" value={title} onChange={(e) => setTitle(e.target.value)} required />
-            <input className="border rounded px-3 py-2 md:col-span-2" placeholder="Descripción" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <h2 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-support-heading)" }}>Nuevo ticket</h2>
+          <form className="grid gap-2 md:grid-cols-7" onSubmit={createTicket}>
+            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2" placeholder="Título" value={title} onChange={(e) => setTitle(e.target.value)} required />
+            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2" placeholder="Descripción" value={description} onChange={(e) => setDescription(e.target.value)} />
             <div className="md:col-span-2 flex flex-wrap gap-1">
               {TICKET_TEMPLATES.map((tpl) => (
                 <button
                   key={tpl}
                   type="button"
-                  className="rounded border px-2 py-1 text-xs"
+                  className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#3D4662]"
                   onClick={() => setDescription(tpl)}
                 >
                   Plantilla
                 </button>
               ))}
             </div>
-            <select className="border rounded px-3 py-2" value={channel} onChange={(e) => setChannel(e.target.value)}>
-              <option value="email">email</option>
-              <option value="chat">chat</option>
-              <option value="marketplace">marketplace</option>
-              <option value="phone">phone</option>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <option value="email">Email</option>
+              <option value="chat">Chat</option>
+              <option value="marketplace">Canal</option>
+              <option value="phone">Teléfono</option>
             </select>
-            <select className="border rounded px-3 py-2" value={reason} onChange={(e) => setReason(e.target.value)}>
-              <option value="late_delivery">late_delivery</option>
-              <option value="damaged">damaged</option>
-              <option value="wrong_item">wrong_item</option>
-              <option value="billing_issue">billing_issue</option>
-              <option value="other">other</option>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={reason} onChange={(e) => setReason(e.target.value)}>
+              <option value="late_delivery">Retraso de entrega</option>
+              <option value="damaged">Producto dañado</option>
+              <option value="wrong_item">Producto incorrecto</option>
+              <option value="billing_issue">Incidencia de facturación</option>
+              <option value="other">Otro</option>
             </select>
-            <select className="border rounded px-3 py-2" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
               {PRIORITIES.map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
               ))}
             </select>
-            <input className="border rounded px-3 py-2" type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
 
-            <select className="border rounded px-3 py-2 md:col-span-2" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Cliente (opcional)</option>
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>{c.fullName || c.email || c.id}</option>
               ))}
             </select>
 
-            <select className="border rounded px-3 py-2 md:col-span-2" value={orderId} onChange={(e) => setOrderId(e.target.value)}>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2" value={orderId} onChange={(e) => setOrderId(e.target.value)}>
               <option value="">Pedido (opcional)</option>
               {orders.map((o) => (
                 <option key={o.id} value={o.id}>{o.orderNumber}</option>
               ))}
             </select>
 
-            <select className="border rounded px-3 py-2 md:col-span-2" value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2" value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
               <option value="">Asignar a</option>
               {members.map((m) => (
                 <option key={m.userId} value={m.userId}>{m.fullName} ({m.roleKey})</option>
               ))}
             </select>
 
-            <button className="rounded bg-black text-white px-3 py-2 md:col-span-2" type="submit">Crear</button>
+            <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white md:col-span-2" type="submit" style={{ fontFamily: "var(--font-support-heading)" }}>Crear</button>
           </form>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <div className="grid md:grid-cols-6 gap-2 mb-3">
-            <input className="border rounded px-3 py-2" placeholder="Buscar ticket..." value={q} onChange={(e) => setQ(e.target.value)} />
-            <select className="border rounded px-3 py-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 grid gap-2 md:grid-cols-6">
+            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" placeholder="Buscar ticket..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">Todos estados</option>
               {STATUSES.map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>{STATUS_LABELS[s]}</option>
               ))}
             </select>
-            <select className="border rounded px-3 py-2" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
               <option value="">Todas prioridades</option>
               {PRIORITIES.map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
               ))}
             </select>
-            <label className="inline-flex items-center gap-2 text-sm px-2">
+            <label className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F]">
               <input type="checkbox" checked={assignedToMeOnly} onChange={(e) => setAssignedToMeOnly(e.target.checked)} />
               Asignados a mí
             </label>
-            <button className="rounded border px-3 py-2" onClick={() => storeId && loadAll(storeId, q, statusFilter, priorityFilter, assignedToMeOnly)}>
+            <button className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F]" onClick={() => storeId && loadAll(storeId, q, statusFilter, priorityFilter, assignedToMeOnly)}>
               Aplicar filtros
             </button>
-            <button className="rounded border px-3 py-2" onClick={exportCsv}>Export CSV</button>
+            <button className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F]" onClick={exportCsv}>Export CSV</button>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
                 <tr>
-                  <th className="text-left px-3 py-2">Título</th>
-                  <th className="text-left px-3 py-2">Estado</th>
-                  <th className="text-left px-3 py-2">Prioridad</th>
-                  <th className="text-left px-3 py-2">Cliente</th>
-                  <th className="text-left px-3 py-2">Pedido</th>
-                  <th className="text-left px-3 py-2">Asignado</th>
-                  <th className="text-left px-3 py-2">Due</th>
-                  <th className="text-left px-3 py-2">SLA</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Título</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Estado</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Prioridad</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Cliente</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Asignado</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Due</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">SLA</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {tickets.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-4 text-gray-500">Sin tickets</td>
+                    <td colSpan={9} className="px-3 py-4 text-[#6E768E]">Sin tickets</td>
                   </tr>
                 ) : (
                   tickets.map((t) => (
-                    <tr key={t.id} className="border-b align-top">
+                    <tr key={t.id} className="border-b border-[#EEF1F6] align-top last:border-b-0">
                       <td className="px-3 py-2">
-                        <div className="font-medium">{t.title}</div>
-                        <div className="text-xs text-gray-500">{t.description || "-"}</div>
+                        <div className="font-medium text-[#141A39]">{t.title}</div>
+                        <div className="mt-1 text-xs text-[#6E768E]">{t.description || "-"}</div>
                       </td>
-                      <td className="px-3 py-2">{t.status}</td>
-                      <td className="px-3 py-2">{t.priority}</td>
-                      <td className="px-3 py-2">{t.customer?.fullName || t.customer?.email || "-"}</td>
-                      <td className="px-3 py-2">{t.order?.orderNumber || "-"}</td>
-                      <td className="px-3 py-2">{t.assignedTo?.fullName || "-"}</td>
-                      <td className="px-3 py-2">{t.dueAt ? new Date(t.dueAt).toISOString().slice(0, 10) : "-"}</td>
                       <td className="px-3 py-2">
-                        <span className={`rounded px-2 py-1 text-xs ${t.slaBreached ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
-                          {t.slaBreached ? "breached" : "ok"}
+                        <span className={`inline-flex rounded-full px-3 py-1 text-[12px] ${statusBadge(t.status)}`}>{STATUS_LABELS[t.status]}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-3 py-1 text-[12px] ${priorityBadge(t.priority)}`}>{PRIORITY_LABELS[t.priority]}</span>
+                      </td>
+                      <td className="px-3 py-2 text-[#25304F]">{t.customer?.fullName || t.customer?.email || "-"}</td>
+                      <td className="px-3 py-2 text-[#25304F]">{t.order?.orderNumber || "-"}</td>
+                      <td className="px-3 py-2 text-[#25304F]">{t.assignedTo?.fullName || "-"}</td>
+                      <td className="px-3 py-2 text-[#25304F]">{formatDate(t.dueAt)}</td>
+                      <td className="px-3 py-2">
+                        <span className={`rounded-full px-3 py-1 text-xs ${t.slaBreached ? "bg-[#FEF3F2] text-[#B42318]" : "bg-[#ECFDF3] text-[#027A48]"}`}>
+                          {t.slaBreached ? "Vencido" : "OK"}
                         </span>
-                        <div className="text-xs text-gray-500 mt-1">
-                          res due: {t.slaResolutionDueAt ? new Date(t.slaResolutionDueAt).toISOString().slice(0, 10) : "-"}
+                        <div className="mt-1 text-xs text-[#6E768E]">
+                          res due: {formatDate(t.slaResolutionDueAt)}
                         </div>
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex gap-2 flex-wrap">
-                          <button className="rounded border px-2 py-1" onClick={() => router.push(`/store/support/${t.id}`)}>
+                          <button className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#25304F]" onClick={() => router.push(`/store/support/${t.id}`)}>
                             Ver
                           </button>
                           {STATUSES.map((s) => (
-                            <button key={s} className="rounded border px-2 py-1" onClick={() => updateTicket(t.id, { status: s })}>
-                              {s}
+                            <button key={s} className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#25304F]" onClick={() => updateTicket(t.id, { status: s })}>
+                              {STATUS_LABELS[s]}
                             </button>
                           ))}
                         </div>

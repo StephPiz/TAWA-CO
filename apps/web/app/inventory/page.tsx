@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import localFont from "next/font/local";
 import { handleUnauthorized, requireTokenOrRedirect } from "../lib/auth";
@@ -80,6 +79,32 @@ const bodyFont = localFont({
   src: "../fonts/HFHySans_Regular.ttf",
   variable: "--font-inventory-body",
 });
+
+function productTypeLabel(type: string) {
+  switch (String(type || "").toLowerCase()) {
+    case "watch":
+      return "Reloj";
+    case "bag":
+      return "Bolso";
+    case "perfume":
+      return "Perfume";
+    case "accessory":
+      return "Accesorio";
+    case "vintage":
+      return "Vintage";
+    case "refurbished":
+      return "Reacondicionado";
+    case "other":
+      return "Otro";
+    default:
+      return type || "-";
+  }
+}
+
+function categoryLabel(category?: string | null) {
+  if (!category) return "-";
+  return productTypeLabel(category);
+}
 
 export default function InventoryPage() {
   const router = useRouter();
@@ -526,10 +551,10 @@ export default function InventoryPage() {
               {brandOptions.map((b) => <option key={b} value={b}>{b === "all" ? "Marca: todas" : b}</option>)}
             </select>
             <select className="h-10 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-              {typeOptions.map((t) => <option key={t} value={t}>{t === "all" ? "Tipo: todos" : t}</option>)}
+              {typeOptions.map((t) => <option key={t} value={t}>{t === "all" ? "Tipo: todos" : productTypeLabel(t)}</option>)}
             </select>
             <select className="h-10 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-              {categoryOptions.map((c) => <option key={c} value={c}>{c === "all" ? "Categoría: todas" : c}</option>)}
+              {categoryOptions.map((c) => <option key={c} value={c}>{c === "all" ? "Categoría: todas" : categoryLabel(c)}</option>)}
             </select>
             <select className="h-10 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]" value={filterStock} onChange={(e) => setFilterStock(e.target.value as typeof filterStock)}>
               <option value="all">Stock: todos</option>
@@ -609,16 +634,17 @@ export default function InventoryPage() {
                         {withImages ? (
                           <td className="px-3 py-2">
                             {item.imageUrl ? (
-                              <Image src={item.imageUrl} alt={item.name} width={56} height={56} className="h-14 w-14 rounded-xl border border-[#E4E8F1] object-cover" />
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={item.imageUrl} alt={item.name} className="h-14 w-14 rounded-xl border border-[#E4E8F1] object-cover" />
                             ) : (
                               <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-[#E4E8F1] bg-[#F7F8FB] text-xs text-[#7B839C]">Sin foto</div>
                             )}
                           </td>
                         ) : null}
-                        <td className="px-3 py-2 text-[#212A45]">{item.type || "-"}</td>
+                        <td className="px-3 py-2 text-[#212A45]">{productTypeLabel(item.type)}</td>
                         <td className="px-3 py-2 text-[#212A45]">{item.brand || "-"}</td>
                         <td className="px-3 py-2 font-medium text-[#131936]">{item.model || "-"}</td>
-                        <td className="px-3 py-2 text-[#212A45]">{item.category || "-"}</td>
+                        <td className="px-3 py-2 text-[#212A45]">{categoryLabel(item.category)}</td>
                         <td className="px-3 py-2 font-mono text-[12px] text-[#3C4562]">{item.ean || "-"}</td>
                         <td className="px-3 py-2"><span className="inline-flex min-w-[34px] items-center justify-center rounded-full bg-[#EEF2FF] px-2 py-1 text-[12px] font-semibold text-[#3730A3]">{item.stockSelectedWarehouse}</span></td>
                         <td className="px-3 py-2 text-xs text-[#5E6680]">

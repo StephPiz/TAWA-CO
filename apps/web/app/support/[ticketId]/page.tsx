@@ -2,11 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import localFont from "next/font/local";
 import Topbar from "../../components/topbar";
 import { requireTokenOrRedirect } from "../../lib/auth";
 import { useStorePermissions } from "../../lib/access";
 
 const API_BASE = "http://localhost:3001";
+const headingFont = localFont({
+  src: "../../fonts/HFHySans_Black.ttf",
+  variable: "--font-support-detail-heading",
+});
+const bodyFont = localFont({
+  src: "../../fonts/HFHySans_Regular.ttf",
+  variable: "--font-support-detail-body",
+});
 const NOTE_TEMPLATES = [
   "Se contactó al cliente y se informó estado actual.",
   "Escalado a logística para validación de tracking.",
@@ -44,6 +53,28 @@ type TimelineEvent = {
   label: string;
   noteId?: string;
 };
+
+const STATUS_LABELS: Record<string, string> = {
+  open: "Abierto",
+  in_progress: "En curso",
+  waiting_customer: "Esperando cliente",
+  resolved: "Resuelto",
+  closed: "Cerrado",
+};
+
+const PRIORITY_LABELS: Record<string, string> = {
+  low: "Baja",
+  medium: "Media",
+  high: "Alta",
+  urgent: "Urgente",
+};
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleString("es-ES");
+}
 
 export default function SupportTicketDetailPage() {
   const router = useRouter();
@@ -101,71 +132,84 @@ export default function SupportTicketDetailPage() {
     await loadTicket(storeId);
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
-  if (!permissions.supportWrite) return <div className="min-h-screen bg-gray-100 p-6">No autorizado para Soporte.</div>;
+  if (loading) return <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>Cargando permisos...</div>;
+  if (permissionsError) return <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6 text-red-700`}>{permissionsError}</div>;
+  if (!permissions.supportWrite) return <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>No autorizado para Soporte.</div>;
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="max-w-7xl mx-auto space-y-4">
         <Topbar title="Ticket - Detalle" storeName={storeName} />
-        {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
-        {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
+        {error ? <div className="rounded-xl bg-[#FDECEC] p-3 text-[#B42318]">{error}</div> : null}
+        {info ? <div className="rounded-xl bg-[#ECFDF3] p-3 text-[#027A48]">{info}</div> : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{ticket?.title || ticketId}</h2>
-            <button className="rounded border px-3 py-2" onClick={() => router.push("/store/support")}>Volver a soporte</button>
+            <h2 className="text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>{ticket?.title || ticketId}</h2>
+            <button className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[14px] text-[#25304F]" onClick={() => router.push("/store/support")}>Volver a soporte</button>
           </div>
-          <p className="text-sm text-gray-700 mt-1">Estado: {ticket?.status || "-"} | Prioridad: {ticket?.priority || "-"}</p>
-          <p className="text-sm text-gray-700">Canal/Motivo: {[ticket?.channel, ticket?.reason].filter(Boolean).join(" / ") || "-"}</p>
-          <p className="text-sm text-gray-700">Cliente: {ticket?.customer?.fullName || ticket?.customer?.email || "-"}</p>
-          <p className="text-sm text-gray-700">Pedido: {ticket?.order?.orderNumber || "-"}</p>
-          <p className="text-sm text-gray-700">Asignado: {ticket?.assignedTo?.fullName || "-"}</p>
-          <p className="text-sm text-gray-700">Descripción: {ticket?.description || "-"}</p>
-          <p className="text-sm text-gray-700">Resolución: {ticket?.resolutionNote || "-"}</p>
-          <p className="text-sm text-gray-700">
-            SLA 1ª respuesta: {ticket?.slaFirstResponseDueAt ? new Date(ticket.slaFirstResponseDueAt).toLocaleString() : "-"}
-          </p>
-          <p className="text-sm text-gray-700">
-            SLA resolución: {ticket?.slaResolutionDueAt ? new Date(ticket.slaResolutionDueAt).toLocaleString() : "-"}
-          </p>
-          <p className="text-sm text-gray-700">
-            SLA estado: {ticket?.slaBreached ? "breached" : "ok"}
-            {ticket?.slaBreachedAt ? ` (${new Date(ticket.slaBreachedAt).toLocaleString()})` : ""}
-          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#25304F]">
+              <div className="text-[#6E768E]">Estado</div>
+              <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>{STATUS_LABELS[ticket?.status || ""] || ticket?.status || "-"}</div>
+            </div>
+            <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#25304F]">
+              <div className="text-[#6E768E]">Prioridad</div>
+              <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>{PRIORITY_LABELS[ticket?.priority || ""] || ticket?.priority || "-"}</div>
+            </div>
+            <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#25304F]">
+              <div className="text-[#6E768E]">SLA</div>
+              <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>{ticket?.slaBreached ? "Vencido" : "OK"}</div>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3 text-[14px] text-[#25304F]">
+            <div><span className="text-[#6E768E]">Canal / Motivo:</span> {[ticket?.channel, ticket?.reason].filter(Boolean).join(" / ") || "-"}</div>
+            <div><span className="text-[#6E768E]">Cliente:</span> {ticket?.customer?.fullName || ticket?.customer?.email || "-"}</div>
+            <div><span className="text-[#6E768E]">Pedido:</span> {ticket?.order?.orderNumber || "-"}</div>
+            <div><span className="text-[#6E768E]">Asignado:</span> {ticket?.assignedTo?.fullName || "-"}</div>
+            <div><span className="text-[#6E768E]">SLA 1ª respuesta:</span> {formatDateTime(ticket?.slaFirstResponseDueAt)}</div>
+            <div><span className="text-[#6E768E]">SLA resolución:</span> {formatDateTime(ticket?.slaResolutionDueAt)}</div>
+          </div>
+          <div className="mt-4 rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#25304F]">
+            <div className="text-[#6E768E]">Descripción</div>
+            <div className="mt-1 whitespace-pre-wrap">{ticket?.description || "-"}</div>
+          </div>
+          <div className="mt-3 rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#25304F]">
+            <div className="text-[#6E768E]">Resolución</div>
+            <div className="mt-1 whitespace-pre-wrap">{ticket?.resolutionNote || "-"}</div>
+          </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h3 className="font-semibold mb-2">Timeline</h3>
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>Timeline</h3>
           {timeline.length === 0 ? (
-            <div className="text-sm text-gray-500">Sin eventos</div>
+            <div className="text-sm text-[#6E768E]">Sin eventos</div>
           ) : (
             <ul className="space-y-2">
               {timeline.map((ev, idx) => (
-                <li key={`${ev.type}-${ev.at}-${idx}`} className="border rounded p-2 text-sm">
-                  <div className="font-medium">{ev.label}</div>
-                  <div className="text-xs text-gray-500">{new Date(ev.at).toLocaleString()}</div>
+                <li key={`${ev.type}-${ev.at}-${idx}`} className="rounded-2xl bg-[#F7F8FB] p-3 text-sm">
+                  <div className="font-medium text-[#141A39]">{ev.label}</div>
+                  <div className="text-xs text-[#6E768E]">{formatDateTime(ev.at)}</div>
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h3 className="font-semibold mb-2">Notas internas</h3>
-          <form className="flex gap-2 mb-3" onSubmit={addNote}>
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-support-detail-heading)" }}>Notas internas</h3>
+          <form className="mb-3 flex gap-2" onSubmit={addNote}>
             <input
-              className="border rounded px-3 py-2 w-full"
+              className="h-11 w-full rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
               placeholder="Escribe una nota interna..."
               value={noteBody}
               onChange={(e) => setNoteBody(e.target.value)}
             />
-            <button className="rounded bg-black text-white px-4 py-2" type="submit">Agregar</button>
+            <button className="rounded-xl bg-[#0B1230] px-4 py-2 text-[14px] text-white" style={{ fontFamily: "var(--font-support-detail-heading)" }} type="submit">Agregar</button>
           </form>
           <div className="flex flex-wrap gap-2 mb-3">
             {NOTE_TEMPLATES.map((tpl) => (
-              <button key={tpl} type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setNoteBody(tpl)}>
+              <button key={tpl} type="button" className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#3D4662]" onClick={() => setNoteBody(tpl)}>
                 Plantilla
               </button>
             ))}
@@ -174,14 +218,14 @@ export default function SupportTicketDetailPage() {
           {ticket?.notes?.length ? (
             <div className="space-y-2">
               {ticket.notes.map((n) => (
-                <div key={n.id} className="border rounded p-2">
-                  <div className="text-xs text-gray-500">{n.user?.fullName || "usuario"} | {new Date(n.createdAt).toLocaleString()}</div>
-                  <div className="text-sm mt-1 whitespace-pre-wrap">{n.body}</div>
+                <div key={n.id} className="rounded-2xl bg-[#F7F8FB] p-3">
+                  <div className="text-xs text-[#6E768E]">{n.user?.fullName || "usuario"} | {formatDateTime(n.createdAt)}</div>
+                  <div className="mt-1 text-sm whitespace-pre-wrap text-[#25304F]">{n.body}</div>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-sm text-gray-500">Sin notas internas</div>
+            <div className="text-sm text-[#6E768E]">Sin notas internas</div>
           )}
         </div>
       </div>

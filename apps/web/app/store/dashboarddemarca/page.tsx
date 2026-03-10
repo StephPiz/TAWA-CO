@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import localFont from "next/font/local";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logout, requireTokenOrRedirect } from "../../lib/auth";
 
@@ -43,6 +43,18 @@ type WarehouseBoxSelection = {
   code: string;
   items: number;
   category: string;
+};
+
+type WarehouseTabKey = "info" | "distribution";
+
+type WarehouseLayoutEntry = {
+  code: string;
+  block: string;
+  floor: number;
+  box: number;
+  items: number;
+  category: string;
+  name: string;
 };
 
 type StoreProfile = {
@@ -313,6 +325,52 @@ const WAREHOUSE_MAP_BLOCKS: WarehouseMapBlock[] = [
   { key: "K", label: "BLOQUE K", itemCount: 2, rows: [1, 1], x: 63, y: 76, w: 27, h: 11 },
 ];
 
+function buildWarehouseCode(block: string, floor: number, box: number) {
+  return `${block}-${String(floor).padStart(2, "0")}-${String(box).padStart(2, "0")}`;
+}
+
+function buildDefaultWarehouseLayout(): WarehouseLayoutEntry[] {
+  const rows: WarehouseLayoutEntry[] = [];
+  const pushEntry = (block: string, floor: number, box: number, items: number, category: string) => {
+    const code = buildWarehouseCode(block, floor, box);
+    rows.push({
+      code,
+      block,
+      floor,
+      box,
+      items,
+      category,
+      name: `Caja ${code}`,
+    });
+  };
+
+  pushEntry("A", 1, 1, 24, "Bolsos");
+  pushEntry("B", 1, 1, 19, "Accesorios");
+  pushEntry("C", 1, 1, 21, "Perfumes");
+
+  for (let box = 1; box <= 14; box += 1) pushEntry("D", 1, box, box === 14 ? 8 : 4, "Bolsos");
+  for (let box = 1; box <= 12; box += 1) pushEntry("D", 2, box, box <= 3 ? 6 : 3, "Relojes");
+  pushEntry("D", 3, 1, 7, "Vintage");
+  pushEntry("D", 4, 1, 5, "Accesorios");
+
+  for (let box = 1; box <= 5; box += 1) pushEntry("E", 1, box, 2, "Bolsos");
+  pushEntry("E", 2, 1, 1, "Accesorios");
+  for (let box = 1; box <= 4; box += 1) pushEntry("E", 3, box, 2, "Perfumes");
+  pushEntry("E", 4, 1, 2, "Accesorios");
+  pushEntry("E", 5, 1, 4, "Vintage");
+  pushEntry("E", 6, 1, 5, "Relojes");
+
+  pushEntry("F", 1, 1, 11, "Bolsos");
+  pushEntry("G", 1, 1, 8, "Accesorios");
+  pushEntry("H", 1, 1, 6, "Perfumes");
+  pushEntry("I", 1, 1, 7, "Relojes");
+  pushEntry("J", 1, 1, 5, "Vintage");
+  pushEntry("K", 1, 1, 1, "Accesorios");
+  pushEntry("K", 2, 1, 1, "Accesorios");
+
+  return rows;
+}
+
 function menuIcon(key: string) {
   const base = "h-5 w-5";
   switch (key) {
@@ -354,6 +412,8 @@ export default function DashboardDemarcaPage() {
   const [activeKey, setActiveKey] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [storeSectionCollapsed, setStoreSectionCollapsed] = useState(false);
+  const [menuSectionCollapsed, setMenuSectionCollapsed] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchError, setSearchError] = useState("");
   const [showStoreProfile, setShowStoreProfile] = useState(false);
@@ -430,6 +490,7 @@ export default function DashboardDemarcaPage() {
   const [showInvoiceTemplatePreview, setShowInvoiceTemplatePreview] = useState(false);
   const [selectedMapBlock, setSelectedMapBlock] = useState("F");
   const [selectedMapBox, setSelectedMapBox] = useState<WarehouseBoxSelection | null>(null);
+  const [warehouseTab, setWarehouseTab] = useState<WarehouseTabKey>("info");
   const [warehouseEditable, setWarehouseEditable] = useState(false);
   const [warehouseSaving, setWarehouseSaving] = useState(false);
   const [warehouseSaveError, setWarehouseSaveError] = useState("");
@@ -451,6 +512,14 @@ export default function DashboardDemarcaPage() {
     capacityUnits: "1200",
     color: "#6456DF",
     description: "Almacén principal para preparación de pedidos y stock operativo.",
+  });
+  const [warehouseLayout, setWarehouseLayout] = useState<WarehouseLayoutEntry[]>(() => buildDefaultWarehouseLayout());
+  const [distributionDraft, setDistributionDraft] = useState({
+    block: "A",
+    floor: "1",
+    box: "1",
+    items: "0",
+    category: "Bolsos",
   });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const colorPickerRef = useRef<HTMLInputElement | null>(null);
@@ -490,17 +559,62 @@ export default function DashboardDemarcaPage() {
     }
   });
   const [now, setNow] = useState<Date>(() => new Date());
+  const warehouseLayoutByCode = useMemo(
+    () => new Map(warehouseLayout.map((entry) => [entry.code, entry])),
+    [warehouseLayout]
+  );
+  const warehouseMapBlocks = useMemo(() => {
+    return WAREHOUSE_MAP_BLOCKS.map((block) => {
+      const rowsByFloor = new Map<number, number>();
+      let itemCount = 0;
+      for (const entry of warehouseLayout) {
+        if (entry.block !== block.key) continue;
+        itemCount += Number(entry.items || 0);
+        rowsByFloor.set(entry.floor, (rowsByFloor.get(entry.floor) || 0) + 1);
+      }
+      return {
+        ...block,
+        itemCount,
+        rows: Array.from(rowsByFloor.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([, count]) => count),
+      };
+    });
+  }, [warehouseLayout]);
   const warehouseMapTotalItems = useMemo(
-    () => WAREHOUSE_MAP_BLOCKS.reduce((sum, block) => sum + Number(block.itemCount || 0), 0),
-    []
+    () => warehouseLayout.reduce((sum, entry) => sum + Number(entry.items || 0), 0),
+    [warehouseLayout]
   );
   const selectedWarehouseMapBlock = useMemo(
-    () => WAREHOUSE_MAP_BLOCKS.find((block) => block.key === selectedMapBlock) || WAREHOUSE_MAP_BLOCKS[5],
-    [selectedMapBlock]
+    () => warehouseMapBlocks.find((block) => block.key === selectedMapBlock) || warehouseMapBlocks[0],
+    [selectedMapBlock, warehouseMapBlocks]
   );
+  const warehouseDistributionSummary = useMemo(() => {
+    const byBlock = new Map<string, { boxes: number; floors: Set<number>; items: number }>();
+    for (const entry of warehouseLayout) {
+      const current = byBlock.get(entry.block) || { boxes: 0, floors: new Set<number>(), items: 0 };
+      current.boxes += 1;
+      current.floors.add(entry.floor);
+      current.items += Number(entry.items || 0);
+      byBlock.set(entry.block, current);
+    }
+    return Array.from(byBlock.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], "es"))
+      .map(([block, stats]) => ({
+        block,
+        boxes: stats.boxes,
+        floors: stats.floors.size,
+        items: stats.items,
+      }));
+  }, [warehouseLayout]);
   const warehouseCategories = ["Bolsos", "Relojes", "Perfumes", "Accesorios", "Vintage"];
 
   function selectWarehouseBox(code: string) {
+    const found = warehouseLayoutByCode.get(code);
+    if (found) {
+      setSelectedMapBox({ code, items: found.items, category: found.category });
+      return;
+    }
     const seed = [...code].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
     const items = (seed % 24) + 1;
     const category = warehouseCategories[seed % warehouseCategories.length];
@@ -534,6 +648,12 @@ export default function DashboardDemarcaPage() {
         ...parsed,
       }));
     } catch {}
+    try {
+      const rawLayout = localStorage.getItem(`warehouse-layout:${selectedStoreId}:ES-SEG`);
+      if (!rawLayout) return;
+      const parsedLayout = JSON.parse(rawLayout) as WarehouseLayoutEntry[];
+      if (Array.isArray(parsedLayout) && parsedLayout.length) setWarehouseLayout(parsedLayout);
+    } catch {}
   }, []);
 
   async function saveWarehouseProfile() {
@@ -555,6 +675,23 @@ export default function DashboardDemarcaPage() {
       setWarehouseSaveOk("Ficha de almacén guardada.");
     } catch (err) {
       setWarehouseSaveError(err instanceof Error ? err.message : "No se pudo guardar almacén.");
+    } finally {
+      setWarehouseSaving(false);
+    }
+  }
+
+  async function saveWarehouseLayout() {
+    if (!warehouseEditable || warehouseSaving) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    try {
+      setWarehouseSaveError("");
+      setWarehouseSaveOk("");
+      setWarehouseSaving(true);
+      localStorage.setItem(`warehouse-layout:${selectedStoreId}:ES-SEG`, JSON.stringify(warehouseLayout));
+      setWarehouseSaveOk("Distribución de almacén guardada.");
+    } catch (err) {
+      setWarehouseSaveError(err instanceof Error ? err.message : "No se pudo guardar la distribución.");
     } finally {
       setWarehouseSaving(false);
     }
@@ -1448,9 +1585,22 @@ export default function DashboardDemarcaPage() {
           {!sidebarCollapsed ? (
             <div className="h-[calc(100%-77px)] overflow-y-auto px-5 pb-6 pt-3">
               <div className="flex items-center justify-between">
-                <div className={`text-[12px] uppercase tracking-wide ${showStoreProfile ? "text-[#7075FF]" : "text-[#6D748A]"}`} style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                  TIENDA
-                </div>
+                <button
+                  type="button"
+                  className={`flex items-center gap-1.5 text-[12px] uppercase tracking-wide ${
+                    showStoreProfile ? "text-[#7075FF]" : "text-[#6D748A]"
+                  }`}
+                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                  onClick={() => setStoreSectionCollapsed((prev) => !prev)}
+                >
+                  <span>TIENDA</span>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className={`h-3 w-3 fill-current transition-transform ${storeSectionCollapsed ? "-rotate-90" : ""}`}
+                  >
+                    <path d="M5 7l5 6 5-6H5z" />
+                  </svg>
+                </button>
                 <button
                   type="button"
                   className="text-[12px] text-[#1C233F] hover:underline"
@@ -1463,29 +1613,43 @@ export default function DashboardDemarcaPage() {
                   ver mas
                 </button>
               </div>
-              <div className="mt-2">
-                {isRemoteLogo ? (
-                  <img
-                    src={currentLogoSrc}
-                    alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
-                    className="h-auto w-[176px] object-contain"
-                  />
-                ) : (
-                  <Image
-                    src={currentLogoSrc}
-                    alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
-                    width={176}
-                    height={46}
-                    className="h-auto w-[176px] object-contain"
-                    priority
-                  />
-                )}
-              </div>
+              {!storeSectionCollapsed ? (
+                <div className="mt-2">
+                  {isRemoteLogo ? (
+                    <img
+                      src={currentLogoSrc}
+                      alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
+                      className="h-auto w-[176px] object-contain"
+                    />
+                  ) : (
+                    <Image
+                      src={currentLogoSrc}
+                      alt={profile.name || storeName.replace(/\.$/, "") || "demarca"}
+                      width={176}
+                      height={46}
+                      className="h-auto w-[176px] object-contain"
+                      priority
+                    />
+                  )}
+                </div>
+              ) : null}
 
-              <div className="mt-5 text-[12px] uppercase tracking-wide text-[#6D748A]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                Menu
-              </div>
+              <button
+                type="button"
+                className="mt-5 flex items-center gap-1.5 text-[12px] uppercase tracking-wide text-[#6D748A]"
+                style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                onClick={() => setMenuSectionCollapsed((prev) => !prev)}
+              >
+                <span>Menu</span>
+                <svg
+                  viewBox="0 0 20 20"
+                  className={`h-3 w-3 fill-current transition-transform ${menuSectionCollapsed ? "-rotate-90" : ""}`}
+                >
+                  <path d="M5 7l5 6 5-6H5z" />
+                </svg>
+              </button>
 
+              {!menuSectionCollapsed ? (
               <div className="mt-3 space-y-1.5">
                 {menu.map((item, index) => {
                   if (menuHiddenByCollapsedAncestor(index)) return null;
@@ -1551,6 +1715,7 @@ export default function DashboardDemarcaPage() {
                   );
                 })}
               </div>
+              ) : null}
             </div>
           ) : (
             <div className="flex h-[calc(100%-77px)] flex-col items-center gap-2 overflow-y-auto px-2 py-4">
@@ -2894,20 +3059,20 @@ export default function DashboardDemarcaPage() {
                 </div>
               </div>
             ) : activeKey === "es-seg" ? (
-              <div className="h-full p-5">
+              <div className="h-full">
                 <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
                   <div className="flex items-start justify-between px-10 pt-7">
                     <div>
                       <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
                         Almacén ES-SEG
                       </h2>
-                      <p className="mt-2 text-[16px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                      <p className="mt-2 text-[14px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
                         Ficha operativa del almacén para configuración y control.
                       </p>
                     </div>
                     <button
                       type="button"
-                      className="text-[16px] text-[#3E455C] hover:text-[#121633]"
+                      className="text-[14px] text-[#3E455C] hover:text-[#121633]"
                       style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
                       onClick={() => setWarehouseEditable((prev) => !prev)}
                     >
@@ -2916,178 +3081,381 @@ export default function DashboardDemarcaPage() {
                   </div>
 
                   <div className="mt-6 border-b border-[#666666] px-2">
-                    <div className="rounded-t-2xl bg-[#BFBFBF] px-4 py-3 text-[14px] text-[#1A213D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
-                      Información del almacén
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { key: "info" as WarehouseTabKey, label: "1. Información del almacén" },
+                        { key: "distribution" as WarehouseTabKey, label: "2. Distribución de almacén" },
+                      ].map((tab) => (
+                        <button
+                          key={`warehouse-tab-${tab.key}`}
+                          type="button"
+                          onClick={() => setWarehouseTab(tab.key)}
+                          className={`rounded-t-2xl px-4 py-3 text-left text-[14px] ${
+                            warehouseTab === tab.key ? "bg-[#BFBFBF] text-[#1A213D]" : "bg-[#E6E8EA] text-[#545C73]"
+                          }`}
+                          style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
                   <div className="relative min-h-0 flex-1 w-full overflow-y-auto rounded-b-2xl bg-[#E6E8EA] px-10 pb-24 pt-6">
-                    <div className="grid grid-cols-3 gap-8 text-[#2B334B]">
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Nombre de almacén</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.name}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, name: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Código interno</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.code}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Color identificativo</div>
-                        <div className="mt-2 flex items-center gap-3">
-                          <span className="h-11 w-11 rounded-full" style={{ backgroundColor: warehouseProfile.color }} />
-                          <input
-                            disabled={!warehouseEditable}
-                            type="color"
-                            value={warehouseProfile.color}
-                            onChange={(e) => setWarehouseProfile((p) => ({ ...p, color: e.target.value.toUpperCase() }))}
-                            className="h-[44px] w-[76px] cursor-pointer rounded-xl border-none bg-white px-2 disabled:cursor-not-allowed"
-                          />
-                        </div>
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Descripción</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.description}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, description: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-                      </div>
-
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Tipo de almacén</div>
-                        <select
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.type}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, type: e.target.value as WarehouseProfile["type"] }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        >
-                          <option value="OWN">Propio</option>
-                          <option value="THIRD_PARTY_3PL">3PL</option>
-                          <option value="RETURNS">Devoluciones</option>
-                          <option value="TEMPORARY">Temporal</option>
-                        </select>
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Estado</div>
-                        <select
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.status}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, status: e.target.value as WarehouseProfile["status"] }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        >
-                          <option value="ACTIVE">Activo</option>
-                          <option value="INACTIVE">Inactivo</option>
-                        </select>
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País</div>
-                        <select
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.countryCode}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, countryCode: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        >
-                          {facturacionCountryOptions.map((item) => (
-                            <option key={`wh-country-${item.id}`} value={item.id}>
-                              {item.label}
-                            </option>
-                          ))}
-                        </select>
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ciudad</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.city}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, city: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-                      </div>
-
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Dirección</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.address}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, address: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Referencia interna</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.reference}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, reference: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-
-                        <div className="mt-6 grid grid-cols-2 gap-3">
+                    {warehouseTab === "info" ? (
+                      <>
+                        <div className="grid grid-cols-3 gap-8 text-[#2B334B]">
                           <div>
-                            <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Apertura</div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Nombre de almacén</div>
                             <input
                               disabled={!warehouseEditable}
-                              type="time"
-                              value={warehouseProfile.openingHour}
-                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, openingHour: e.target.value }))}
-                              className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                              value={warehouseProfile.name}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, name: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Código interno</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.code}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Color identificativo</div>
+                            <div className="mt-2 flex items-center gap-3">
+                              <span className="h-11 w-11 rounded-full" style={{ backgroundColor: warehouseProfile.color }} />
+                              <input
+                                disabled={!warehouseEditable}
+                                type="color"
+                                value={warehouseProfile.color}
+                                onChange={(e) => setWarehouseProfile((p) => ({ ...p, color: e.target.value.toUpperCase() }))}
+                                className="h-[44px] w-[76px] cursor-pointer rounded-xl border-none bg-white px-2 disabled:cursor-not-allowed"
+                              />
+                            </div>
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Descripción</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.description}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, description: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Tipo de almacén</div>
+                            <select
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.type}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, type: e.target.value as WarehouseProfile["type"] }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            >
+                              <option value="OWN">Propio</option>
+                              <option value="THIRD_PARTY_3PL">3PL</option>
+                              <option value="RETURNS">Devoluciones</option>
+                              <option value="TEMPORARY">Temporal</option>
+                            </select>
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Estado</div>
+                            <select
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.status}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, status: e.target.value as WarehouseProfile["status"] }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            >
+                              <option value="ACTIVE">Activo</option>
+                              <option value="INACTIVE">Inactivo</option>
+                            </select>
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País</div>
+                            <select
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.countryCode}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, countryCode: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            >
+                              {facturacionCountryOptions.map((item) => (
+                                <option key={`wh-country-${item.id}`} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ciudad</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.city}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, city: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Dirección</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.address}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, address: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Referencia interna</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.reference}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, reference: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+
+                            <div className="mt-6 grid grid-cols-2 gap-3">
+                              <div>
+                                <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Apertura</div>
+                                <input
+                                  disabled={!warehouseEditable}
+                                  type="time"
+                                  value={warehouseProfile.openingHour}
+                                  onChange={(e) => setWarehouseProfile((p) => ({ ...p, openingHour: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                />
+                              </div>
+                              <div>
+                                <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Cierre</div>
+                                <input
+                                  disabled={!warehouseEditable}
+                                  type="time"
+                                  value={warehouseProfile.closingHour}
+                                  onChange={(e) => setWarehouseProfile((p) => ({ ...p, closingHour: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Capacidad máxima (unidades)</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.capacityUnits}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, capacityUnits: e.target.value.replace(/[^\d]/g, "") }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-8 grid grid-cols-3 gap-8 text-[#2B334B]">
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Responsable</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.managerName}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, managerName: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
                             />
                           </div>
                           <div>
-                            <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Cierre</div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Teléfono</div>
                             <input
                               disabled={!warehouseEditable}
-                              type="time"
-                              value={warehouseProfile.closingHour}
-                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, closingHour: e.target.value }))}
-                              className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                              value={warehouseProfile.phone}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, phone: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Email</div>
+                            <input
+                              disabled={!warehouseEditable}
+                              value={warehouseProfile.email}
+                              onChange={(e) => setWarehouseProfile((p) => ({ ...p, email: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
                             />
                           </div>
                         </div>
+                      </>
+                    ) : (
+                      <div className="space-y-6 text-[#2B334B]">
+                        <div className="grid grid-cols-[360px_minmax(0,1fr)] gap-6">
+                          <div className="rounded-2xl bg-white p-4">
+                            <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                              Agregar ubicación
+                            </div>
+                            <div className="mt-4 grid gap-3">
+                              <div>
+                                <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Bloque</div>
+                                <input
+                                  disabled={!warehouseEditable}
+                                  value={distributionDraft.block}
+                                  onChange={(e) => setDistributionDraft((prev) => ({ ...prev, block: e.target.value.toUpperCase().slice(0, 1) || "A" }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Piso</div>
+                                  <input
+                                    disabled={!warehouseEditable}
+                                    value={distributionDraft.floor}
+                                    onChange={(e) => setDistributionDraft((prev) => ({ ...prev, floor: e.target.value.replace(/[^\d]/g, "") || "1" }))}
+                                    className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                  />
+                                </div>
+                                <div>
+                                  <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Caja</div>
+                                  <input
+                                    disabled={!warehouseEditable}
+                                    value={distributionDraft.box}
+                                    onChange={(e) => setDistributionDraft((prev) => ({ ...prev, box: e.target.value.replace(/[^\d]/g, "") || "1" }))}
+                                    className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Categoría</div>
+                                <select
+                                  disabled={!warehouseEditable}
+                                  value={distributionDraft.category}
+                                  onChange={(e) => setDistributionDraft((prev) => ({ ...prev, category: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                >
+                                  {warehouseCategories.map((category) => (
+                                    <option key={`draft-cat-${category}`} value={category}>
+                                      {category}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ítems</div>
+                                <input
+                                  disabled={!warehouseEditable}
+                                  value={distributionDraft.items}
+                                  onChange={(e) => setDistributionDraft((prev) => ({ ...prev, items: e.target.value.replace(/[^\d]/g, "") || "0" }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none disabled:bg-[#F3F4F6]"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={!warehouseEditable}
+                                className="mt-2 h-[50px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white disabled:opacity-60"
+                                style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
+                                onClick={() => {
+                                  const block = distributionDraft.block.trim().toUpperCase();
+                                  const floor = Math.max(1, Number(distributionDraft.floor || "1"));
+                                  const box = Math.max(1, Number(distributionDraft.box || "1"));
+                                  const items = Math.max(0, Number(distributionDraft.items || "0"));
+                                  if (!block) return;
+                                  const code = buildWarehouseCode(block, floor, box);
+                                  const nextEntry: WarehouseLayoutEntry = {
+                                    code,
+                                    block,
+                                    floor,
+                                    box,
+                                    items,
+                                    category: distributionDraft.category,
+                                    name: `Caja ${code}`,
+                                  };
+                                  setWarehouseLayout((prev) => {
+                                    const exists = prev.findIndex((entry) => entry.code === code);
+                                    if (exists === -1) return [...prev, nextEntry].sort((a, b) => a.code.localeCompare(b.code, "es"));
+                                    return prev.map((entry, idx) => (idx === exists ? nextEntry : entry));
+                                  });
+                                  setDistributionDraft({
+                                    block,
+                                    floor: String(floor),
+                                    box: String(box),
+                                    category: distributionDraft.category,
+                                    items: String(items),
+                                  });
+                                  setSelectedMapBlock(block);
+                                  setSelectedMapBox({ code, items, category: distributionDraft.category });
+                                  setWarehouseSaveOk(`Ubicación ${code} actualizada.`);
+                                }}
+                              >
+                                Guardar ubicación
+                              </button>
+                            </div>
+                          </div>
 
-                        <div className="mt-6 text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Capacidad máxima (unidades)</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.capacityUnits}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, capacityUnits: e.target.value.replace(/[^\d]/g, "") }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-                      </div>
-                    </div>
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-4 gap-3">
+                              <div className="rounded-2xl bg-white p-4">
+                                <div className="text-[12px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Bloques</div>
+                                <div className="mt-1 text-[26px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  {warehouseDistributionSummary.length}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl bg-white p-4">
+                                <div className="text-[12px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Pisos</div>
+                                <div className="mt-1 text-[26px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  {Array.from(new Set(warehouseLayout.map((entry) => `${entry.block}-${entry.floor}`))).length}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl bg-white p-4">
+                                <div className="text-[12px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Cajas</div>
+                                <div className="mt-1 text-[26px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  {warehouseLayout.length}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl bg-white p-4">
+                                <div className="text-[12px] text-[#6A7186]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ítems</div>
+                                <div className="mt-1 text-[26px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  {warehouseMapTotalItems}
+                                </div>
+                              </div>
+                            </div>
 
-                    <div className="mt-8 grid grid-cols-3 gap-8 text-[#2B334B]">
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Responsable</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.managerName}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, managerName: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
+                            <div className="rounded-2xl bg-white p-4">
+                              <div className="mb-3 text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                Distribución actual
+                              </div>
+                              <div className="max-h-[420px] overflow-y-auto">
+                                <div className="grid grid-cols-[110px_90px_90px_90px_1fr_48px] gap-y-2 text-[13px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  <div className="font-semibold text-[#6A7186]">Código</div>
+                                  <div className="font-semibold text-[#6A7186]">Bloque</div>
+                                  <div className="font-semibold text-[#6A7186]">Piso</div>
+                                  <div className="font-semibold text-[#6A7186]">Ítems</div>
+                                  <div className="font-semibold text-[#6A7186]">Categoría</div>
+                                  <div />
+                                  {warehouseLayout.map((entry) => (
+                                    <Fragment key={`layout-entry-${entry.code}`}>
+                                      <button
+                                        type="button"
+                                        className="text-left text-[#3147D4] hover:underline"
+                                        onClick={() => {
+                                          setDistributionDraft({
+                                            block: entry.block,
+                                            floor: String(entry.floor),
+                                            box: String(entry.box),
+                                            category: entry.category,
+                                            items: String(entry.items),
+                                          });
+                                          setSelectedMapBlock(entry.block);
+                                          setSelectedMapBox({ code: entry.code, items: entry.items, category: entry.category });
+                                          setWarehouseSaveOk(`Ubicación ${entry.code} cargada para edición.`);
+                                        }}
+                                      >
+                                        {entry.code}
+                                      </button>
+                                      <div>{entry.block}</div>
+                                      <div>{String(entry.floor).padStart(2, "0")}</div>
+                                      <div>{entry.items}</div>
+                                      <div>{entry.category}</div>
+                                      <button
+                                        type="button"
+                                        disabled={!warehouseEditable}
+                                        className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#E3E5EA] text-[14px] text-[#5D6477] disabled:opacity-40"
+                                        onClick={() => setWarehouseLayout((prev) => prev.filter((item) => item.code !== entry.code))}
+                                      >
+                                        ×
+                                      </button>
+                                    </Fragment>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Teléfono</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.phone}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, phone: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-                      </div>
-                      <div>
-                        <div className="text-[16px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Email</div>
-                        <input
-                          disabled={!warehouseEditable}
-                          value={warehouseProfile.email}
-                          onChange={(e) => setWarehouseProfile((p) => ({ ...p, email: e.target.value }))}
-                          className="mt-2 h-[52px] w-full rounded-full border-none bg-white px-5 text-[16px] text-[#8B90A0] outline-none disabled:bg-[#F3F4F6]"
-                        />
-                      </div>
-                    </div>
+                    )}
 
                     <div className="mt-8 flex items-center justify-end">
                       {warehouseSaveError ? (
@@ -3105,7 +3473,7 @@ export default function DashboardDemarcaPage() {
                         disabled={!warehouseEditable || warehouseSaving}
                         className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white disabled:opacity-60"
                         style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
-                        onClick={saveWarehouseProfile}
+                        onClick={warehouseTab === "info" ? saveWarehouseProfile : saveWarehouseLayout}
                       >
                         {warehouseSaving ? "Guardando..." : "Confirmar"}
                       </button>

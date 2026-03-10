@@ -5927,6 +5927,29 @@ app.post("/scan/lookup", requireAuth, async (req, res) => {
   }
 });
 
+function normalizeSkuPart(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toUpperCase();
+}
+
+async function generateDefaultSku(storeId, brand, model) {
+  const brandPart = normalizeSkuPart(brand).slice(0, 6) || "ITEM";
+  const modelPart = normalizeSkuPart(model).slice(0, 12) || "GEN";
+  const baseSku = `${brandPart}-${modelPart}`;
+
+  let candidate = baseSku;
+  let counter = 2;
+  while (await prisma.product.findFirst({ where: { storeId, sku: candidate }, select: { id: true } })) {
+    candidate = `${baseSku}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
 app.post("/products", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
@@ -5956,6 +5979,7 @@ app.post("/products", requireAuth, async (req, res) => {
 
     const finalEan = ean ? String(ean).trim() : await generateInternalEan(storeId);
     const finalName = name ? String(name).trim() : `${brand} ${model}`;
+    const finalSku = sku ? String(sku).trim() : await generateDefaultSku(storeId, brand, model);
     const isInternalEan = !ean;
 
     const canWrite = await canManageCatalog(userId, storeId, membership.roleKey);
@@ -5965,7 +5989,7 @@ app.post("/products", requireAuth, async (req, res) => {
       data: {
         storeId,
         ean: finalEan,
-        sku: sku || null,
+        sku: finalSku,
         type: type || "other",
         brand,
         model,

@@ -249,31 +249,34 @@ export default function TasksPage() {
     await loadAll(storeId, statusFilter);
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
+  if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
+  if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-7xl mx-auto space-y-4">
+    <div className="min-h-screen bg-[#E8EAEC] p-6">
+      <div className="mx-auto max-w-7xl space-y-4">
         <Topbar title="Tareas / Notificaciones" storeName={storeName} />
-        {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
-        {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
+        {error ? <div className="rounded-2xl bg-red-100 px-4 py-3 text-red-700 shadow-[0_10px_30px_rgba(0,0,0,0.05)]">{error}</div> : null}
+        {info ? <div className="rounded-2xl bg-emerald-100 px-4 py-3 text-emerald-700 shadow-[0_10px_30px_rgba(0,0,0,0.05)]">{info}</div> : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="font-semibold">Notificaciones ({unreadNotifications} sin leer)</h2>
+        <div className="rounded-[28px] bg-white p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-[28px] font-semibold text-[#1B2140]">Notificaciones</h2>
+              <p className="mt-1 text-sm text-[#6D748A]">{unreadNotifications} sin leer</p>
+            </div>
             <div className="flex items-center gap-2">
-              <button className="rounded border px-3 py-1 text-xs" onClick={() => storeId && loadAll(storeId, statusFilter)}>
+              <button className="rounded-full border border-[#D8DCE5] bg-white px-4 py-2 text-xs text-[#1B2140] hover:bg-[#F4F6FA]" onClick={() => storeId && loadAll(storeId, statusFilter)}>
                 Refrescar
               </button>
-              <button className="rounded border px-3 py-1 text-xs" onClick={markAllNotificationsRead}>
-                Marcar todas leidas
+              <button className="rounded-full bg-[#0B1230] px-4 py-2 text-xs text-white hover:bg-[#16204D]" onClick={markAllNotificationsRead}>
+                Marcar todas leídas
               </button>
             </div>
           </div>
-          <div className="grid md:grid-cols-4 gap-2 mb-3">
+          <div className="mb-4 grid gap-3 md:grid-cols-4">
             <select
-              className="border rounded px-3 py-2 text-sm"
+              className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 text-sm text-[#1B2140] outline-none"
               value={notificationTypeFilter}
               onChange={(e) => setNotificationTypeFilter(e.target.value as (typeof NOTIFICATION_TYPES)[number])}
             >
@@ -284,7 +287,7 @@ export default function TasksPage() {
               ))}
             </select>
             <select
-              className="border rounded px-3 py-2 text-sm"
+              className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 text-sm text-[#1B2140] outline-none"
               value={notificationSeverityFilter}
               onChange={(e) => setNotificationSeverityFilter(e.target.value as (typeof NOTIFICATION_SEVERITIES)[number])}
             >
@@ -295,46 +298,46 @@ export default function TasksPage() {
               ))}
             </select>
             <input
-              className="border rounded px-3 py-2 text-sm"
-              placeholder="Buscar notificacion..."
+              className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 text-sm text-[#1B2140] outline-none placeholder:text-[#8B90A0]"
+              placeholder="Buscar notificación..."
               value={notificationQuery}
               onChange={(e) => setNotificationQuery(e.target.value)}
             />
-            <label className="inline-flex items-center gap-2 text-sm px-2">
+            <label className="inline-flex items-center gap-2 rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 text-sm text-[#1B2140]">
               <input
                 type="checkbox"
                 checked={notificationOnlyUnread}
                 onChange={(e) => setNotificationOnlyUnread(e.target.checked)}
               />
-              Solo no leidas
+              Solo no leídas
             </label>
           </div>
           {notifications.length === 0 ? (
-            <div className="text-sm text-gray-500">Sin notificaciones por ahora</div>
+            <div className="rounded-2xl border border-dashed border-[#D8DCE5] bg-[#F8F9FC] px-4 py-6 text-sm text-[#6D748A]">Sin notificaciones por ahora</div>
           ) : (
-            <div className="space-y-2 mb-3">
+            <div className="mb-3 space-y-3">
               {notifications.slice(0, 8).map((n) => (
-                <div key={n.id} className={`rounded border p-2 ${n.isRead ? "bg-gray-50" : "bg-yellow-50"}`}>
+                <div key={n.id} className={`rounded-2xl border px-4 py-3 shadow-sm ${n.isRead ? "border-[#E1E5EC] bg-[#F8F9FC]" : "border-[#F1E1A6] bg-[#FFF7DD]"}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-medium">{n.title}</div>
+                    <div className="text-sm font-semibold text-[#1B2140]">{n.title}</div>
                     <div className="flex items-center gap-2">
                       {getEntityHref(n.linkedEntityType, n.linkedEntityId) ? (
                         <button
-                          className="rounded border px-2 py-1 text-xs"
+                          className="rounded-full border border-[#D8DCE5] bg-white px-3 py-1.5 text-xs text-[#1B2140] hover:bg-[#F4F6FA]"
                           onClick={() => router.push(getEntityHref(n.linkedEntityType, n.linkedEntityId) || "/store/tasks")}
                         >
                           Abrir
                         </button>
                       ) : null}
                       <button
-                        className="rounded border px-2 py-1 text-xs"
+                        className="rounded-full bg-[#0B1230] px-3 py-1.5 text-xs text-white hover:bg-[#16204D]"
                         onClick={() => markNotification(n.id, !n.isRead)}
                       >
-                        {n.isRead ? "No leida" : "Leida"}
+                        {n.isRead ? "No leída" : "Leída"}
                       </button>
                     </div>
                   </div>
-                  <div className="text-xs text-gray-600 mt-1">
+                  <div className="mt-1 text-xs text-[#6D748A]">
                     [{n.type}] {n.body || "-"} | {new Date(n.createdAt).toLocaleString()}
                   </div>
                 </div>
@@ -343,37 +346,52 @@ export default function TasksPage() {
           )}
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h2 className="font-semibold mb-2">Nueva tarea</h2>
-          <form className="grid md:grid-cols-6 gap-2" onSubmit={createTask}>
-            <input className="border rounded px-3 py-2 md:col-span-2" placeholder="Título" value={title} onChange={(e) => setTitle(e.target.value)} required />
-            <input className="border rounded px-3 py-2 md:col-span-2" placeholder="Descripción" value={description} onChange={(e) => setDescription(e.target.value)} />
-            <select className="border rounded px-3 py-2" value={priority} onChange={(e) => setPriority(e.target.value as (typeof PRIORITIES)[number])}>
+        <div className="rounded-[28px] bg-white p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4">
+            <h2 className="text-[28px] font-semibold text-[#1B2140]">Nueva tarea</h2>
+            <p className="mt-1 text-sm text-[#6D748A]">Crea y asigna tareas del equipo.</p>
+          </div>
+          <form className="grid gap-3 md:grid-cols-6" onSubmit={createTask}>
+            <input className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 md:col-span-2 outline-none placeholder:text-[#8B90A0]" placeholder="Título" value={title} onChange={(e) => setTitle(e.target.value)} required />
+            <input className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 md:col-span-2 outline-none placeholder:text-[#8B90A0]" placeholder="Descripción" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <select className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 outline-none" value={priority} onChange={(e) => setPriority(e.target.value as (typeof PRIORITIES)[number])}>
               {PRIORITIES.map((p) => (
                 <option key={p} value={p}>{p}</option>
               ))}
             </select>
-            <input className="border rounded px-3 py-2" type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
-            <select className="border rounded px-3 py-2 md:col-span-2" value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
+            <input className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 outline-none" type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+            <select className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 md:col-span-2 outline-none" value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
               <option value="">Asignar a</option>
               {members.map((m) => (
                 <option key={m.userId} value={m.userId}>{m.fullName} ({m.roleKey})</option>
               ))}
             </select>
-            <button className="rounded bg-black text-white px-3 py-2" type="submit">Crear</button>
+            <button className="rounded-full bg-[#0B1230] px-4 py-3 text-white hover:bg-[#16204D]" type="submit">Crear</button>
           </form>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="font-semibold">Lista de tareas</h2>
-            <div className="text-xs text-gray-600">
+        <div className="grid gap-4 md:grid-cols-4">
+          {STATUSES.map((status) => (
+            <div key={status} className="rounded-[24px] bg-white p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-sm capitalize text-[#6D748A]">{status.replace("_", " ")}</div>
+              <div className="mt-2 text-[34px] font-semibold leading-none text-[#1B2140]">{openCounts[status]}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded-[28px] bg-white p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-[28px] font-semibold text-[#1B2140]">Lista de tareas</h2>
+              <p className="mt-1 text-sm text-[#6D748A]">Seguimiento operativo del equipo.</p>
+            </div>
+            <div className="text-sm text-[#6D748A]">
               open {openCounts.open} | in_progress {openCounts.in_progress} | blocked {openCounts.blocked} | done {openCounts.done}
             </div>
           </div>
 
           <div className="mb-3">
-            <select className="border rounded px-3 py-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <select className="rounded-full border border-[#E1E5EC] bg-[#F8F9FC] px-4 py-3 text-sm text-[#1B2140] outline-none" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">Todos</option>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -381,40 +399,40 @@ export default function TasksPage() {
             </select>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-2xl border border-[#E1E5EC]">
             <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+              <thead className="border-b bg-[#F8F9FC]">
                 <tr>
-                  <th className="text-left px-3 py-2">Título</th>
-                  <th className="text-left px-3 py-2">Estado</th>
-                  <th className="text-left px-3 py-2">Prioridad</th>
-                  <th className="text-left px-3 py-2">Asignado</th>
-                  <th className="text-left px-3 py-2">Due</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Título</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Estado</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Prioridad</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Asignado</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Due</th>
+                  <th className="px-4 py-3 text-left text-[#1B2140]">Acciones</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="bg-white">
                 {tasks.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-4 text-gray-500">Sin tareas</td>
+                    <td colSpan={6} className="px-4 py-6 text-[#6D748A]">Sin tareas</td>
                   </tr>
                 ) : (
                   tasks.map((t) => (
-                    <tr key={t.id} className="border-b align-top">
-                      <td className="px-3 py-2">
-                        <div className="font-medium">{t.title}</div>
-                        <div className="text-xs text-gray-500">{t.description || "-"}</div>
+                    <tr key={t.id} className="border-b border-[#EEF1F5] align-top last:border-b-0">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-[#1B2140]">{t.title}</div>
+                        <div className="text-xs text-[#6D748A]">{t.description || "-"}</div>
                       </td>
-                      <td className="px-3 py-2">{t.status}</td>
-                      <td className="px-3 py-2">{t.priority}</td>
-                      <td className="px-3 py-2">{t.assignedTo?.fullName || "-"}</td>
-                      <td className="px-3 py-2">{t.dueAt ? new Date(t.dueAt).toISOString().slice(0, 10) : "-"}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex gap-2 flex-wrap">
+                      <td className="px-4 py-3 capitalize text-[#1B2140]">{t.status.replace("_", " ")}</td>
+                      <td className="px-4 py-3 capitalize text-[#1B2140]">{t.priority}</td>
+                      <td className="px-4 py-3 text-[#1B2140]">{t.assignedTo?.fullName || "-"}</td>
+                      <td className="px-4 py-3 text-[#1B2140]">{t.dueAt ? new Date(t.dueAt).toISOString().slice(0, 10) : "-"}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
                           {STATUSES.map((s) => (
                             <button
                               key={s}
-                              className="rounded border px-2 py-1 disabled:opacity-50"
+                              className="rounded-full border border-[#D8DCE5] bg-white px-3 py-1.5 text-xs text-[#1B2140] disabled:opacity-50 hover:bg-[#F4F6FA]"
                               disabled={busyTaskId === t.id || t.status === s}
                               onClick={() => updateTask(t.id, { status: s })}
                             >
