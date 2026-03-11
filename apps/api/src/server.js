@@ -24,6 +24,150 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
+app.get("/", (_req, res) => {
+  res.type("html").send(`<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DEMARCA Integration</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #eef0f3;
+        color: #1f2743;
+      }
+      .wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+      }
+      .card {
+        width: min(720px, 100%);
+        background: #ffffff;
+        border-radius: 24px;
+        box-shadow: 0 18px 42px rgba(12, 18, 48, 0.12);
+        padding: 32px;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #6b7288;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #22c55e;
+      }
+      h1 {
+        margin: 18px 0 10px;
+        font-size: 38px;
+        line-height: 1;
+      }
+      p {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.6;
+        color: #55607d;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+        margin-top: 28px;
+      }
+      .tile {
+        border-radius: 18px;
+        background: #f3f5f8;
+        padding: 18px;
+      }
+      .tile strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+      .tile code {
+        font-size: 14px;
+        color: #334155;
+        word-break: break-all;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 48px;
+        padding: 0 20px;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .button-primary {
+        background: #0b1230;
+        color: #fff;
+      }
+      .button-secondary {
+        background: #eef2ff;
+        color: #4338ca;
+      }
+      .note {
+        margin-top: 24px;
+        border-top: 1px solid #e5e7eb;
+        padding-top: 20px;
+        font-size: 14px;
+        color: #6b7288;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="eyebrow"><span class="dot"></span> DEMARCA Integration</div>
+        <h1>Integracion Shopify activa</h1>
+        <p>La URL publica del backend ya esta respondiendo. Usa DEMARCA para guardar la conexion, lanzar OAuth y sincronizar pedidos.</p>
+        <div class="grid">
+          <div class="tile">
+            <strong>Health</strong>
+            <code>/health</code>
+          </div>
+          <div class="tile">
+            <strong>OAuth callback</strong>
+            <code>/integrations/shopify/oauth/callback</code>
+          </div>
+          <div class="tile">
+            <strong>Webhook pedidos</strong>
+            <code>/webhooks/shopify/DEMARCA</code>
+          </div>
+        </div>
+        <div class="actions">
+          <a class="button button-primary" href="/health">Ver health</a>
+          <a class="button button-secondary" href="http://localhost:3004/orders">Abrir Shopify DEMARCA</a>
+        </div>
+        <div class="note">
+          Si ves esta pantalla dentro de Shopify, la instalacion esta viva. La gestion real de la conexion sigue en DEMARCA.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`);
+});
+
 function normalizeRoleKey(roleKey) {
   return String(roleKey || "").trim().toLowerCase();
 }
@@ -455,6 +599,55 @@ function normalizeProvider(value) {
   return String(value || "")
     .trim()
     .toLowerCase();
+}
+
+function normalizeShopDomain(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+}
+
+function sanitizeIntegrationConfig(provider, configJson) {
+  if (!configJson || typeof configJson !== "object" || Array.isArray(configJson)) return configJson || null;
+  const out = { ...configJson };
+  if (provider === "shopify") {
+    delete out.accessToken;
+    delete out.oauthState;
+  }
+  return out;
+}
+
+function buildShopifyOauthState() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function buildShopifyOauthAuthorizeUrl({ shopDomain, clientId, redirectUri, state, scopes }) {
+  const url = new URL(`https://${normalizeShopDomain(shopDomain)}/admin/oauth/authorize`);
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("scope", Array.isArray(scopes) ? scopes.join(",") : String(scopes || ""));
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+function verifyShopifyOauthHmac(query, clientSecret) {
+  const hmac = String(query.hmac || "").trim();
+  if (!hmac || !clientSecret) return false;
+  const entries = Object.entries(query)
+    .filter(([key]) => key !== "hmac" && key !== "signature")
+    .map(([key, value]) => [key, Array.isArray(value) ? value.join(",") : String(value ?? "")]);
+  const message = entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&");
+  const digest = crypto.createHmac("sha256", clientSecret).update(message).digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(hmac, "utf8"));
+  } catch (_e) {
+    return false;
+  }
 }
 
 function computePayloadHash(payload) {
@@ -8645,7 +8838,8 @@ app.get("/integrations/config", requireAuth, async (req, res) => {
         isActive: c.isActive,
         hasWebhookSecret: Boolean(c.webhookSecret),
         hasApiKey: Boolean(c.apiKey),
-        configJson: c.configJson || null,
+        hasOauthAccessToken: Boolean(c.configJson && typeof c.configJson === "object" && c.configJson.accessToken),
+        configJson: sanitizeIntegrationConfig(c.provider, c.configJson),
         lastWebhookAt: c.lastWebhookAt ? c.lastWebhookAt.toISOString() : null,
         lastWebhookStatus: c.lastWebhookStatus || null,
         updatedAt: c.updatedAt.toISOString(),
@@ -8699,11 +8893,27 @@ app.post("/integrations/config/upsert", requireAuth, async (req, res) => {
     const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
     if (!canSettings) return res.status(403).json({ error: "No permission to update integrations config" });
 
+    const existing = await prisma.storeIntegration.findUnique({
+      where: { storeId_provider: { storeId, provider } },
+      select: { configJson: true },
+    });
+    const existingConfigJson =
+      existing?.configJson && typeof existing.configJson === "object" && !Array.isArray(existing.configJson)
+        ? existing.configJson
+        : null;
+    const nextConfigJson =
+      configJson !== null
+        ? {
+            ...(existingConfigJson || {}),
+            ...configJson,
+          }
+        : undefined;
+
     const data = {
       isActive,
       ...(webhookSecret !== undefined ? { webhookSecret: webhookSecret || null } : {}),
       ...(apiKey !== undefined ? { apiKey: apiKey || null } : {}),
-      ...(configJson !== null ? { configJson } : {}),
+      ...(nextConfigJson !== undefined ? { configJson: nextConfigJson } : {}),
     };
     const config = await prisma.storeIntegration.upsert({
       where: { storeId_provider: { storeId, provider } },
@@ -8728,13 +8938,161 @@ app.post("/integrations/config/upsert", requireAuth, async (req, res) => {
         isActive: config.isActive,
         hasWebhookSecret: Boolean(config.webhookSecret),
         hasApiKey: Boolean(config.apiKey),
-        configJson: config.configJson || null,
+        hasOauthAccessToken: Boolean(config.configJson && typeof config.configJson === "object" && config.configJson.accessToken),
+        configJson: sanitizeIntegrationConfig(config.provider, config.configJson),
         updatedAt: config.updatedAt.toISOString(),
       },
     });
   } catch (err) {
     console.error("POST /integrations/config/upsert error:", err);
     return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/integrations/shopify/oauth/start", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const storeId = String(req.body.storeId || "").trim();
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSettings = await canManageSettings(userId, storeId, membership.roleKey);
+    if (!canSettings) return res.status(403).json({ error: "No permission to connect Shopify" });
+
+    const integration = await prisma.storeIntegration.findUnique({
+      where: { storeId_provider: { storeId, provider: "shopify" } },
+    });
+    if (!integration || !integration.isActive) return res.status(404).json({ error: "Shopify no está configurado" });
+
+    const cfg =
+      integration.configJson && typeof integration.configJson === "object" && !Array.isArray(integration.configJson)
+        ? integration.configJson
+        : {};
+    const shopDomain = normalizeShopDomain(cfg.shopDomain || "");
+    const clientId = String(cfg.clientId || "").trim();
+    const clientSecret = String(integration.apiKey || "").trim();
+    const publicBaseUrl = String(cfg.publicBaseUrl || "").trim().replace(/\/$/, "");
+    const redirectUri = `${publicBaseUrl}/integrations/shopify/oauth/callback`;
+    const scopes = Array.isArray(cfg.oauthScopes) && cfg.oauthScopes.length ? cfg.oauthScopes : ["read_orders", "read_customers", "read_products"];
+    if (!shopDomain || !clientId || !clientSecret || !publicBaseUrl) {
+      return res.status(400).json({ error: "Faltan datos Shopify: dominio, Client ID, Client Secret o URL pública" });
+    }
+
+    const state = buildShopifyOauthState();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    await prisma.storeIntegration.update({
+      where: { id: integration.id },
+      data: {
+        configJson: {
+          ...cfg,
+          oauthScopes: scopes,
+          oauthState: { value: state, expiresAt },
+        },
+      },
+    });
+
+    return res.json({
+      ok: true,
+      authorizeUrl: buildShopifyOauthAuthorizeUrl({ shopDomain, clientId, redirectUri, state, scopes }),
+      redirectUri,
+    });
+  } catch (err) {
+    console.error("POST /integrations/shopify/oauth/start error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/integrations/shopify/oauth/callback", async (req, res) => {
+  try {
+    const code = String(req.query.code || "").trim();
+    const shop = normalizeShopDomain(req.query.shop || "");
+    const state = String(req.query.state || "").trim();
+    if (!code || !shop || !state) {
+      return res.status(400).send("OAuth callback incompleto");
+    }
+
+    const integrations = await prisma.storeIntegration.findMany({
+      where: { provider: "shopify", isActive: true },
+    });
+    const integration = integrations.find((row) => {
+      const cfg = row.configJson && typeof row.configJson === "object" && !Array.isArray(row.configJson) ? row.configJson : null;
+      return normalizeShopDomain(cfg?.shopDomain || "") === shop;
+    });
+    if (!integration) {
+      return res.status(404).send("No se encontró la integración Shopify para esta tienda");
+    }
+
+    const cfg =
+      integration.configJson && typeof integration.configJson === "object" && !Array.isArray(integration.configJson)
+        ? integration.configJson
+        : {};
+    const oauthState = cfg.oauthState && typeof cfg.oauthState === "object" ? cfg.oauthState : null;
+    const clientId = String(cfg.clientId || "").trim();
+    const clientSecret = String(integration.apiKey || "").trim();
+    const publicBaseUrl = String(cfg.publicBaseUrl || "").trim().replace(/\/$/, "");
+    const returnUrl = String(cfg.appReturnUrl || "http://localhost:3004/orders").trim();
+    const redirectUri = `${publicBaseUrl}/integrations/shopify/oauth/callback`;
+
+    if (!clientId || !clientSecret || !publicBaseUrl) {
+      return res.status(400).send("Configuración Shopify incompleta");
+    }
+    if (!oauthState?.value || oauthState.value !== state) {
+      return res.status(400).send("Estado OAuth inválido");
+    }
+    if (oauthState.expiresAt && Date.now() > new Date(oauthState.expiresAt).getTime()) {
+      return res.status(400).send("Estado OAuth expirado");
+    }
+    if (!verifyShopifyOauthHmac(req.query, clientSecret)) {
+      return res.status(401).send("Firma OAuth inválida");
+    }
+
+    const tokenRes = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+      }),
+    });
+    const tokenData = await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok || !tokenData.access_token) {
+      console.error("Shopify OAuth token error:", tokenData);
+      return res.status(502).send("No se pudo obtener el access token de Shopify");
+    }
+
+    await prisma.storeIntegration.update({
+      where: { id: integration.id },
+      data: {
+        configJson: {
+          ...cfg,
+          shopDomain: shop,
+          accessToken: String(tokenData.access_token),
+          accessScopes: tokenData.scope ? String(tokenData.scope).split(",").map((row) => row.trim()).filter(Boolean) : cfg.oauthScopes || [],
+          oauthConnectedAt: new Date().toISOString(),
+          oauthState: null,
+        },
+        lastWebhookStatus: "oauth_connected",
+      },
+    });
+
+    await createAuditLogSafe({
+      storeId: integration.storeId,
+      userId: null,
+      action: "integration.shopify.oauth.connected",
+      entityType: "integration",
+      entityId: integration.id,
+      message: `Shopify OAuth connected: ${shop}`,
+      payload: { shopDomain: shop },
+    });
+
+    const redirectTarget = new URL(returnUrl);
+    redirectTarget.searchParams.set("shopify", "connected");
+    return res.redirect(302, redirectTarget.toString());
+  } catch (err) {
+    console.error("GET /integrations/shopify/oauth/callback error:", err);
+    return res.status(500).send("Server error");
   }
 });
 

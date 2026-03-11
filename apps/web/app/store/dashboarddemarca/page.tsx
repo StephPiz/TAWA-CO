@@ -25,6 +25,8 @@ type MenuItem = {
   isMain?: boolean;
   isGroup?: boolean;
   action?: "logout";
+  warehouseCode?: string;
+  warehouseView?: WarehouseTabKey;
 };
 
 type ProfileTabKey = "general" | "paises" | "monedas" | "almacenes" | "marketplaces" | "facturacion";
@@ -91,6 +93,13 @@ type ToggleItem = {
   id: string;
   label: string;
   active: boolean;
+  name?: string;
+  type?: WarehouseProfile["type"];
+  status?: WarehouseProfile["status"];
+  countryCode?: string;
+  city?: string;
+  color?: string;
+  description?: string;
 };
 
 const COUNTRY_OPTIONS: Array<{ id: string; label: string; tax: string }> = [
@@ -165,12 +174,29 @@ function sanitizeWarehouseRows(rows: Array<{ id?: string; label?: string; active
     const id = String(row.id || label.toLowerCase().replace(/\s+/g, "-"));
     const current = byLabel.get(label);
     if (current) {
-      byLabel.set(label, { ...current, active: current.active || Boolean(row.active) });
+      byLabel.set(label, {
+        ...current,
+        active: current.active || Boolean(row.active),
+        name: String((row as ToggleItem).name || current.name || ""),
+        type: ((row as ToggleItem).type || current.type) as ToggleItem["type"],
+        status: ((row as ToggleItem).status || current.status) as ToggleItem["status"],
+        countryCode: String((row as ToggleItem).countryCode || current.countryCode || ""),
+        city: String((row as ToggleItem).city || current.city || ""),
+        color: String((row as ToggleItem).color || current.color || ""),
+        description: String((row as ToggleItem).description || current.description || ""),
+      });
     } else {
       byLabel.set(label, {
         id,
         label,
         active: Boolean(row.active),
+        name: String((row as ToggleItem).name || ""),
+        type: ((row as ToggleItem).type || "OWN") as ToggleItem["type"],
+        status: ((row as ToggleItem).status || "ACTIVE") as ToggleItem["status"],
+        countryCode: String((row as ToggleItem).countryCode || ""),
+        city: String((row as ToggleItem).city || ""),
+        color: String((row as ToggleItem).color || ""),
+        description: String((row as ToggleItem).description || ""),
       });
     }
   }
@@ -280,11 +306,20 @@ function toApiLogoPath(value: string | null | undefined) {
 const menu: MenuItem[] = [
   { key: "dashboard", label: "Dashboard", path: "/store/dashboard", isMain: true },
   { key: "inventario", label: "Inventario", path: "/store/inventory", isMain: true },
-  { key: "escaner", label: "Escaner", path: "/store/scanner", indent: 1 },
+  { key: "escaner-operativo", label: "Escáner Operativo", indent: 1, isGroup: true },
+  { key: "scanner-recepcion", label: "Recepción", indent: 2 },
+  { key: "scanner-picking", label: "Picking", indent: 2 },
+  { key: "scanner-packing", label: "Packing", indent: 2 },
+  { key: "scanner-devoluciones", label: "Devoluciones", indent: 2 },
+  { key: "scanner-busqueda", label: "Búsqueda", indent: 2 },
+  { key: "scanner-ajuste", label: "Ajuste", indent: 2 },
+  { key: "scanner-transferencias", label: "Transferencias", indent: 2 },
   { key: "productos", label: "Productos", path: "/store/products", indent: 1 },
   { key: "almacenes", label: "Almacenes", path: "/store/inventory", isMain: true },
   { key: "almacenes-lista", label: "Lista de Almacenes", path: "/store/inventory", indent: 1 },
   { key: "es-seg", label: "ES-SEG", emptyText: "ES-SEG aun esta vacio.", indent: 2 },
+  { key: "es-seg-info", label: "Información del almacén", emptyText: "Información del almacén aun esta vacía.", indent: 3 },
+  { key: "es-seg-distribution", label: "Distribución de almacén", emptyText: "Distribución de almacén aun esta vacía.", indent: 3 },
   { key: "almacenes-mapa", label: "Mapa de Almacén", emptyText: "Mapa de Almacén aun esta vacio.", indent: 3 },
   { key: "almacenes-agregar", label: "Agregar Almacén", path: "/add-store", indent: 1 },
   { key: "almacenes-inventario", label: "Inventario por Almacén", path: "/store/inventory", indent: 1 },
@@ -324,6 +359,67 @@ const WAREHOUSE_MAP_BLOCKS: WarehouseMapBlock[] = [
   { key: "J", label: "BLOQUE J", itemCount: 5, rows: [1], x: 79, y: 64.5, w: 11, h: 9 },
   { key: "K", label: "BLOQUE K", itemCount: 2, rows: [1, 1], x: 63, y: 76, w: 27, h: 11 },
 ];
+
+const SCANNER_FLOW_CONTENT: Record<
+  string,
+  {
+    title: string;
+    intro: string;
+    primaryAction: string;
+    badge: string;
+    summary: string;
+  }
+> = {
+  "scanner-recepcion": {
+    title: "Recepción",
+    intro: "Escaneo de entrada para recepcionar mercancía, crear lotes y actualizar stock sin editar cantidades manualmente.",
+    primaryAction: "Todo OK",
+    badge: "Entrada",
+    summary: "Crea lote, movement IN y stock disponible en ubicación destino.",
+  },
+  "scanner-picking": {
+    title: "Picking",
+    intro: "Validación de producto contra el pedido en preparación. El operario escanea y el sistema confirma si cogió el producto correcto.",
+    primaryAction: "Pick completo",
+    badge: "Validación",
+    summary: "No descuenta stock final. Solo valida el item esperado y el progreso del pedido.",
+  },
+  "scanner-packing": {
+    title: "Packing",
+    intro: "Confirmación final de salida con packaging y descuento FIFO del lote más antiguo.",
+    primaryAction: "Confirmar salida",
+    badge: "Salida",
+    summary: "Descuenta FIFO, crea sale_out y deja el pedido listo para enviar.",
+  },
+  "scanner-devoluciones": {
+    title: "Devoluciones",
+    intro: "Escaneo doble de tracking y producto para decidir restock, reparación o scrap.",
+    primaryAction: "Registrar devolución",
+    badge: "Retorno",
+    summary: "Clasifica la devolución y crea return_in o movimiento no vendible.",
+  },
+  "scanner-busqueda": {
+    title: "Búsqueda rápida",
+    intro: "Modo de consulta. Escanear abre la ficha del producto usando EAN principal o alias.",
+    primaryAction: "Abrir ficha",
+    badge: "Lookup",
+    summary: "Busca en products.ean, ean_aliases y propone crear producto si no existe.",
+  },
+  "scanner-ajuste": {
+    title: "Ajuste",
+    intro: "Corrección controlada de stock con motivo y auditoría. Nunca se edita el número directo.",
+    primaryAction: "Aplicar ajuste",
+    badge: "Corrección",
+    summary: "Genera movement adjustment con cantidad, ubicación y motivo.",
+  },
+  "scanner-transferencias": {
+    title: "Transferencias",
+    intro: "Movimiento de stock entre almacenes con salida en origen y entrada en destino.",
+    primaryAction: "Crear transferencia",
+    badge: "Traslado",
+    summary: "Genera transfer_out y transfer_in entre almacenes y ubicaciones.",
+  },
+};
 
 function buildWarehouseCode(block: string, floor: number, box: number) {
   return `${block}-${String(floor).padStart(2, "0")}-${String(box).padStart(2, "0")}`;
@@ -369,6 +465,34 @@ function buildDefaultWarehouseLayout(): WarehouseLayoutEntry[] {
   pushEntry("K", 2, 1, 1, "Accesorios");
 
   return rows;
+}
+
+function buildDefaultWarehouseProfile(code: string, name?: string): WarehouseProfile {
+  const normalizedCode = normalizeWarehouseLabel(code || "WH-01") || "WH-01";
+  const safeName = String(name || `Warehouse ${normalizedCode}`).trim() || `Warehouse ${normalizedCode}`;
+  const countryCode = normalizedCode.startsWith("IT-") ? "IT" : normalizedCode.startsWith("PT-") ? "PT" : "ES";
+  const city = countryCode === "IT" ? "Milán" : countryCode === "PT" ? "Lisboa" : "Segovia";
+  return {
+    name: normalizedCode === "ES-SEG" ? "Segovia Warehouse" : safeName,
+    code: normalizedCode,
+    type: "OWN",
+    status: "ACTIVE",
+    countryCode,
+    city,
+    address: normalizedCode === "ES-SEG" ? "Polígono Industrial, Nave 8" : "",
+    reference: normalizedCode === "ES-SEG" ? "Zona logística norte" : "",
+    managerName: "",
+    phone: "",
+    email: "",
+    openingHour: "08:00",
+    closingHour: "18:00",
+    capacityUnits: "1200",
+    color: "#6456DF",
+    description:
+      normalizedCode === "ES-SEG"
+        ? "Almacén principal para preparación de pedidos y stock operativo."
+        : "Ficha operativa del almacén para configuración y control.",
+  };
 }
 
 function menuIcon(key: string) {
@@ -455,7 +579,18 @@ export default function DashboardDemarcaPage() {
   const [monedasSaveOk, setMonedasSaveOk] = useState("");
   const [monedasSaving, setMonedasSaving] = useState(false);
   const [warehouseRows, setWarehouseRows] = useState<ToggleItem[]>([
-    { id: "es-seg", label: "ES-SEG", active: true },
+    {
+      id: "es-seg",
+      label: "ES-SEG",
+      active: true,
+      name: "Segovia Warehouse",
+      type: "OWN",
+      status: "ACTIVE",
+      countryCode: "ES",
+      city: "Segovia",
+      color: "#6456DF",
+      description: "Almacén principal para preparación de pedidos y stock operativo.",
+    },
   ]);
   const [newMarketplaceLabel, setNewMarketplaceLabel] = useState("");
   const [selectedMarketplaceOption, setSelectedMarketplaceOption] = useState("");
@@ -495,24 +630,19 @@ export default function DashboardDemarcaPage() {
   const [warehouseSaving, setWarehouseSaving] = useState(false);
   const [warehouseSaveError, setWarehouseSaveError] = useState("");
   const [warehouseSaveOk, setWarehouseSaveOk] = useState("");
-  const [warehouseProfile, setWarehouseProfile] = useState<WarehouseProfile>({
-    name: "Segovia Warehouse",
-    code: "ES-SEG",
-    type: "OWN",
-    status: "ACTIVE",
-    countryCode: "ES",
-    city: "Segovia",
+  const [warehouseProfile, setWarehouseProfile] = useState<WarehouseProfile>(() => ({
+    ...buildDefaultWarehouseProfile("ES-SEG", "Segovia Warehouse"),
     address: "Polígono Industrial, Nave 8",
     reference: "Zona logística norte",
     managerName: "Responsable almacén",
     phone: "+34 900 000 000",
     email: "warehouse.seg@demarca.local",
-    openingHour: "08:00",
-    closingHour: "18:00",
-    capacityUnits: "1200",
-    color: "#6456DF",
-    description: "Almacén principal para preparación de pedidos y stock operativo.",
-  });
+  }));
+  const [newWarehouseProfile, setNewWarehouseProfile] = useState<WarehouseProfile>(() =>
+    buildDefaultWarehouseProfile("ES-NEW", "Nuevo almacén")
+  );
+  const [warehouseCreateError, setWarehouseCreateError] = useState("");
+  const [warehouseCreateOk, setWarehouseCreateOk] = useState("");
   const [warehouseLayout, setWarehouseLayout] = useState<WarehouseLayoutEntry[]>(() => buildDefaultWarehouseLayout());
   const [distributionDraft, setDistributionDraft] = useState({
     block: "A",
@@ -520,6 +650,21 @@ export default function DashboardDemarcaPage() {
     box: "1",
     items: "0",
     category: "Bolsos",
+  });
+  const [scannerWarehouseCode, setScannerWarehouseCode] = useState("ES-SEG");
+  const [scannerLocationCode, setScannerLocationCode] = useState("A-01-01");
+  const [scannerInput, setScannerInput] = useState("");
+  const [scannerTracking, setScannerTracking] = useState("");
+  const [scannerOrderRef, setScannerOrderRef] = useState("SO-1168");
+  const [scannerIncidentNote, setScannerIncidentNote] = useState("");
+  const [scannerDecision, setScannerDecision] = useState("restock");
+  const [scannerAdjustmentQty, setScannerAdjustmentQty] = useState("1");
+  const [scannerAdjustmentReason, setScannerAdjustmentReason] = useState("Ajuste manual");
+  const [scannerPackaging, setScannerPackaging] = useState({
+    box: "Caja M",
+    bubble: true,
+    paper: true,
+    tape: true,
   });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const colorPickerRef = useRef<HTMLInputElement | null>(null);
@@ -608,6 +753,17 @@ export default function DashboardDemarcaPage() {
       }));
   }, [warehouseLayout]);
   const warehouseCategories = ["Bolsos", "Relojes", "Perfumes", "Accesorios", "Vintage"];
+  const scannerLocationOptions = useMemo(
+    () => warehouseLayout
+      .map((entry) => entry.code)
+      .sort((a, b) => a.localeCompare(b, "es")),
+    [warehouseLayout]
+  );
+  const scannerSelectedLocation = useMemo(
+    () => warehouseLayout.find((entry) => entry.code === scannerLocationCode) || null,
+    [warehouseLayout, scannerLocationCode]
+  );
+  const scannerFlow = SCANNER_FLOW_CONTENT[activeKey] || null;
 
   function selectWarehouseBox(code: string) {
     const found = warehouseLayoutByCode.get(code);
@@ -635,41 +791,39 @@ export default function DashboardDemarcaPage() {
     setSelectedMapBox(null);
   }, [selectedMapBlock]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const selectedStoreId = localStorage.getItem("selectedStoreId");
-    if (!selectedStoreId) return;
-    try {
-      const raw = localStorage.getItem(`warehouse-profile:${selectedStoreId}:ES-SEG`);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<WarehouseProfile>;
-      setWarehouseProfile((prev) => ({
-        ...prev,
-        ...parsed,
-      }));
-    } catch {}
-    try {
-      const rawLayout = localStorage.getItem(`warehouse-layout:${selectedStoreId}:ES-SEG`);
-      if (!rawLayout) return;
-      const parsedLayout = JSON.parse(rawLayout) as WarehouseLayoutEntry[];
-      if (Array.isArray(parsedLayout) && parsedLayout.length) setWarehouseLayout(parsedLayout);
-    } catch {}
-  }, []);
-
   async function saveWarehouseProfile() {
     if (!warehouseEditable || warehouseSaving) return;
     const selectedStoreId = localStorage.getItem("selectedStoreId");
-    if (!selectedStoreId) return;
+    if (!selectedStoreId || !activeWarehouseCode) return;
     try {
       setWarehouseSaveError("");
       setWarehouseSaveOk("");
       setWarehouseSaving(true);
       localStorage.setItem(
-        `warehouse-profile:${selectedStoreId}:ES-SEG`,
+        `warehouse-profile:${selectedStoreId}:${activeWarehouseCode}`,
         JSON.stringify({
           ...warehouseProfile,
           savedAt: new Date().toISOString(),
         })
+      );
+      setWarehouseRows((prev) =>
+        sanitizeWarehouseRows(
+          prev.map((row) =>
+            row.label === activeWarehouseCode
+              ? {
+                  ...row,
+                  label: normalizeWarehouseLabel(warehouseProfile.code),
+                  name: warehouseProfile.name,
+                  type: warehouseProfile.type,
+                  status: warehouseProfile.status,
+                  countryCode: warehouseProfile.countryCode,
+                  city: warehouseProfile.city,
+                  color: warehouseProfile.color,
+                  description: warehouseProfile.description,
+                }
+              : row
+          )
+        )
       );
       setWarehouseEditable(false);
       setWarehouseSaveOk("Ficha de almacén guardada.");
@@ -683,12 +837,12 @@ export default function DashboardDemarcaPage() {
   async function saveWarehouseLayout() {
     if (!warehouseEditable || warehouseSaving) return;
     const selectedStoreId = localStorage.getItem("selectedStoreId");
-    if (!selectedStoreId) return;
+    if (!selectedStoreId || !activeWarehouseCode) return;
     try {
       setWarehouseSaveError("");
       setWarehouseSaveOk("");
       setWarehouseSaving(true);
-      localStorage.setItem(`warehouse-layout:${selectedStoreId}:ES-SEG`, JSON.stringify(warehouseLayout));
+      localStorage.setItem(`warehouse-layout:${selectedStoreId}:${activeWarehouseCode}`, JSON.stringify(warehouseLayout));
       setWarehouseSaveOk("Distribución de almacén guardada.");
     } catch (err) {
       setWarehouseSaveError(err instanceof Error ? err.message : "No se pudo guardar la distribución.");
@@ -1059,9 +1213,84 @@ export default function DashboardDemarcaPage() {
   const previewTotal = Number((previewSubtotal + previewTaxAmount).toFixed(2));
 
   const activeItem = useMemo(
-    () => menu.find((item) => item.key === activeKey) || menu[0],
-    [activeKey]
+    () => {
+      if (activeKey.startsWith("warehouse-")) {
+        const distribution = activeKey.endsWith("-distribution");
+        const warehouseId = activeKey.replace(/^warehouse-/, "").replace(/-distribution$/, "");
+        const row = warehouseRows.find((item) => item.id === warehouseId);
+        if (row) {
+          return {
+            key: activeKey,
+            label: row.label,
+            warehouseCode: row.label,
+            warehouseView: distribution ? "distribution" : "info",
+          } as MenuItem;
+        }
+      }
+      return menu.find((item) => item.key === activeKey) || menu[0];
+    },
+    [activeKey, warehouseRows]
   );
+  const activeWarehouseCode = useMemo(() => {
+    if (activeItem.warehouseCode) return activeItem.warehouseCode;
+    if (activeKey === "es-seg" || activeKey === "es-seg-info" || activeKey === "es-seg-distribution" || activeKey === "almacenes-mapa") {
+      return "ES-SEG";
+    }
+    return "";
+  }, [activeItem, activeKey]);
+  const activeWarehouseRow = useMemo(
+    () => warehouseRows.find((row) => row.label === activeWarehouseCode) || null,
+    [warehouseRows, activeWarehouseCode]
+  );
+  const activeWarehouseMenuKey = activeWarehouseRow ? `warehouse-${activeWarehouseRow.id}` : "es-seg";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !activeWarehouseCode) return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    const baseProfile = buildDefaultWarehouseProfile(activeWarehouseCode, activeWarehouseRow?.name || activeWarehouseCode);
+    setWarehouseProfile((prev) => ({
+      ...baseProfile,
+      address: activeWarehouseCode === "ES-SEG" ? "Polígono Industrial, Nave 8" : baseProfile.address,
+      reference: activeWarehouseCode === "ES-SEG" ? "Zona logística norte" : baseProfile.reference,
+      managerName: activeWarehouseCode === "ES-SEG" ? "Responsable almacén" : baseProfile.managerName,
+      phone: activeWarehouseCode === "ES-SEG" ? "+34 900 000 000" : baseProfile.phone,
+      email: activeWarehouseCode === "ES-SEG" ? "warehouse.seg@demarca.local" : baseProfile.email,
+      ...prev,
+      code: activeWarehouseCode,
+      name: activeWarehouseRow?.name || prev.name || baseProfile.name,
+      countryCode: activeWarehouseRow?.countryCode || prev.countryCode || baseProfile.countryCode,
+      city: activeWarehouseRow?.city || prev.city || baseProfile.city,
+      color: activeWarehouseRow?.color || prev.color || baseProfile.color,
+      description: activeWarehouseRow?.description || prev.description || baseProfile.description,
+      type: (activeWarehouseRow?.type as WarehouseProfile["type"]) || prev.type || baseProfile.type,
+      status: (activeWarehouseRow?.status as WarehouseProfile["status"]) || prev.status || baseProfile.status,
+    }));
+    try {
+      const raw = localStorage.getItem(`warehouse-profile:${selectedStoreId}:${activeWarehouseCode}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<WarehouseProfile>;
+        setWarehouseProfile((prev) => ({
+          ...prev,
+          ...parsed,
+          code: activeWarehouseCode,
+        }));
+      }
+    } catch {}
+    try {
+      const rawLayout = localStorage.getItem(`warehouse-layout:${selectedStoreId}:${activeWarehouseCode}`);
+      if (rawLayout) {
+        const parsedLayout = JSON.parse(rawLayout) as WarehouseLayoutEntry[];
+        if (Array.isArray(parsedLayout) && parsedLayout.length) {
+          setWarehouseLayout(parsedLayout);
+          return;
+        }
+      }
+      setWarehouseLayout(buildDefaultWarehouseLayout());
+    } catch {
+      setWarehouseLayout(buildDefaultWarehouseLayout());
+    }
+  }, [activeWarehouseCode, activeWarehouseRow]);
 
   function toggleCountry(id: string) {
     if (!profileEditable) return;
@@ -1168,6 +1397,62 @@ export default function DashboardDemarcaPage() {
       return next;
     });
     setNewWarehouseLabel("");
+  }
+
+  function createWarehouseFromForm() {
+    const selectedStoreId = typeof window !== "undefined" ? localStorage.getItem("selectedStoreId") : null;
+    const code = normalizeWarehouseLabel(newWarehouseProfile.code);
+    const name = String(newWarehouseProfile.name || "").trim();
+    if (!selectedStoreId) return;
+    if (!code || !name) {
+      setWarehouseCreateError("Completa código y nombre del almacén.");
+      setWarehouseCreateOk("");
+      return;
+    }
+    const id = code.toLowerCase().replace(/\s+/g, "-");
+    if (warehouseRows.some((row) => row.id === id || row.label === code)) {
+      setWarehouseCreateError("Ese almacén ya existe.");
+      setWarehouseCreateOk("");
+      return;
+    }
+    const nextProfile: WarehouseProfile = {
+      ...buildDefaultWarehouseProfile(code, name),
+      ...newWarehouseProfile,
+      code,
+      name,
+    };
+    const nextRow: ToggleItem = {
+      id,
+      label: code,
+      active: true,
+      name: nextProfile.name,
+      type: nextProfile.type,
+      status: nextProfile.status,
+      countryCode: nextProfile.countryCode,
+      city: nextProfile.city,
+      color: nextProfile.color,
+      description: nextProfile.description,
+    };
+    const nextRows = sanitizeWarehouseRows([...warehouseRows, nextRow]);
+    setWarehouseRows(nextRows);
+    setProfile((prev) => ({
+      ...prev,
+      warehouses: nextRows.filter((row) => row.active).map((row) => row.label),
+    }));
+    localStorage.setItem(`store-warehouses-config:${selectedStoreId}`, JSON.stringify(nextRows));
+    localStorage.setItem(
+      `warehouse-profile:${selectedStoreId}:${code}`,
+      JSON.stringify({ ...nextProfile, savedAt: new Date().toISOString() })
+    );
+    localStorage.setItem(`warehouse-layout:${selectedStoreId}:${code}`, JSON.stringify(buildDefaultWarehouseLayout()));
+    setWarehouseCreateError("");
+    setWarehouseCreateOk(`Almacén ${code} creado correctamente.`);
+    setWarehouseProfile(nextProfile);
+    setWarehouseLayout(buildDefaultWarehouseLayout());
+    setWarehouseTab("info");
+    setWarehouseEditable(false);
+    setNewWarehouseProfile(buildDefaultWarehouseProfile("ES-NEW", "Nuevo almacén"));
+    activateDashboardMenu(`warehouse-${id}`);
   }
 
   async function saveGeneralProfile() {
@@ -1559,6 +1844,30 @@ export default function DashboardDemarcaPage() {
     return false;
   };
 
+  function activateDashboardMenu(nextKey: string) {
+    if (nextKey.startsWith("warehouse-")) {
+      const isDistribution = nextKey.endsWith("-distribution");
+      setWarehouseTab(isDistribution ? "distribution" : "info");
+      setActiveKey(nextKey);
+      setShowStoreProfile(false);
+      return;
+    }
+    if (nextKey === "es-seg" || nextKey === "es-seg-info") {
+      setWarehouseTab("info");
+      setActiveKey(nextKey);
+      setShowStoreProfile(false);
+      return;
+    }
+    if (nextKey === "es-seg-distribution") {
+      setWarehouseTab("distribution");
+      setActiveKey(nextKey);
+      setShowStoreProfile(false);
+      return;
+    }
+    setActiveKey(nextKey);
+    setShowStoreProfile(false);
+  }
+
   return (
     <main suppressHydrationWarning className={`${headingFont.variable} ${bodyFont.variable} h-screen overflow-hidden bg-[#DADCE0] p-6`}>
       <div suppressHydrationWarning className="mx-auto flex h-full max-w-[1520px] gap-4">
@@ -1658,60 +1967,98 @@ export default function DashboardDemarcaPage() {
                   const hasChildren = menuHasChildren(index);
                   const isCollapsed = !!collapsedSections[item.key];
                   return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => {
-                      if (item.action === "logout") {
-                        logout();
-                        return;
-                      }
-                      if (!item.path && !item.emptyText && item.isGroup) return;
-                      setActiveKey(item.key);
-                      setShowStoreProfile(false);
-                    }}
-                      className={`w-full rounded-full px-4 py-2 text-left transition ${
-                        item.isMain ? "text-[18px]" : "text-[13px]"
-                      } ${
-                        active
-                          ? "bg-[#0B1230] text-white"
-                          : item.isGroup
-                          ? "text-[#1C233F] hover:bg-[#EFF1F5]"
-                          : "text-[#3A425A] hover:bg-[#EFF1F5]"
-                      }`}
-                      style={{
-                        fontFamily: item.isMain ? "var(--font-dashboarddemarca-heading)" : "var(--font-dashboarddemarca-body)",
-                        paddingLeft: `${16 + indent}px`,
+                    <Fragment key={item.key}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                        if (item.action === "logout") {
+                          logout();
+                          return;
+                        }
+                        if (!item.path && !item.emptyText && item.isGroup) return;
+                        activateDashboardMenu(item.key);
                       }}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span>{item.label}</span>
-                        {hasChildren ? (
-                          <span
-                            role="button"
-                            aria-label={isCollapsed ? "Expandir" : "Contraer"}
-                            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
-                              active ? "text-white/90 hover:bg-white/20" : "text-[#6A7288] hover:bg-[#E5E9F1]"
-                            }`}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setCollapsedSections((prev) => ({ ...prev, [item.key]: !prev[item.key] }));
-                            }}
-                          >
-                            {isCollapsed ? (
-                              <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
-                                <path d="M7 5l6 5-6 5V5z" />
-                              </svg>
-                            ) : (
-                              <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
-                                <path d="M5 7l5 6 5-6H5z" />
-                              </svg>
-                            )}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
+                        className={`w-full rounded-full px-4 py-2 text-left transition ${
+                          item.isMain ? "text-[18px]" : "text-[13px]"
+                        } ${
+                          active
+                            ? "bg-[#0B1230] text-white"
+                            : item.isGroup
+                            ? "text-[#1C233F] hover:bg-[#EFF1F5]"
+                            : "text-[#3A425A] hover:bg-[#EFF1F5]"
+                        }`}
+                        style={{
+                          fontFamily: item.isMain ? "var(--font-dashboarddemarca-heading)" : "var(--font-dashboarddemarca-body)",
+                          paddingLeft: `${16 + indent}px`,
+                        }}
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span>{item.label}</span>
+                          {hasChildren ? (
+                            <span
+                              role="button"
+                              aria-label={isCollapsed ? "Expandir" : "Contraer"}
+                              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
+                                active ? "text-white/90 hover:bg-white/20" : "text-[#6A7288] hover:bg-[#E5E9F1]"
+                              }`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCollapsedSections((prev) => ({ ...prev, [item.key]: !prev[item.key] }));
+                              }}
+                            >
+                              {isCollapsed ? (
+                                <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
+                                  <path d="M7 5l6 5-6 5V5z" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 20 20" className="h-3 w-3 fill-current">
+                                  <path d="M5 7l5 6 5-6H5z" />
+                                </svg>
+                              )}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                      {item.key === "almacenes-lista" && !isCollapsed
+                        ? warehouseRows
+                            .filter((row) => isVisibleWarehouseLabel(row.label))
+                            .map((row) => {
+                              const rowActive = activeKey === `warehouse-${row.id}`;
+                              const distributionActive = activeKey === `warehouse-${row.id}-distribution`;
+                              return (
+                                <Fragment key={`warehouse-menu-${row.id}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => activateDashboardMenu(`warehouse-${row.id}`)}
+                                    className={`w-full rounded-full px-4 py-2 text-left text-[13px] transition ${
+                                      rowActive ? "bg-[#0B1230] text-white" : "text-[#3A425A] hover:bg-[#EFF1F5]"
+                                    }`}
+                                    style={{
+                                      fontFamily: "var(--font-dashboarddemarca-body)",
+                                      paddingLeft: "48px",
+                                    }}
+                                  >
+                                    {row.label}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => activateDashboardMenu(`warehouse-${row.id}-distribution`)}
+                                    className={`w-full rounded-full px-4 py-2 text-left text-[13px] transition ${
+                                      distributionActive ? "bg-[#0B1230] text-white" : "text-[#3A425A] hover:bg-[#EFF1F5]"
+                                    }`}
+                                    style={{
+                                      fontFamily: "var(--font-dashboarddemarca-body)",
+                                      paddingLeft: "64px",
+                                    }}
+                                  >
+                                    Distribución de almacén
+                                  </button>
+                                </Fragment>
+                              );
+                            })
+                        : null}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -1733,8 +2080,7 @@ export default function DashboardDemarcaPage() {
                           logout();
                           return;
                         }
-                        setActiveKey(item.key);
-                        setShowStoreProfile(false);
+                        activateDashboardMenu(item.key);
                       }}
                       className={`flex h-10 w-10 items-center justify-center rounded-full text-[13px] ${
                         active ? "bg-[#0B1230] text-white" : "bg-[#EFF1F5] text-[#1B2140] hover:bg-[#DDE2EC]"
@@ -3058,13 +3404,335 @@ export default function DashboardDemarcaPage() {
                   </div>
                 </div>
               </div>
-            ) : activeKey === "es-seg" ? (
+            ) : scannerFlow ? (
               <div className="h-full">
                 <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
                   <div className="flex items-start justify-between px-10 pt-7">
                     <div>
                       <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
-                        Almacén ES-SEG
+                        Escáner Operativo
+                      </h2>
+                      <p className="mt-2 text-[14px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                        {scannerFlow.title}. El escáner Eyoyo trabaja como teclado y el cursor debe quedar listo para escanear.
+                      </p>
+                    </div>
+                    <div className="rounded-full bg-[#EEF2FF] px-4 py-2 text-[13px] text-[#3147D4]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                      {scannerFlow.badge}
+                    </div>
+                  </div>
+
+                  <div className="mt-6 border-b border-[#666666] px-2">
+                    <div className="grid grid-cols-7 gap-2">
+                      {[
+                        { key: "scanner-recepcion", label: "1. Recepción" },
+                        { key: "scanner-picking", label: "2. Picking" },
+                        { key: "scanner-packing", label: "3. Packing" },
+                        { key: "scanner-devoluciones", label: "4. Devoluciones" },
+                        { key: "scanner-busqueda", label: "5. Búsqueda" },
+                        { key: "scanner-ajuste", label: "6. Ajuste" },
+                        { key: "scanner-transferencias", label: "7. Transferencias" },
+                      ].map((tab) => (
+                        <button
+                          key={`scanner-tab-${tab.key}`}
+                          type="button"
+                          onClick={() => setActiveKey(tab.key)}
+                          className={`rounded-t-2xl px-3 py-3 text-left text-[13px] ${
+                            activeKey === tab.key ? "bg-[#BFBFBF] text-[#1A213D]" : "bg-[#E6E8EA] text-[#545C73]"
+                          }`}
+                          style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="relative min-h-0 flex-1 w-full overflow-y-auto rounded-b-2xl bg-[#E6E8EA] px-10 pb-24 pt-6">
+                    <div className="grid grid-cols-[minmax(0,1.15fr)_380px] gap-6">
+                      <div className="space-y-5">
+                        <div className="rounded-2xl bg-white p-5">
+                          <div className="text-[20px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            {scannerFlow.title}
+                          </div>
+                          <div className="mt-2 text-[14px] leading-[1.55] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            {scannerFlow.intro}
+                          </div>
+                          <div className="mt-5 grid grid-cols-3 gap-4">
+                            <div>
+                              <div className="text-[14px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Almacén</div>
+                              <select
+                                value={scannerWarehouseCode}
+                                onChange={(e) => setScannerWarehouseCode(e.target.value)}
+                                className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none"
+                              >
+                                <option value="ES-SEG">ES-SEG</option>
+                              </select>
+                            </div>
+                            <div>
+                              <div className="text-[14px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ubicación</div>
+                              <select
+                                value={scannerLocationCode}
+                                onChange={(e) => setScannerLocationCode(e.target.value)}
+                                className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none"
+                              >
+                                {scannerLocationOptions.map((code) => (
+                                  <option key={`scanner-location-${code}`} value={code}>
+                                    {code}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <div className="text-[14px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Escanear aquí</div>
+                              <input
+                                autoFocus
+                                value={scannerInput}
+                                onChange={(e) => setScannerInput(e.target.value)}
+                                placeholder="EAN / QR / tracking"
+                                className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] text-[#2B334B] outline-none placeholder:text-[#9AA1B2]"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {activeKey === "scanner-recepcion" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-5">
+                              <div>
+                                <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Recepción de entrada</div>
+                                <div className="mt-3 rounded-2xl bg-[#F7F8FB] p-4">
+                                  <div className="text-[13px] text-[#6A7186]">Producto detectado</div>
+                                  <div className="mt-1 text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                    {scannerSelectedLocation?.category || "Bolsos"} · {scannerInput.trim() || "Esperando escaneo"}
+                                  </div>
+                                  <div className="mt-2 text-[14px] text-[#4A5268]">Ubicación destino: {scannerLocationCode}</div>
+                                  <div className="mt-1 text-[14px] text-[#4A5268]">Contador actual: {scannerSelectedLocation?.items || 0} unidades</div>
+                                </div>
+                                <textarea
+                                  value={scannerIncidentNote}
+                                  onChange={(e) => setScannerIncidentNote(e.target.value)}
+                                  placeholder="Incidencia: faltante, roto o dañado"
+                                  className="mt-4 h-[94px] w-full rounded-2xl border-none bg-[#F7F8FB] px-5 py-4 text-[14px] text-[#2B334B] outline-none placeholder:text-[#9AA1B2]"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-3">
+                                <button type="button" className="h-[48px] rounded-full bg-[#0B1230] text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  Todo OK
+                                </button>
+                                <button type="button" className="h-[48px] rounded-full border border-[#D4D9E4] bg-white text-[15px] text-[#1A213D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  Incidencia
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-picking" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Pedido</div>
+                                <input value={scannerOrderRef} onChange={(e) => setScannerOrderRef(e.target.value)} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none" />
+                              </div>
+                              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                                <div className="text-[13px] text-[#6A7186]">Ubicación esperada</div>
+                                <div className="mt-1 text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>{scannerLocationCode}</div>
+                                <div className="mt-2 text-[14px] text-[#4A5268]">Escanea el producto para validar que cogiste el item correcto.</div>
+                              </div>
+                            </div>
+                            <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#F7F8FB] px-5 py-4">
+                              <div>
+                                <div className="text-[13px] text-[#6A7186]">Resultado de validación</div>
+                                <div className="mt-1 text-[16px] text-[#121633]">{scannerInput.trim() ? "Producto validado correctamente" : "Esperando lectura"}</div>
+                              </div>
+                              <button type="button" className="h-[48px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                Pick completo
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-packing" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Confirmación de salida</div>
+                            <div className="mt-4 grid grid-cols-2 gap-4">
+                              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                                <div className="text-[13px] text-[#6A7186]">Packaging</div>
+                                <div className="mt-3 space-y-2 text-[14px] text-[#2B334B]">
+                                  <label className="flex items-center gap-2"><input type="checkbox" checked={scannerPackaging.bubble} onChange={(e) => setScannerPackaging((prev) => ({ ...prev, bubble: e.target.checked }))} /> Burbuja</label>
+                                  <label className="flex items-center gap-2"><input type="checkbox" checked={scannerPackaging.paper} onChange={(e) => setScannerPackaging((prev) => ({ ...prev, paper: e.target.checked }))} /> Papel</label>
+                                  <label className="flex items-center gap-2"><input type="checkbox" checked={scannerPackaging.tape} onChange={(e) => setScannerPackaging((prev) => ({ ...prev, tape: e.target.checked }))} /> Cinta</label>
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Caja usada</div>
+                                <select value={scannerPackaging.box} onChange={(e) => setScannerPackaging((prev) => ({ ...prev, box: e.target.value }))} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none">
+                                  <option>Caja S</option>
+                                  <option>Caja M</option>
+                                  <option>Caja L</option>
+                                  <option>Sobre</option>
+                                </select>
+                                <button type="button" className="mt-6 h-[48px] w-full rounded-full bg-[#0B1230] text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                  Confirmar salida
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-devoluciones" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Tracking devolución</div>
+                                <input value={scannerTracking} onChange={(e) => setScannerTracking(e.target.value)} placeholder="Escanea tracking" className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none" />
+                              </div>
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Decisión</div>
+                                <select value={scannerDecision} onChange={(e) => setScannerDecision(e.target.value)} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none">
+                                  <option value="restock">Restock</option>
+                                  <option value="repair">Reparación</option>
+                                  <option value="scrap">Scrap</option>
+                                  <option value="non_sellable">No vendible</option>
+                                </select>
+                              </div>
+                            </div>
+                            <textarea
+                              value={scannerIncidentNote}
+                              onChange={(e) => setScannerIncidentNote(e.target.value)}
+                              placeholder="Motivo devolución / estado del producto"
+                              className="mt-4 h-[94px] w-full rounded-2xl border-none bg-[#F7F8FB] px-5 py-4 text-[14px] outline-none"
+                            />
+                            <button type="button" className="mt-4 h-[48px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                              Registrar devolución
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-busqueda" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                              <div className="text-[13px] text-[#6A7186]">Lookup actual</div>
+                              <div className="mt-1 text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                {scannerInput.trim() || "Esperando EAN / alias"}
+                              </div>
+                              <div className="mt-2 text-[14px] text-[#4A5268]">
+                                La búsqueda revisa primero products.ean, después ean_aliases y si no existe propondrá crear producto.
+                              </div>
+                            </div>
+                            <div className="mt-4 flex gap-3">
+                              <button type="button" className="h-[48px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                                Abrir ficha
+                              </button>
+                              <button type="button" className="h-[48px] rounded-full border border-[#D4D9E4] bg-white px-6 text-[15px] text-[#1A213D]">
+                                Crear producto nuevo
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-ajuste" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="grid grid-cols-[140px_minmax(0,1fr)] gap-4">
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Cantidad</div>
+                                <input value={scannerAdjustmentQty} onChange={(e) => setScannerAdjustmentQty(e.target.value.replace(/[^\d-]/g, ""))} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none" />
+                              </div>
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Motivo</div>
+                                <input value={scannerAdjustmentReason} onChange={(e) => setScannerAdjustmentReason(e.target.value)} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none" />
+                              </div>
+                            </div>
+                            <button type="button" className="mt-4 h-[48px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                              Aplicar ajuste
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {activeKey === "scanner-transferencias" ? (
+                          <div className="rounded-2xl bg-white p-5">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Almacén origen</div>
+                                <select value={scannerWarehouseCode} onChange={(e) => setScannerWarehouseCode(e.target.value)} className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none">
+                                  <option value="ES-SEG">ES-SEG</option>
+                                </select>
+                              </div>
+                              <div>
+                                <div className="text-[14px] text-[#2B334B]">Almacén destino</div>
+                                <select className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F7F8FB] px-5 text-[14px] outline-none">
+                                  <option>IT-MIL</option>
+                                  <option>PE-LIM</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="mt-4 text-[14px] text-[#4A5268]">Ubicación origen: {scannerLocationCode}</div>
+                            <button type="button" className="mt-4 h-[48px] rounded-full bg-[#0B1230] px-6 text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                              Crear transferencia
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="rounded-2xl bg-white p-5">
+                          <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            Contexto operativo
+                          </div>
+                          <div className="mt-4 grid gap-3 text-[14px] text-[#2B334B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                              <div className="text-[12px] text-[#6A7186]">Almacén activo</div>
+                              <div className="mt-1 text-[16px] text-[#121633]">{scannerWarehouseCode}</div>
+                            </div>
+                            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                              <div className="text-[12px] text-[#6A7186]">Ubicación activa</div>
+                              <div className="mt-1 text-[16px] text-[#121633]">{scannerLocationCode}</div>
+                              <div className="mt-1 text-[13px] text-[#4A5268]">
+                                {scannerSelectedLocation ? `${scannerSelectedLocation.items} ítems · ${scannerSelectedLocation.category}` : "Sin detalle cargado"}
+                              </div>
+                            </div>
+                            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                              <div className="text-[12px] text-[#6A7186]">Última lectura</div>
+                              <div className="mt-1 text-[16px] text-[#121633]">{scannerInput.trim() || "Esperando escaneo"}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white p-5">
+                          <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            Resultado esperado
+                          </div>
+                          <div className="mt-3 text-[14px] leading-[1.6] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            {scannerFlow.summary}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white p-5">
+                          <div className="text-[18px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            Reglas de uso
+                          </div>
+                          <ul className="mt-3 space-y-2 text-[14px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                            <li>1. El cursor debe quedar listo para escanear.</li>
+                            <li>2. El Eyoyo actúa como teclado y termina con Enter.</li>
+                            <li>3. No se edita stock manualmente; siempre se crea movimiento.</li>
+                            <li>4. La acción depende del contexto: entrada, validación, salida o devolución.</li>
+                          </ul>
+                          <button type="button" className="mt-5 h-[48px] w-full rounded-full bg-[#0B1230] text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                            {scannerFlow.primaryAction}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : activeKey === "es-seg" || activeKey === "es-seg-info" || activeKey === "es-seg-distribution" || activeKey.startsWith("warehouse-") ? (
+              <div className="h-full">
+                <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
+                  <div className="flex items-start justify-between px-10 pt-7">
+                    <div>
+                      <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                        Almacén {activeWarehouseCode || "ES-SEG"}
                       </h2>
                       <p className="mt-2 text-[14px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
                         Ficha operativa del almacén para configuración y control.
@@ -3089,7 +3757,10 @@ export default function DashboardDemarcaPage() {
                         <button
                           key={`warehouse-tab-${tab.key}`}
                           type="button"
-                          onClick={() => setWarehouseTab(tab.key)}
+                          onClick={() => {
+                            setWarehouseTab(tab.key);
+                            setActiveKey(tab.key === "info" ? activeWarehouseMenuKey : `${activeWarehouseMenuKey}-distribution`);
+                          }}
                           className={`rounded-t-2xl px-4 py-3 text-left text-[14px] ${
                             warehouseTab === tab.key ? "bg-[#BFBFBF] text-[#1A213D]" : "bg-[#E6E8EA] text-[#545C73]"
                           }`}
@@ -3482,11 +4153,208 @@ export default function DashboardDemarcaPage() {
                 </div>
               </div>
             ) : activeKey === "almacenes-agregar" ? (
-              <div className="h-full p-5">
-                <div className="h-full rounded-2xl bg-[#E8EAEC] p-6">
-                  <h2 className="text-[36px] text-[#1B2140]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
-                    Agregar Almacén
-                  </h2>
+              <div className="h-full">
+                <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
+                  <div className="flex items-start justify-between px-10 pt-7">
+                    <div>
+                      <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                        Agregar Almacén
+                      </h2>
+                      <p className="mt-2 text-[14px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                        Crea una nueva unidad operativa para stock, picking y control logístico.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 border-b border-[#666666] px-2">
+                    <div className="grid grid-cols-1 gap-2">
+                      <div
+                        className="rounded-t-2xl bg-[#BFBFBF] px-4 py-3 text-left text-[14px] text-[#1A213D]"
+                        style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                      >
+                        Ficha de almacén
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative min-h-0 flex-1 w-full overflow-y-auto rounded-b-2xl bg-[#E6E8EA] px-10 pb-24 pt-6">
+                    <div className="grid grid-cols-3 gap-8 text-[#2B334B]">
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Nombre de almacén</div>
+                        <input
+                          value={newWarehouseProfile.name}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, name: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Código interno</div>
+                        <input
+                          value={newWarehouseProfile.code}
+                          onChange={(e) =>
+                            setNewWarehouseProfile((p) => ({
+                              ...p,
+                              code: normalizeWarehouseLabel(e.target.value),
+                            }))
+                          }
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Color identificativo</div>
+                        <div className="mt-2 flex items-center gap-3">
+                          <span className="h-11 w-11 rounded-full" style={{ backgroundColor: newWarehouseProfile.color }} />
+                          <input
+                            type="color"
+                            value={newWarehouseProfile.color}
+                            onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, color: e.target.value.toUpperCase() }))}
+                            className="h-[44px] w-[76px] cursor-pointer rounded-xl border-none bg-white px-2"
+                          />
+                        </div>
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Descripción</div>
+                        <input
+                          value={newWarehouseProfile.description}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, description: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Tipo de almacén</div>
+                        <select
+                          value={newWarehouseProfile.type}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, type: e.target.value as WarehouseProfile["type"] }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        >
+                          <option value="OWN">Propio</option>
+                          <option value="THIRD_PARTY_3PL">3PL</option>
+                          <option value="RETURNS">Devoluciones</option>
+                          <option value="TEMPORARY">Temporal</option>
+                        </select>
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Estado</div>
+                        <select
+                          value={newWarehouseProfile.status}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, status: e.target.value as WarehouseProfile["status"] }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        >
+                          <option value="ACTIVE">Activo</option>
+                          <option value="INACTIVE">Inactivo</option>
+                        </select>
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>País</div>
+                        <select
+                          value={newWarehouseProfile.countryCode}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, countryCode: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        >
+                          {facturacionCountryOptions.map((item) => (
+                            <option key={`new-wh-country-${item.id}`} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Ciudad</div>
+                        <input
+                          value={newWarehouseProfile.city}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, city: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Dirección</div>
+                        <input
+                          value={newWarehouseProfile.address}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, address: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Referencia interna</div>
+                        <input
+                          value={newWarehouseProfile.reference}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, reference: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+
+                        <div className="mt-6 grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Apertura</div>
+                            <input
+                              type="time"
+                              value={newWarehouseProfile.openingHour}
+                              onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, openingHour: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Cierre</div>
+                            <input
+                              type="time"
+                              value={newWarehouseProfile.closingHour}
+                              onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, closingHour: e.target.value }))}
+                              className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-6 text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Capacidad máxima (unidades)</div>
+                        <input
+                          value={newWarehouseProfile.capacityUnits}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, capacityUnits: e.target.value.replace(/[^\d]/g, "") }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-8 grid grid-cols-3 gap-8 text-[#2B334B]">
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Responsable</div>
+                        <input
+                          value={newWarehouseProfile.managerName}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, managerName: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Teléfono</div>
+                        <input
+                          value={newWarehouseProfile.phone}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, phone: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[14px]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>Email</div>
+                        <input
+                          value={newWarehouseProfile.email}
+                          onChange={(e) => setNewWarehouseProfile((p) => ({ ...p, email: e.target.value }))}
+                          className="mt-2 h-[48px] w-full rounded-full border-none bg-white px-5 text-[14px] text-[#8B90A0] outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-8 flex items-center justify-end">
+                      {warehouseCreateError ? (
+                        <div className="mr-3 text-[13px] text-[#C0392B]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {warehouseCreateError}
+                        </div>
+                      ) : null}
+                      {warehouseCreateOk ? (
+                        <div className="mr-3 text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {warehouseCreateOk}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="h-[50px] rounded-full bg-[#0B1230] px-8 text-[16px] text-white"
+                        style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}
+                        onClick={createWarehouseFromForm}
+                      >
+                        Crear almacén
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : activeKey === "almacenes-mapa" ? (

@@ -42,6 +42,31 @@ type TicketRow = {
   createdAt: string;
 };
 
+function formatDate(value: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("es-ES", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+function formatMoney(value: number | null) {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(value);
+}
+
+function ticketPriorityLabel(priority: string) {
+  switch (String(priority || "").toLowerCase()) {
+    case "urgent":
+      return "Urgente";
+    case "high":
+      return "Alta";
+    case "medium":
+      return "Media";
+    case "low":
+      return "Baja";
+    default:
+      return priority || "-";
+  }
+}
+
 export default function CustomerDetailPage() {
   const router = useRouter();
   const params = useParams<{ customerId: string }>();
@@ -68,7 +93,10 @@ export default function CustomerDetailPage() {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
-        if (!res.ok) return setError(data.error || "Error loading customer detail");
+        if (!res.ok) {
+          setError(data.error || "Error loading customer detail");
+          return;
+        }
         setCustomer(data.customer || null);
         setSummary(data.summary || null);
         setOrders(data.orders || []);
@@ -79,60 +107,97 @@ export default function CustomerDetailPage() {
     })();
   }, [loading, storeId, customerId, permissions.customersRead]);
 
-  if (loading) return <div className="min-h-screen bg-gray-100 p-6">Cargando permisos...</div>;
-  if (permissionsError) return <div className="min-h-screen bg-gray-100 p-6 text-red-700">{permissionsError}</div>;
-  if (!permissions.customersRead) return <div className="min-h-screen bg-gray-100 p-6">No autorizado para Clientes.</div>;
+  if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
+  if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
+  if (!permissions.customersRead) return <div className="min-h-screen bg-[#E8EAEC] p-6">No autorizado para Clientes.</div>;
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-7xl mx-auto space-y-4">
-        <Topbar title="Cliente - Detalle" storeName={storeName} />
-        {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
+    <div className="min-h-screen bg-[#E8EAEC] p-6">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <Topbar title="Cliente" storeName={storeName} />
+        {error ? <div className="rounded-xl bg-[#FDECEC] p-3 text-[14px] text-[#B42318]">{error}</div> : null}
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{customer?.fullName || customer?.email || customerId}</h2>
-            <button className="rounded border px-3 py-2" onClick={() => router.push("/store/customers")}>Volver a clientes</button>
-          </div>
-          <p className="text-sm text-gray-700 mt-1">Email: {customer?.email || "-"}</p>
-          <p className="text-sm text-gray-700">País/Ciudad: {[customer?.country, customer?.city].filter(Boolean).join(" / ") || "-"}</p>
-
-          <div className="grid md:grid-cols-5 gap-2 mt-3 text-sm">
-            <div className="border rounded p-2">Pedidos: {summary?.totalOrders ?? 0}</div>
-            <div className="border rounded p-2">Revenue EUR: {summary?.totalRevenueEur ?? "-"}</div>
-            <div className="border rounded p-2">Profit EUR: {summary?.totalProfitEur ?? "-"}</div>
-            <div className="border rounded p-2">Devoluciones: {summary?.totalReturns ?? 0}</div>
-            <div className="border rounded p-2">Tickets abiertos: {summary?.openTickets ?? 0}</div>
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <button
+                className="mb-4 rounded-full border border-[#D8DDEA] bg-white px-4 py-2 text-[14px] text-[#1D2647] hover:bg-[#F8F9FC]"
+                onClick={() => router.push("/store/customers")}
+              >
+                ← Volver a clientes
+              </button>
+              <h2 className="text-[32px] font-black text-[#151B43]">{customer?.fullName || customer?.email || customerId}</h2>
+              <p className="mt-2 text-[17px] text-[#667085]">
+                {[customer?.country, customer?.city].filter(Boolean).join(" / ") || "Sin ubicación registrada"}
+              </p>
+              <p className="mt-1 text-[15px] text-[#7B839C]">Email: {customer?.email || "-"}</p>
+            </div>
+            <div className="grid min-w-[520px] grid-cols-5 gap-3">
+              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Pedidos</div>
+                <div className="mt-2 text-[28px] font-black text-[#151B43]">{summary?.totalOrders ?? 0}</div>
+              </div>
+              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Revenue</div>
+                <div className="mt-2 text-[20px] font-black text-[#151B43]">{formatMoney(summary?.totalRevenueEur ?? null)}</div>
+              </div>
+              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Profit</div>
+                <div className="mt-2 text-[20px] font-black text-[#151B43]">{formatMoney(summary?.totalProfitEur ?? null)}</div>
+              </div>
+              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Devoluciones</div>
+                <div className="mt-2 text-[28px] font-black text-[#151B43]">{summary?.totalReturns ?? 0}</div>
+              </div>
+              <div className="rounded-2xl bg-[#F7F8FB] p-4">
+                <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Tickets</div>
+                <div className="mt-2 text-[28px] font-black text-[#151B43]">{summary?.openTickets ?? 0}</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h3 className="font-semibold mb-2">Historial pedidos</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="text-[28px] font-black text-[#151B43]">Historial de pedidos</h3>
+              <p className="mt-1 text-[15px] text-[#667085]">Pedidos recientes del cliente y rentabilidad asociada.</p>
+            </div>
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-[#E5E7EB]">
+            <table className="min-w-full text-left text-[15px]">
+              <thead className="border-b border-[#D0D5DD] bg-[#F8F9FC] text-[#151B43]">
                 <tr>
-                  <th className="text-left px-3 py-2">Pedido</th>
-                  <th className="text-left px-3 py-2">Estado</th>
-                  <th className="text-left px-3 py-2">Fecha</th>
-                  <th className="text-left px-3 py-2">Revenue EUR</th>
-                  <th className="text-left px-3 py-2">Profit EUR</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
+                  <th className="px-4 py-3 font-semibold">Pedido</th>
+                  <th className="px-4 py-3 font-semibold">Estado</th>
+                  <th className="px-4 py-3 font-semibold">Fecha</th>
+                  <th className="px-4 py-3 font-semibold">Revenue EUR</th>
+                  <th className="px-4 py-3 font-semibold">Profit EUR</th>
+                  <th className="px-4 py-3 font-semibold">Acción</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="bg-white text-[#3B4256]">
                 {orders.length === 0 ? (
-                  <tr><td colSpan={6} className="px-3 py-4 text-gray-500">Sin pedidos</td></tr>
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
+                      Sin pedidos.
+                    </td>
+                  </tr>
                 ) : (
-                  orders.map((o) => (
-                    <tr key={o.id} className="border-b">
-                      <td className="px-3 py-2">{o.orderNumber}</td>
-                      <td className="px-3 py-2">{o.status}</td>
-                      <td className="px-3 py-2">{new Date(o.orderedAt).toISOString().slice(0, 10)}</td>
-                      <td className="px-3 py-2">{o.grossAmountEurFrozen ?? "-"}</td>
-                      <td className="px-3 py-2">{o.netProfitEur ?? "-"}</td>
-                      <td className="px-3 py-2">
-                        <button className="rounded border px-2 py-1" onClick={() => router.push(`/store/orders?q=${encodeURIComponent(o.id)}`)}>Abrir pedido</button>
+                  orders.map((order) => (
+                    <tr key={order.id} className="border-b border-[#EEF1F6] last:border-b-0">
+                      <td className="px-4 py-4 font-medium text-[#151B43]">{order.orderNumber}</td>
+                      <td className="px-4 py-4">{order.status}</td>
+                      <td className="px-4 py-4">{formatDate(order.orderedAt)}</td>
+                      <td className="px-4 py-4">{formatMoney(order.grossAmountEurFrozen)}</td>
+                      <td className="px-4 py-4">{formatMoney(order.netProfitEur)}</td>
+                      <td className="px-4 py-4">
+                        <button
+                          className="rounded-full border border-[#D8DDEA] bg-white px-4 py-2 text-[14px] text-[#1D2647] hover:bg-[#F8F9FC]"
+                          onClick={() => router.push(`/store/orders?q=${encodeURIComponent(order.id)}`)}
+                        >
+                          Abrir pedido
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -142,31 +207,45 @@ export default function CustomerDetailPage() {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-md">
-          <h3 className="font-semibold mb-2">Tickets de soporte</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="text-[28px] font-black text-[#151B43]">Tickets de soporte</h3>
+              <p className="mt-1 text-[15px] text-[#667085]">Incidencias y consultas abiertas o resueltas de este cliente.</p>
+            </div>
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-[#E5E7EB]">
+            <table className="min-w-full text-left text-[15px]">
+              <thead className="border-b border-[#D0D5DD] bg-[#F8F9FC] text-[#151B43]">
                 <tr>
-                  <th className="text-left px-3 py-2">Título</th>
-                  <th className="text-left px-3 py-2">Estado</th>
-                  <th className="text-left px-3 py-2">Prioridad</th>
-                  <th className="text-left px-3 py-2">Fecha</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
+                  <th className="px-4 py-3 font-semibold">Título</th>
+                  <th className="px-4 py-3 font-semibold">Estado</th>
+                  <th className="px-4 py-3 font-semibold">Prioridad</th>
+                  <th className="px-4 py-3 font-semibold">Fecha</th>
+                  <th className="px-4 py-3 font-semibold">Acción</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="bg-white text-[#3B4256]">
                 {tickets.length === 0 ? (
-                  <tr><td colSpan={5} className="px-3 py-4 text-gray-500">Sin tickets</td></tr>
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
+                      Sin tickets.
+                    </td>
+                  </tr>
                 ) : (
-                  tickets.map((t) => (
-                    <tr key={t.id} className="border-b">
-                      <td className="px-3 py-2">{t.title}</td>
-                      <td className="px-3 py-2">{t.status}</td>
-                      <td className="px-3 py-2">{t.priority}</td>
-                      <td className="px-3 py-2">{new Date(t.createdAt).toISOString().slice(0, 10)}</td>
-                      <td className="px-3 py-2">
-                        <button className="rounded border px-2 py-1" onClick={() => router.push(`/store/support/${t.id}`)}>Abrir ticket</button>
+                  tickets.map((ticket) => (
+                    <tr key={ticket.id} className="border-b border-[#EEF1F6] last:border-b-0">
+                      <td className="px-4 py-4 font-medium text-[#151B43]">{ticket.title}</td>
+                      <td className="px-4 py-4">{ticket.status}</td>
+                      <td className="px-4 py-4">{ticketPriorityLabel(ticket.priority)}</td>
+                      <td className="px-4 py-4">{formatDate(ticket.createdAt)}</td>
+                      <td className="px-4 py-4">
+                        <button
+                          className="rounded-full border border-[#D8DDEA] bg-white px-4 py-2 text-[14px] text-[#1D2647] hover:bg-[#F8F9FC]"
+                          onClick={() => router.push(`/store/support/${ticket.id}`)}
+                        >
+                          Abrir ticket
+                        </button>
                       </td>
                     </tr>
                   ))
