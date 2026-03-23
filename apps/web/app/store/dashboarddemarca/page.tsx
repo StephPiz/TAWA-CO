@@ -1037,13 +1037,17 @@ export default function DashboardDemarcaPage() {
         const store = data?.store || {};
         const channels = Array.isArray(data?.channels) ? data.channels : [];
         const warehouses = Array.isArray(data?.warehouses) ? data.warehouses : [];
-        const countryCodes = Array.from(
+        const countryCodes: string[] = Array.from(
           new Set(
             channels
               .map((c: { countryCode?: string | null }) => String(c.countryCode || "").trim().toUpperCase())
               .filter(Boolean)
           )
         );
+        const marketplaceNames: string[] = channels.map((c: { name?: string }) => String(c.name || "")).filter(Boolean);
+        const visibleWarehouses: string[] = warehouses
+          .map((w: { code?: string; name?: string }) => normalizeWarehouseLabel(String(w.code || w.name || "")))
+          .filter(isVisibleWarehouseLabel);
         setProfile((prev) => ({
           ...prev,
           name: String(store?.name || prev.name).toLowerCase(),
@@ -1052,10 +1056,8 @@ export default function DashboardDemarcaPage() {
           themeColor: store?.themeColor ? String(store.themeColor) : prev.themeColor,
           baseCurrencyCode: String(store?.baseCurrencyCode || prev.baseCurrencyCode),
           salesCountryCodes: countryCodes,
-          marketplaces: channels.map((c: { name?: string }) => String(c.name || "")).filter(Boolean),
-          warehouses: warehouses
-            .map((w: { code?: string; name?: string }) => normalizeWarehouseLabel(String(w.code || w.name || "")))
-            .filter(isVisibleWarehouseLabel),
+          marketplaces: marketplaceNames,
+          warehouses: visibleWarehouses,
         }));
         const baseCurrencyBoot = String(store?.baseCurrencyCode || "").trim().toUpperCase();
         if (baseCurrencyBoot) setSelectedBaseCurrency(baseCurrencyBoot);
