@@ -40,6 +40,7 @@ export default function LoginPage() {
   const [mobileStep, setMobileStep] = useState<"login" | "space" | "store">("login");
   const [email, setEmail] = useState("admin@demarca.local");
   const [password, setPassword] = useState("Admin123!");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showMobileSplash, setShowMobileSplash] = useState(true);
@@ -121,6 +122,26 @@ export default function LoginPage() {
     }
 
     setLoading(false);
+  }
+
+  function PasswordIcon({ visible }: { visible: boolean }) {
+    if (visible) {
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      );
+    }
+
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+        <path d="M3 3l18 18" />
+        <path d="M10.6 10.7a3 3 0 0 0 4.2 4.2" />
+        <path d="M9.4 5.1A11.3 11.3 0 0 1 12 5c6.5 0 10 7 10 7a17.2 17.2 0 0 1-4 4.8" />
+        <path d="M6.6 6.7C4.1 8.4 2.5 12 2.5 12S6 19 12 19c1.7 0 3.2-.3 4.6-.9" />
+      </svg>
+    );
   }
 
   return (
@@ -207,17 +228,30 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                   />
 
-                  <input
-                    id="password"
-                    name="password"
-                    autoComplete="current-password"
-                    className="h-[66px] w-full rounded-full border-none bg-white px-[24px] text-[24px] text-[#1A2238] outline-none placeholder:text-[rgba(20,25,45,0.35)]"
+                  <div
+                    className="relative h-[66px] w-full rounded-full bg-white"
                     style={{ boxShadow: "inset 0px 0px 0px 1px rgba(15,20,40,0.06)" }}
-                    type="password"
-                    placeholder="Contrasena"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
+                  >
+                    <input
+                      id="password"
+                      name="password"
+                      autoComplete="current-password"
+                      className="h-[66px] w-full rounded-full border-none bg-transparent px-[24px] pr-[68px] text-[24px] text-[#1A2238] outline-none placeholder:text-[rgba(20,25,45,0.35)]"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Contrasena"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-[16px] top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-[#626B87] transition-colors hover:bg-[#EEF1F6] hover:text-[#1A2238]"
+                      aria-label={showPassword ? "Ocultar contrasena" : "Mostrar contrasena"}
+                      aria-pressed={showPassword}
+                      onClick={() => setShowPassword((prev) => !prev)}
+                    >
+                      <PasswordIcon visible={showPassword} />
+                    </button>
+                  </div>
 
                   <button
                     className="mt-[18px] h-[74px] w-full rounded-full border-none bg-[#0B1230] text-[22px] font-medium text-white transition-colors hover:cursor-pointer hover:bg-[#121B42]"
@@ -303,16 +337,27 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                   />
 
-                  <input
-                    id="password-mobile"
-                    name="password"
-                    autoComplete="current-password"
-                    className="h-[66px] w-full rounded-full border-none bg-white px-[24px] text-[24px] text-[#1A2238] outline-none placeholder:text-[rgba(20,25,45,0.35)]"
-                    type="password"
-                    placeholder="Contrasena"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
+                  <div className="relative h-[66px] w-full rounded-full bg-white">
+                    <input
+                      id="password-mobile"
+                      name="password"
+                      autoComplete="current-password"
+                      className="h-[66px] w-full rounded-full border-none bg-transparent px-[24px] pr-[68px] text-[24px] text-[#1A2238] outline-none placeholder:text-[rgba(20,25,45,0.35)]"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Contrasena"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-[16px] top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-[#626B87] transition-colors hover:bg-[#EEF1F6] hover:text-[#1A2238]"
+                      aria-label={showPassword ? "Ocultar contrasena" : "Mostrar contrasena"}
+                      aria-pressed={showPassword}
+                      onClick={() => setShowPassword((prev) => !prev)}
+                    >
+                      <PasswordIcon visible={showPassword} />
+                    </button>
+                  </div>
 
                   <button
                     className="mt-[18px] h-[74px] w-full rounded-full border-none bg-[#0B1230] text-[22px] font-medium text-white"
