@@ -116,7 +116,7 @@ export default function LoginPage() {
 
       setDesktopStep("space");
       setMobileStep("space");
-      return { ok: true as const };
+      return { ok: true as const, stores: Array.isArray(data.stores) ? data.stores : [] };
     } catch {
       return { ok: false as const, error: "Connection error (is API running on :3001?)" };
     }
@@ -154,7 +154,30 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/select-holding");
+    const stores = Array.isArray(result.stores) ? result.stores : [];
+    const preferredStore =
+      stores.find(
+        (store: { holdingName?: string; storeName?: string; holdingId?: string; storeId?: string }) =>
+          String(store.holdingName || "").trim().toLowerCase() === "tawa co"
+      ) ||
+      stores.find(
+        (store: { storeName?: string; holdingId?: string; storeId?: string }) =>
+          String(store.storeName || "").trim().length > 0
+      ) ||
+      null;
+
+    if (!preferredStore?.storeId) {
+      setDashboardError("No se encontro una tienda disponible para el dashboard.");
+      setDashboardLoading(false);
+      return;
+    }
+
+    if (preferredStore.holdingId) {
+      localStorage.setItem("selectedHoldingId", String(preferredStore.holdingId));
+    }
+    localStorage.setItem("selectedStoreId", String(preferredStore.storeId));
+
+    router.push("/store/dashboarddemarca");
     setDashboardLoading(false);
   }
 
