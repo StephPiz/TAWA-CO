@@ -1251,14 +1251,20 @@ export default function DashboardDemarcaPage() {
     const selectedStoreId = localStorage.getItem("selectedStoreId");
     if (!selectedStoreId) return;
     const baseProfile = buildDefaultWarehouseProfile(activeWarehouseCode, activeWarehouseRow?.name || activeWarehouseCode);
+    const segoviaDefaults =
+      activeWarehouseCode === "ES-SEG"
+        ? {
+            address: "Polígono Industrial, Nave 8",
+            reference: "Zona logística norte",
+            managerName: "Responsable almacén",
+            phone: "+34 900 000 000",
+            email: "warehouse.seg@demarca.local",
+          }
+        : {};
     setWarehouseProfile((prev) => ({
       ...baseProfile,
-      address: activeWarehouseCode === "ES-SEG" ? "Polígono Industrial, Nave 8" : baseProfile.address,
-      reference: activeWarehouseCode === "ES-SEG" ? "Zona logística norte" : baseProfile.reference,
-      managerName: activeWarehouseCode === "ES-SEG" ? "Responsable almacén" : baseProfile.managerName,
-      phone: activeWarehouseCode === "ES-SEG" ? "+34 900 000 000" : baseProfile.phone,
-      email: activeWarehouseCode === "ES-SEG" ? "warehouse.seg@demarca.local" : baseProfile.email,
       ...prev,
+      ...segoviaDefaults,
       code: activeWarehouseCode,
       name: activeWarehouseRow?.name || prev.name || baseProfile.name,
       countryCode: activeWarehouseRow?.countryCode || prev.countryCode || baseProfile.countryCode,
