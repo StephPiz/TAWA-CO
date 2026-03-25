@@ -694,17 +694,6 @@ export default function DashboardDemarcaPage() {
       return "Nombre de usuario";
     }
   });
-  const [userEmail] = useState(() => {
-    if (typeof window === "undefined") return "";
-    try {
-      const userRaw = localStorage.getItem("user");
-      if (!userRaw) return "";
-      const parsed = JSON.parse(userRaw) as { email?: string };
-      return String(parsed.email || "").trim().toLowerCase();
-    } catch {
-      return "";
-    }
-  });
   const [storeName] = useState(() => {
     if (typeof window === "undefined") return "demarca.";
     try {
@@ -719,7 +708,6 @@ export default function DashboardDemarcaPage() {
     }
   });
   const isTawaDashboard = true;
-  const isTawaDashboard = userEmail.endsWith("@tawaco.local");
   const [now, setNow] = useState<Date>(() => new Date());
   const warehouseLayoutByCode = useMemo(
     () => new Map(warehouseLayout.map((entry) => [entry.code, entry])),
