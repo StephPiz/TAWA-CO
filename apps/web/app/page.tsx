@@ -177,7 +177,7 @@ export default function LoginPage() {
     }
     localStorage.setItem("selectedStoreId", String(preferredStore.storeId));
 
-    router.push("/store/dashboarddemarca");
+    router.push("/store/dashboardtawa");
     setDashboardLoading(false);
   }
 
