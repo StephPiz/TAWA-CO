@@ -19,6 +19,7 @@ const bodyFont = localFont({
 type MenuItem = {
   key: string;
   label: string;
+  subLabel?: string;
   path?: string;
   emptyText?: string;
   indent?: number;
@@ -27,6 +28,16 @@ type MenuItem = {
   action?: "logout";
   warehouseCode?: string;
   warehouseView?: WarehouseTabKey;
+};
+
+type PersonalProfile = {
+  avatarUrl: string;
+  fullName: string;
+  gender: string;
+  emails: string[];
+  phones: string[];
+  birthDate: string;
+  locale: string;
 };
 
 type ProfileTabKey = "general" | "paises" | "monedas" | "almacenes" | "marketplaces" | "facturacion";
@@ -339,7 +350,7 @@ const menu: MenuItem[] = [
   { key: "finanzas", label: "Finanzas", path: "/store/payouts", isMain: true },
   { key: "tareas", label: "Tareas", path: "/store/tasks", isMain: true },
   { key: "chat", label: "Chat", path: "/store/chat", isMain: true },
-  { key: "configuracion", label: "Configuracion", path: "/store/settings", isMain: true },
+  { key: "configuracion", label: "Configuración", subLabel: "Editar perfil", path: "/store/settings", isMain: true },
   { key: "analytics", label: "Analytics", path: "/store/analytics", isMain: true },
   { key: "soporte", label: "Soporte", path: "/store/support", isMain: true },
   { key: "audit", label: "Audit", path: "/store/audit", isMain: true },
@@ -531,6 +542,28 @@ function menuIcon(key: string) {
   }
 }
 
+function personalProfileIcon(key: string) {
+  const base = "h-6 w-6";
+  switch (key) {
+    case "photo":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h4l1.5-2h5L16 7h4v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>;
+    case "name":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 20v-1a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v1" /><circle cx="12" cy="8" r="4" /></svg>;
+    case "gender":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 15a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /><path d="M12 15v6M9 19h6" /></svg>;
+    case "email":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16v10H4z" /><path d="m5 8 7 5 7-5" /></svg>;
+    case "phone":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 4h4l2 5-2.5 1.5a16 16 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2Z" /></svg>;
+    case "birth":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 3v4M17 3v4M4 9h16" /><rect x="4" y="5" width="16" height="15" rx="2" /></svg>;
+    case "locale":
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></svg>;
+    default:
+      return <svg viewBox="0 0 24 24" className={base} fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>;
+  }
+}
+
 export default function DashboardDemarcaPage() {
   const router = useRouter();
   const [activeKey, setActiveKey] = useState("dashboard");
@@ -694,6 +727,61 @@ export default function DashboardDemarcaPage() {
       return "Nombre de usuario";
     }
   });
+  const [personalProfile, setPersonalProfile] = useState<PersonalProfile>(() => {
+    if (typeof window === "undefined") {
+      return {
+        avatarUrl: "/branding/steph01.png",
+        fullName: "Stephany Pizan",
+        gender: "Femenino",
+        emails: ["stpizan@gmail.com", "stephpizandesigner@gmail.com", "stephany_303@hotmail.com"],
+        phones: ["611 19 13 24", "987 755 063"],
+        birthDate: "4 de octubre de 1993",
+        locale: "Español (Latinoamérica)",
+      };
+    }
+
+    try {
+      const savedRaw = localStorage.getItem("tawa-personal-profile");
+      if (savedRaw) {
+        const saved = JSON.parse(savedRaw) as Partial<PersonalProfile>;
+        return {
+          avatarUrl: String(saved.avatarUrl || "/branding/steph01.png"),
+          fullName: String(saved.fullName || "Stephany Pizan"),
+          gender: String(saved.gender || "Femenino"),
+          emails: Array.isArray(saved.emails) && saved.emails.length ? saved.emails.map((item) => String(item || "")) : ["stpizan@gmail.com", "stephpizandesigner@gmail.com", "stephany_303@hotmail.com"],
+          phones: Array.isArray(saved.phones) && saved.phones.length ? saved.phones.map((item) => String(item || "")) : ["611 19 13 24", "987 755 063"],
+          birthDate: String(saved.birthDate || "4 de octubre de 1993"),
+          locale: String(saved.locale || "Español (Latinoamérica)"),
+        };
+      }
+
+      const userRaw = localStorage.getItem("user");
+      const parsed = userRaw ? (JSON.parse(userRaw) as { fullName?: string; email?: string; preferredLocale?: string }) : {};
+      const fallbackEmail = String(parsed.email || "").trim();
+      return {
+        avatarUrl: "/branding/steph01.png",
+        fullName: String(parsed.fullName || "").trim() || "Stephany Pizan",
+        gender: "Femenino",
+        emails: fallbackEmail
+          ? [fallbackEmail, "stephpizandesigner@gmail.com", "stephany_303@hotmail.com"]
+          : ["stpizan@gmail.com", "stephpizandesigner@gmail.com", "stephany_303@hotmail.com"],
+        phones: ["611 19 13 24", "987 755 063"],
+        birthDate: "4 de octubre de 1993",
+        locale: String(parsed.preferredLocale || "").toLowerCase() === "en" ? "English" : "Español (Latinoamérica)",
+      };
+    } catch {
+      return {
+        avatarUrl: "/branding/steph01.png",
+        fullName: "Stephany Pizan",
+        gender: "Femenino",
+        emails: ["stpizan@gmail.com", "stephpizandesigner@gmail.com", "stephany_303@hotmail.com"],
+        phones: ["611 19 13 24", "987 755 063"],
+        birthDate: "4 de octubre de 1993",
+        locale: "Español (Latinoamérica)",
+      };
+    }
+  });
+  const [personalProfileSaveOk, setPersonalProfileSaveOk] = useState("");
   const [storeName] = useState(() => {
     if (typeof window === "undefined") return "demarca.";
     try {
@@ -1965,7 +2053,14 @@ export default function DashboardDemarcaPage() {
                         }}
                       >
                         <span className="flex items-center justify-between gap-2">
-                          <span>{item.label}</span>
+                          <span className="flex min-w-0 flex-col">
+                            <span>{item.label}</span>
+                            {item.subLabel ? (
+                              <span className={`mt-0.5 text-[11px] leading-[1.15] ${active ? "text-white/75" : "text-[#7A8298]"}`}>
+                                {item.subLabel}
+                              </span>
+                            ) : null}
+                          </span>
                           {hasChildren ? (
                             <span
                               role="button"
@@ -3692,6 +3787,233 @@ export default function DashboardDemarcaPage() {
                           <button type="button" className="mt-5 h-[48px] w-full rounded-full bg-[#0B1230] text-[15px] text-white" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
                             {scannerFlow.primaryAction}
                           </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : activeKey === "configuracion" ? (
+              <div className="h-full">
+                <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white">
+                  <div className="flex items-start justify-between px-10 pt-7">
+                    <div>
+                      <h2 className="text-[32px] leading-none text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>
+                        Información personal
+                      </h2>
+                      <p className="mt-2 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                        Edita tu perfil dentro de Tawa con el mismo lenguaje visual del dashboard.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {personalProfileSaveOk ? (
+                        <span className="text-[13px] text-[#2B7A3D]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                          {personalProfileSaveOk}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="h-[46px] rounded-full border border-[#D6DBE5] bg-white px-6 text-[15px] text-[#1A213D]"
+                        style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                        onClick={() => {
+                          if (profileEditable) {
+                            if (typeof window !== "undefined") {
+                              localStorage.setItem("tawa-personal-profile", JSON.stringify(personalProfile));
+                            }
+                            setPersonalProfileSaveOk("Perfil actualizado.");
+                            window.setTimeout(() => setPersonalProfileSaveOk(""), 2200);
+                          }
+                          setProfileEditable((prev) => !prev);
+                        }}
+                      >
+                        {profileEditable ? "Guardar cambios" : "Editar perfil"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="relative min-h-0 flex-1 overflow-y-auto rounded-b-2xl bg-[#E6E8EA] px-10 pb-10 pt-7">
+                    <div className="mx-auto max-w-[1020px]">
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-[56px_minmax(0,1fr)_88px] items-center gap-5 rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                            {personalProfileIcon("photo")}
+                          </div>
+                          <div>
+                            <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Foto de perfil</div>
+                            <div className="mt-1 text-[14px] text-[#6D748A]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                              Imagen principal que verás en el dashboard.
+                            </div>
+                          </div>
+                          <div className="justify-self-end">
+                            <Image
+                              src={personalProfile.avatarUrl}
+                              alt="Foto de perfil"
+                              width={68}
+                              height={68}
+                              className="h-[68px] w-[68px] rounded-full object-cover"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("name")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Nombre</div>
+                              {profileEditable ? (
+                                <input
+                                  value={personalProfile.fullName}
+                                  onChange={(e) => setPersonalProfile((prev) => ({ ...prev, fullName: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                />
+                              ) : (
+                                <div className="mt-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {personalProfile.fullName}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("gender")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Género</div>
+                              {profileEditable ? (
+                                <select
+                                  value={personalProfile.gender}
+                                  onChange={(e) => setPersonalProfile((prev) => ({ ...prev, gender: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full appearance-none rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                >
+                                  <option>Femenino</option>
+                                  <option>Masculino</option>
+                                  <option>No binario</option>
+                                  <option>Prefiero no decirlo</option>
+                                </select>
+                              ) : (
+                                <div className="mt-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {personalProfile.gender}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("email")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Correo electrónico</div>
+                              <div className="mt-1 space-y-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                {personalProfile.emails.map((email, index) => (
+                                  profileEditable ? (
+                                    <input
+                                      key={`personal-email-${index}`}
+                                      value={email}
+                                      onChange={(e) => {
+                                        const nextEmails = [...personalProfile.emails];
+                                        nextEmails[index] = e.target.value;
+                                        setPersonalProfile((prev) => ({ ...prev, emails: nextEmails }));
+                                      }}
+                                      className="h-[46px] w-full rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                    />
+                                  ) : (
+                                    <div key={`personal-email-${index}`}>{email}</div>
+                                  )
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("phone")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Teléfono</div>
+                              <div className="mt-1 space-y-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                {personalProfile.phones.map((phone, index) => (
+                                  profileEditable ? (
+                                    <input
+                                      key={`personal-phone-${index}`}
+                                      value={phone}
+                                      onChange={(e) => {
+                                        const nextPhones = [...personalProfile.phones];
+                                        nextPhones[index] = e.target.value;
+                                        setPersonalProfile((prev) => ({ ...prev, phones: nextPhones }));
+                                      }}
+                                      className="h-[46px] w-full rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                    />
+                                  ) : (
+                                    <div key={`personal-phone-${index}`}>{phone}</div>
+                                  )
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("birth")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Fecha de nacimiento</div>
+                              {profileEditable ? (
+                                <input
+                                  value={personalProfile.birthDate}
+                                  onChange={(e) => setPersonalProfile((prev) => ({ ...prev, birthDate: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                />
+                              ) : (
+                                <div className="mt-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {personalProfile.birthDate}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[26px] bg-white px-6 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                          <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-5">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3F4F7] text-[#2A3146]">
+                              {personalProfileIcon("locale")}
+                            </div>
+                            <div>
+                              <div className="text-[16px] text-[#121633]" style={{ fontFamily: "var(--font-dashboarddemarca-heading)" }}>Idioma</div>
+                              {profileEditable ? (
+                                <select
+                                  value={personalProfile.locale}
+                                  onChange={(e) => setPersonalProfile((prev) => ({ ...prev, locale: e.target.value }))}
+                                  className="mt-2 h-[48px] w-full appearance-none rounded-full border-none bg-[#F5F6F8] px-5 text-[15px] text-[#2B334B] outline-none"
+                                  style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}
+                                >
+                                  <option>Español (Latinoamérica)</option>
+                                  <option>Español (España)</option>
+                                  <option>English</option>
+                                  <option>Italiano</option>
+                                  <option>Português</option>
+                                </select>
+                              ) : (
+                                <div className="mt-1 text-[15px] text-[#4A5268]" style={{ fontFamily: "var(--font-dashboarddemarca-body)" }}>
+                                  {personalProfile.locale}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
