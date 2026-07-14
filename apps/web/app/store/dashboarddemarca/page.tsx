@@ -154,6 +154,7 @@ const CURRENCY_OPTIONS = [
 ];
 
 const HIDDEN_WAREHOUSE_LABELS = new Set(["ES-MAD", "IT-MIL"]);
+const DASHBOARD_DEMARCA_ACTIVE_KEY_PREFIX = "dashboarddemarca-active";
 
 function normalizeWarehouseLabel(raw: string) {
   return String(raw || "").trim().toUpperCase();
@@ -939,6 +940,20 @@ export default function DashboardDemarcaPage() {
     }
 
     try {
+      const savedActiveKey = localStorage.getItem(`${DASHBOARD_DEMARCA_ACTIVE_KEY_PREFIX}:${selectedStoreId}`);
+      if (savedActiveKey) {
+        setActiveKey(savedActiveKey);
+        if (savedActiveKey.startsWith("warehouse-")) {
+          setWarehouseTab(savedActiveKey.endsWith("-distribution") ? "distribution" : "info");
+        } else if (savedActiveKey === "es-seg-distribution") {
+          setWarehouseTab("distribution");
+        } else if (savedActiveKey === "es-seg" || savedActiveKey === "es-seg-info") {
+          setWarehouseTab("info");
+        }
+      }
+    } catch {}
+
+    try {
       const savedMonedasRaw = localStorage.getItem(`store-monedas-config:${selectedStoreId}`);
       if (savedMonedasRaw) {
         const savedMonedas = JSON.parse(savedMonedasRaw) as {
@@ -1120,6 +1135,13 @@ export default function DashboardDemarcaPage() {
       } catch {}
     })();
   }, [router, storeName]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const selectedStoreId = localStorage.getItem("selectedStoreId");
+    if (!selectedStoreId) return;
+    localStorage.setItem(`${DASHBOARD_DEMARCA_ACTIVE_KEY_PREFIX}:${selectedStoreId}`, activeKey);
+  }, [activeKey]);
 
   useEffect(() => {
     const from = String(selectedAdditionalCurrency || "").toUpperCase();
