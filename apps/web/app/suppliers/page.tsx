@@ -75,6 +75,19 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <div className="mb-2 text-[15px] text-[#3B4256]">{children}</div>;
 }
 
+function splitPhoneParts(phone: string | null) {
+  const raw = String(phone || "").trim();
+  if (!raw) return { prefix: "+86", number: "" };
+  const match = raw.match(/^(\+\S+)(?:\s+(.+))?$/);
+  if (match) {
+    return {
+      prefix: match[1] || "+86",
+      number: match[2] || "",
+    };
+  }
+  return { prefix: "+86", number: raw };
+}
+
 export default function SuppliersPage() {
   const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -83,6 +96,7 @@ export default function SuppliersPage() {
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<SupplierFormState>(EMPTY_FORM);
+  const [editingSupplierId, setEditingSupplierId] = useState("");
 
   const activeSuppliers = useMemo(() => suppliers.filter((item) => item.isActive).length, [suppliers]);
 
@@ -120,7 +134,7 @@ export default function SuppliersPage() {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  async function createSupplier(e: React.FormEvent) {
+  async function saveSupplier(e: React.FormEvent) {
     e.preventDefault();
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !form.code.trim() || !form.name.trim()) return;
@@ -135,8 +149,8 @@ export default function SuppliersPage() {
         phonePrefix || phoneNumber
           ? `${phonePrefix}${phonePrefix && phoneNumber ? " " : ""}${phoneNumber}`.trim()
           : null;
-      const res = await fetch(`${API_BASE}/suppliers`, {
-        method: "POST",
+      const res = await fetch(`${API_BASE}/suppliers${editingSupplierId ? `/${editingSupplierId}` : ""}`, {
+        method: editingSupplierId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           storeId,
@@ -156,18 +170,52 @@ export default function SuppliersPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "No se pudo crear el proveedor");
+        setError(data.error || (editingSupplierId ? "No se pudo actualizar el proveedor" : "No se pudo crear el proveedor"));
         return;
       }
 
       setForm(EMPTY_FORM);
-      setSuccess(`Proveedor ${data.supplier?.name || "creado"} agregado correctamente.`);
+      setEditingSupplierId("");
+      setSuccess(
+        editingSupplierId
+          ? `Proveedor ${data.supplier?.name || "actualizado"} actualizado correctamente.`
+          : `Proveedor ${data.supplier?.name || "creado"} agregado correctamente.`
+      );
       await loadAll(storeId, query);
     } catch {
       setError("Connection error");
     } finally {
       setSaving(false);
     }
+  }
+
+  function startEditingSupplier(supplier: Supplier) {
+    const phoneParts = splitPhoneParts(supplier.phone);
+    setEditingSupplierId(supplier.id);
+    setForm({
+      code: supplier.code || "",
+      name: supplier.name || "",
+      contactName: supplier.contactName || "",
+      contactEmail: supplier.contactEmail || "",
+      contactPhonePrefix: phoneParts.prefix,
+      contactPhoneNumber: phoneParts.number,
+      city: supplier.city || "",
+      country: supplier.country || "Turquía",
+      defaultCurrencyCode: supplier.defaultCurrencyCode || "TRY",
+      paymentMethod: supplier.paymentMethod || "Transferencia",
+      catalogUrl: supplier.catalogUrl || "",
+      vacationNote: supplier.vacationNote || "",
+      isActive: supplier.isActive,
+    });
+    setError("");
+    setSuccess("");
+  }
+
+  function cancelEditingSupplier() {
+    setEditingSupplierId("");
+    setForm(EMPTY_FORM);
+    setError("");
+    setSuccess("");
   }
 
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
@@ -206,7 +254,7 @@ export default function SuppliersPage() {
             </div>
           </div>
 
-          <form className="grid grid-cols-12 gap-6" onSubmit={createSupplier}>
+          <form className="grid grid-cols-12 gap-6" onSubmit={saveSupplier}>
             <div className="col-span-4">
               <FieldLabel>Código interno</FieldLabel>
               <input
@@ -349,12 +397,21 @@ export default function SuppliersPage() {
             </div>
 
             <div className="col-span-12 flex justify-end pt-2">
+              {editingSupplierId ? (
+                <button
+                  className="mr-3 h-[58px] rounded-full border border-[#CFD5E3] bg-white px-10 text-[20px] font-medium text-[#1D2340]"
+                  type="button"
+                  onClick={cancelEditingSupplier}
+                >
+                  Cancelar
+                </button>
+              ) : null}
               <button
                 className="h-[58px] rounded-full bg-[#0B1230] px-10 text-[20px] font-medium text-white shadow-[0_14px_26px_rgba(0,0,0,0.28)] disabled:opacity-60"
                 type="submit"
                 disabled={saving}
               >
-                {saving ? "Guardando..." : "Agregar proveedor"}
+                {saving ? "Guardando..." : editingSupplierId ? "Guardar cambios" : "Agregar proveedor"}
               </button>
             </div>
           </form>
@@ -398,12 +455,13 @@ export default function SuppliersPage() {
                   <th className="px-4 py-3 font-semibold">Moneda</th>
                   <th className="px-4 py-3 font-semibold">Pago</th>
                   <th className="px-4 py-3 font-semibold">Estado</th>
+                  <th className="px-4 py-3 font-semibold">Acciones</th>
                 </tr>
               </thead>
               <tbody className="bg-white text-[#3B4256]">
                 {suppliers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
+                    <td colSpan={9} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
                       Sin proveedores registrados.
                     </td>
                   </tr>
@@ -436,6 +494,15 @@ export default function SuppliersPage() {
                         >
                           {supplier.isActive ? "Activo" : "Inactivo"}
                         </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          className="rounded-full border border-[#CFD5E3] bg-white px-4 py-2 text-[13px] text-[#1D2340] hover:bg-[#F7F8FB]"
+                          onClick={() => startEditingSupplier(supplier)}
+                        >
+                          Editar
+                        </button>
                       </td>
                     </tr>
                   ))

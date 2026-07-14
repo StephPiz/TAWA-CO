@@ -3711,6 +3711,67 @@ app.post("/suppliers", requireAuth, async (req, res) => {
   }
 });
 
+app.put("/suppliers/:supplierId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { supplierId } = req.params;
+    const {
+      storeId,
+      code,
+      name,
+      contactName,
+      contactEmail,
+      phone,
+      city,
+      country,
+      defaultCurrencyCode,
+      paymentMethod,
+      catalogUrl,
+      vacationNote,
+      isActive,
+    } = req.body || {};
+
+    if (!storeId || !code || !name) return res.status(400).json({ error: "Missing storeId/code/name" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage suppliers" });
+
+    const existing = await prisma.supplier.findFirst({ where: { id: supplierId, storeId }, select: { id: true } });
+    if (!existing) return res.status(404).json({ error: "Supplier not found" });
+
+    const parsedCurrency = defaultCurrencyCode ? parseCurrencyCode(defaultCurrencyCode) : null;
+    if (defaultCurrencyCode && !parsedCurrency) {
+      return res.status(400).json({ error: "Invalid defaultCurrencyCode format" });
+    }
+
+    const supplier = await prisma.supplier.update({
+      where: { id: supplierId },
+      data: {
+        code: String(code).trim(),
+        name: String(name).trim(),
+        contactName: contactName || null,
+        contactEmail: contactEmail || null,
+        phone: phone || null,
+        city: city || null,
+        country: country || null,
+        defaultCurrencyCode: parsedCurrency || null,
+        paymentMethod: paymentMethod || null,
+        catalogUrl: catalogUrl || null,
+        vacationNote: vacationNote || null,
+        isActive: isActive !== undefined ? Boolean(isActive) : true,
+      },
+    });
+
+    return res.json({ supplier });
+  } catch (err) {
+    if (err?.code === "P2002") return res.status(409).json({ error: "Supplier code already exists" });
+    console.error("PUT /suppliers/:supplierId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.get("/purchases", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
