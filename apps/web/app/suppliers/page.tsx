@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Topbar from "../components/topbar";
 import { requireTokenOrRedirect } from "../lib/auth";
 import { useStorePermissions } from "../lib/access";
 
@@ -231,7 +230,12 @@ export default function SuppliersPage() {
   return (
     <div className="min-h-screen bg-[#E8EAEC] p-6">
       <div className="mx-auto max-w-7xl space-y-4">
-        <Topbar title="Proveedores" storeName={storeName} />
+        <div className="mb-2">
+          <h1 className="text-[29px] leading-none text-[#141A39]">Proveedores</h1>
+          <p className="mt-1 text-[13px] text-[#616984]">
+            {storeName ? `Tienda: ${storeName}` : "Base de proveedores para compras, seguimiento y catálogo"}
+          </p>
+        </div>
 
         {error ? <div className="rounded-xl bg-[#FDECEC] px-4 py-3 text-base text-[#B42318]">{error}</div> : null}
         {success ? <div className="rounded-xl bg-[#ECFDF3] px-4 py-3 text-base text-[#027A48]">{success}</div> : null}
