@@ -29,6 +29,7 @@ type Supplier = {
   name: string;
   contactName: string | null;
   contactEmail: string | null;
+  phone: string | null;
   city: string | null;
   country: string | null;
   defaultCurrencyCode: string | null;
@@ -43,6 +44,8 @@ type SupplierFormState = {
   name: string;
   contactName: string;
   contactEmail: string;
+  contactPhonePrefix: string;
+  contactPhoneNumber: string;
   city: string;
   country: string;
   defaultCurrencyCode: string;
@@ -57,6 +60,8 @@ const EMPTY_FORM: SupplierFormState = {
   name: "",
   contactName: "",
   contactEmail: "",
+  contactPhonePrefix: "+86",
+  contactPhoneNumber: "",
   city: "",
   country: "Turquía",
   defaultCurrencyCode: "TRY",
@@ -124,6 +129,12 @@ export default function SuppliersPage() {
     setError("");
     setSuccess("");
     try {
+      const phonePrefix = form.contactPhonePrefix.trim();
+      const phoneNumber = form.contactPhoneNumber.trim();
+      const fullPhone =
+        phonePrefix || phoneNumber
+          ? `${phonePrefix}${phonePrefix && phoneNumber ? " " : ""}${phoneNumber}`.trim()
+          : null;
       const res = await fetch(`${API_BASE}/suppliers`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -133,6 +144,7 @@ export default function SuppliersPage() {
           name: form.name.trim(),
           contactName: form.contactName.trim() || null,
           contactEmail: form.contactEmail.trim() || null,
+          phone: fullPhone,
           city: form.city.trim() || null,
           country: form.country.trim() || null,
           defaultCurrencyCode: form.defaultCurrencyCode.trim() || null,
@@ -233,6 +245,23 @@ export default function SuppliersPage() {
                 value={form.contactEmail}
                 onChange={(e) => updateForm("contactEmail", e.target.value)}
               />
+            </div>
+            <div className="col-span-4">
+              <FieldLabel>Número de contacto</FieldLabel>
+              <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3">
+                <input
+                  className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                  placeholder="+86"
+                  value={form.contactPhonePrefix}
+                  onChange={(e) => updateForm("contactPhonePrefix", e.target.value)}
+                />
+                <input
+                  className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                  placeholder="611 19 13 24"
+                  value={form.contactPhoneNumber}
+                  onChange={(e) => updateForm("contactPhoneNumber", e.target.value)}
+                />
+              </div>
             </div>
             <div className="col-span-4">
               <FieldLabel>Ciudad</FieldLabel>
@@ -393,6 +422,7 @@ export default function SuppliersPage() {
                       <td className="px-4 py-4">
                         <div>{supplier.contactName || "-"}</div>
                         <div className="mt-1 text-[13px] text-[#7B839C]">{supplier.contactEmail || "-"}</div>
+                        <div className="mt-1 text-[13px] text-[#7B839C]">{supplier.phone || "-"}</div>
                       </td>
                       <td className="px-4 py-4">{supplier.city || "-"}</td>
                       <td className="px-4 py-4">{supplier.country || "-"}</td>
