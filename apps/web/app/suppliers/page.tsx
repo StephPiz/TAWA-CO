@@ -71,7 +71,7 @@ const EMPTY_FORM: SupplierFormState = {
 };
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-2 text-[15px] text-[#3B4256]">{children}</div>;
+  return <div className="mb-1.5 text-[13px] text-[#4F5568]">{children}</div>;
 }
 
 function splitPhoneParts(phone: string | null) {
@@ -240,29 +240,57 @@ export default function SuppliersPage() {
         {error ? <div className="rounded-xl bg-[#FDECEC] px-4 py-3 text-base text-[#B42318]">{error}</div> : null}
         {success ? <div className="rounded-xl bg-[#ECFDF3] px-4 py-3 text-base text-[#027A48]">{success}</div> : null}
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="grid gap-3 md:grid-cols-[1fr_140px_140px_auto]">
             <div>
-              <h2 className="text-[32px] font-black text-[#151B43]">Agregar proveedor</h2>
-              <p className="mt-2 text-[18px] text-[#4F5568]">Crea una ficha base del proveedor para compras, seguimiento y catálogo.</p>
+              <div className="text-[20px] font-semibold text-[#131936]">Base de proveedores</div>
+              <div className="mt-1 text-[13px] text-[#5B637D]">Consulta rápida por nombre, país o código interno.</div>
             </div>
-            <div className="grid min-w-[280px] grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-[#F7F8FB] p-4">
-                <div className="text-[13px] uppercase tracking-wide text-[#7B839C]">Total</div>
-                <div className="mt-2 text-[32px] font-black text-[#151B43]">{suppliers.length}</div>
-              </div>
-              <div className="rounded-2xl bg-[#F7F8FB] p-4">
-                <div className="text-[13px] uppercase tracking-wide text-[#7B839C]">Activos</div>
-                <div className="mt-2 text-[32px] font-black text-[#151B43]">{activeSuppliers}</div>
-              </div>
+            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+              <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Total</div>
+              <div className="mt-1 text-[24px] font-semibold text-[#131936]">{suppliers.length}</div>
+            </div>
+            <div className="rounded-2xl bg-[#F7F8FB] p-4">
+              <div className="text-[12px] uppercase tracking-wide text-[#7B839C]">Activos</div>
+              <div className="mt-1 text-[24px] font-semibold text-[#131936]">{activeSuppliers}</div>
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!storeId) return;
+                void loadAll(storeId, query);
+              }}
+            >
+              <input
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] placeholder:text-[#8A91A8]"
+                placeholder="Buscar proveedor"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <button className="h-11 rounded-xl border border-[#D4D9E4] px-4 text-[14px] text-[#1D2647] hover:bg-[#F7F9FC]" type="submit">
+                Buscar
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-[20px] font-semibold text-[#131936]">{editingSupplierId ? "Editar proveedor" : "Agregar proveedor"}</h2>
+              <p className="mt-1 text-[13px] text-[#5B637D]">Crea o actualiza la ficha base del proveedor para compras, seguimiento y catálogo.</p>
+            </div>
+            <div className="rounded-full border border-[#D4D9E4] bg-[#F7F9FC] px-4 py-2 text-[13px] text-[#4F5568]">
+              {editingSupplierId ? "Modo edición activo" : "Nuevo proveedor DEMARCA"}
             </div>
           </div>
 
-          <form className="grid grid-cols-12 gap-6" onSubmit={saveSupplier}>
+          <form className="grid gap-3 md:grid-cols-12" onSubmit={saveSupplier}>
             <div className="col-span-4">
               <FieldLabel>Código interno</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="SUP-TR-002"
                 value={form.code}
                 onChange={(e) => updateForm("code", e.target.value)}
@@ -272,7 +300,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Nombre comercial</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="Proveedor Anatolia"
                 value={form.name}
                 onChange={(e) => updateForm("name", e.target.value)}
@@ -282,7 +310,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Contacto principal</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="Samantha Kaya"
                 value={form.contactName}
                 onChange={(e) => updateForm("contactName", e.target.value)}
@@ -292,7 +320,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Email de contacto</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="compras@proveedor.com"
                 value={form.contactEmail}
                 onChange={(e) => updateForm("contactEmail", e.target.value)}
@@ -302,13 +330,13 @@ export default function SuppliersPage() {
               <FieldLabel>Número de contacto</FieldLabel>
               <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3">
                 <input
-                  className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                  className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                   placeholder="+86"
                   value={form.contactPhonePrefix}
                   onChange={(e) => updateForm("contactPhonePrefix", e.target.value)}
                 />
                 <input
-                  className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                  className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                   placeholder="611 19 13 24"
                   value={form.contactPhoneNumber}
                   onChange={(e) => updateForm("contactPhoneNumber", e.target.value)}
@@ -318,7 +346,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Ciudad</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="Estambul"
                 value={form.city}
                 onChange={(e) => updateForm("city", e.target.value)}
@@ -327,7 +355,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>País</FieldLabel>
               <select
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 value={form.country}
                 onChange={(e) => updateForm("country", e.target.value)}
               >
@@ -342,7 +370,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Moneda habitual</FieldLabel>
               <select
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 value={form.defaultCurrencyCode}
                 onChange={(e) => updateForm("defaultCurrencyCode", e.target.value)}
               >
@@ -356,7 +384,7 @@ export default function SuppliersPage() {
             <div className="col-span-4">
               <FieldLabel>Método de pago</FieldLabel>
               <select
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 value={form.paymentMethod}
                 onChange={(e) => updateForm("paymentMethod", e.target.value)}
               >
@@ -371,7 +399,7 @@ export default function SuppliersPage() {
               <FieldLabel>Estado</FieldLabel>
               <button
                 type="button"
-                className={`flex h-[54px] w-full items-center justify-between rounded-full border px-5 text-[18px] ${
+                className={`flex h-11 w-full items-center justify-between rounded-xl border px-3 text-[14px] ${
                   form.isActive ? "border-[#B9E6C8] bg-[#ECFDF3] text-[#027A48]" : "border-[#E5E7EB] bg-[#F7F8FB] text-[#667085]"
                 }`}
                 onClick={() => updateForm("isActive", !form.isActive)}
@@ -384,7 +412,7 @@ export default function SuppliersPage() {
             <div className="col-span-6">
               <FieldLabel>Link tienda / catálogo</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="https://proveedor.com/catalogo"
                 value={form.catalogUrl}
                 onChange={(e) => updateForm("catalogUrl", e.target.value)}
@@ -393,17 +421,17 @@ export default function SuppliersPage() {
             <div className="col-span-6">
               <FieldLabel>Vacaciones / nota operativa</FieldLabel>
               <input
-                className="h-[54px] w-full rounded-full border border-[#D8DDEA] bg-white px-5 text-[18px] text-[#1D2340] outline-none"
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="Cerrado del 10 al 20 de agosto"
                 value={form.vacationNote}
                 onChange={(e) => updateForm("vacationNote", e.target.value)}
               />
             </div>
 
-            <div className="col-span-12 flex justify-end pt-2">
+            <div className="col-span-12 flex justify-end pt-1">
               {editingSupplierId ? (
                 <button
-                  className="mr-3 h-[58px] rounded-full border border-[#CFD5E3] bg-white px-10 text-[20px] font-medium text-[#1D2340]"
+                  className="mr-3 h-11 rounded-xl border border-[#D4D9E4] bg-white px-5 text-[14px] text-[#1D2647]"
                   type="button"
                   onClick={cancelEditingSupplier}
                 >
@@ -411,7 +439,7 @@ export default function SuppliersPage() {
                 </button>
               ) : null}
               <button
-                className="h-[58px] rounded-full bg-[#0B1230] px-10 text-[20px] font-medium text-white shadow-[0_14px_26px_rgba(0,0,0,0.28)] disabled:opacity-60"
+                className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-60"
                 type="submit"
                 disabled={saving}
               >
@@ -422,28 +450,13 @@ export default function SuppliersPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-[28px] font-black text-[#151B43]">Lista de proveedores</h3>
-              <p className="mt-1 text-[16px] text-[#667085]">Consulta rápida de estado, moneda, contacto y ciudad.</p>
+              <div className="text-[20px] font-semibold text-[#131936]">Lista de proveedores</div>
+              <div className="text-[13px] text-[#5B637D]">Consulta rápida de estado, moneda, contacto y ciudad.</div>
             </div>
-            <div className="flex w-[360px] items-center gap-3">
-              <input
-                className="h-[52px] flex-1 rounded-full border border-[#D8DDEA] bg-white px-5 text-[17px] text-[#1D2340] outline-none"
-                placeholder="Buscar proveedor"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              <button
-                type="button"
-                className="h-[52px] rounded-full border border-[#CFD5E3] bg-white px-6 text-[18px] text-[#1D2340]"
-                onClick={() => {
-                  if (!storeId) return;
-                  void loadAll(storeId, query);
-                }}
-              >
-                Buscar
-              </button>
+            <div className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#4F5568]">
+              {suppliers.length} proveedores cargados
             </div>
           </div>
 
