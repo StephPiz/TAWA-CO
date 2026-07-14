@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import localFont from "next/font/local";
-import { requireTokenOrRedirect } from "../../lib/auth";
+import { handleUnauthorized, requireTokenOrRedirect } from "../../lib/auth";
 
 const API_BASE = "http://localhost:3001";
 const headingFont = localFont({
@@ -329,6 +329,8 @@ export default function ProductDetailPage() {
         const productData = await productRes.json();
         const channelData = await channelRes.json();
 
+        if (handleUnauthorized(productRes.status) || handleUnauthorized(channelRes.status)) return;
+
         if (!productRes.ok) {
           setError(productData.error || "Error loading product");
           setProduct(null);
@@ -492,6 +494,7 @@ export default function ProductDetailPage() {
         }),
       });
       const data = await res.json();
+      if (handleUnauthorized(res.status)) return;
       if (!res.ok) throw new Error(data.error || "No se pudo guardar el producto.");
       await loadAll(storeId);
     } catch (err) {
@@ -511,6 +514,7 @@ export default function ProductDetailPage() {
       body: JSON.stringify({ storeId, ean: aliasValue.trim(), source: "manual" }),
     });
     const data = await res.json();
+    if (handleUnauthorized(res.status)) return;
     if (!res.ok) return setError(data.error || "Cannot add alias");
     setAliasValue("");
     void loadAll(storeId);
@@ -524,6 +528,7 @@ export default function ProductDetailPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json();
+    if (handleUnauthorized(res.status)) return;
     if (!res.ok) return setError(data.error || "No se pudo eliminar el alias EAN.");
     void loadAll(storeId);
   }
@@ -543,6 +548,7 @@ export default function ProductDetailPage() {
       }),
     });
     const data = await res.json();
+    if (handleUnauthorized(res.status)) return;
     if (!res.ok) return setError(data.error || "Cannot save text");
     setTextName("");
     setTextDescription("");
@@ -566,6 +572,7 @@ export default function ProductDetailPage() {
       }),
     });
     const data = await res.json();
+    if (handleUnauthorized(res.status)) return;
     if (!res.ok) return setError(data.error || "Cannot save listing");
     setChannelPrice("");
     void loadAll(storeId);
