@@ -741,6 +741,7 @@ model Supplier {
   defaultCurrencyCode String?
   paymentMethod       String?
   catalogUrl          String?
+  accessCode          String?
   vacationNote        String?
   isActive            Boolean  @default(true)
   createdAt           DateTime @default(now())

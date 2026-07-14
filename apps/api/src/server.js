@@ -3669,6 +3669,7 @@ app.post("/suppliers", requireAuth, async (req, res) => {
       defaultCurrencyCode,
       paymentMethod,
       catalogUrl,
+      accessCode,
       vacationNote,
       isActive,
     } = req.body || {};
@@ -3698,6 +3699,7 @@ app.post("/suppliers", requireAuth, async (req, res) => {
         defaultCurrencyCode: parsedCurrency || null,
         paymentMethod: paymentMethod || null,
         catalogUrl: catalogUrl || null,
+        accessCode: accessCode || null,
         vacationNote: vacationNote || null,
         isActive: isActive !== undefined ? Boolean(isActive) : true,
       },
@@ -3727,6 +3729,7 @@ app.put("/suppliers/:supplierId", requireAuth, async (req, res) => {
       defaultCurrencyCode,
       paymentMethod,
       catalogUrl,
+      accessCode,
       vacationNote,
       isActive,
     } = req.body || {};
@@ -3759,6 +3762,7 @@ app.put("/suppliers/:supplierId", requireAuth, async (req, res) => {
         defaultCurrencyCode: parsedCurrency || null,
         paymentMethod: paymentMethod || null,
         catalogUrl: catalogUrl || null,
+        accessCode: accessCode || null,
         vacationNote: vacationNote || null,
         isActive: isActive !== undefined ? Boolean(isActive) : true,
       },
