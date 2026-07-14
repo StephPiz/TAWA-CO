@@ -3834,10 +3834,6 @@ app.post("/purchases", requireAuth, async (req, res) => {
     if (!storeId || !supplierId || !poNumber) {
       return res.status(400).json({ error: "Missing storeId/supplierId/poNumber" });
     }
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "Purchase must include items" });
-    }
-
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
@@ -3850,7 +3846,8 @@ app.post("/purchases", requireAuth, async (req, res) => {
     const parsedExpectedAt = expectedAt ? parseDateInput(expectedAt) : null;
     if (!parsedOrderedAt || (expectedAt && !parsedExpectedAt)) return res.status(400).json({ error: "Invalid date values" });
 
-    for (const item of items) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+    for (const item of normalizedItems) {
       if (!item.title || !Number.isInteger(Number(item.quantityOrdered)) || Number(item.quantityOrdered) <= 0) {
         return res.status(400).json({ error: "Each item must include title and positive integer quantityOrdered" });
       }
@@ -3877,7 +3874,7 @@ app.post("/purchases", requireAuth, async (req, res) => {
       });
 
       let totalEur = 0;
-      for (const item of items) {
+      for (const item of normalizedItems) {
         const qty = Number(item.quantityOrdered);
         const unitOriginal = Number(item.unitCostOriginal);
         const fx = Number(item.fxToEur);
@@ -3929,6 +3926,98 @@ app.post("/purchases", requireAuth, async (req, res) => {
   } catch (err) {
     if (err?.code === "P2002") return res.status(409).json({ error: "PO number already exists" });
     console.error("POST /purchases error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/purchases/:purchaseId/items", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const { storeId, productId, title, ean, quantityOrdered, unitCostOriginal, currencyCode, fxToEur } = req.body || {};
+
+    if (!storeId || !title) {
+      return res.status(400).json({ error: "Missing storeId/title" });
+    }
+    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) <= 0) {
+      return res.status(400).json({ error: "Cantidad inválida" });
+    }
+    if (!isPositiveNumber(unitCostOriginal) || !isPositiveNumber(fxToEur)) {
+      return res.status(400).json({ error: "Costo unitario o FX inválido" });
+    }
+    const normalizedCurrency = parseCurrencyCode(currencyCode || "");
+    if (!normalizedCurrency) {
+      return res.status(400).json({ error: "Moneda inválida" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      select: { id: true },
+    });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    let linkedProduct = null;
+    if (productId) {
+      linkedProduct = await prisma.product.findFirst({
+        where: { id: productId, storeId },
+        select: { id: true },
+      });
+      if (!linkedProduct) return res.status(400).json({ error: "Invalid productId for store" });
+    }
+
+    const qty = Number(quantityOrdered);
+    const unitOriginal = Number(unitCostOriginal);
+    const fx = Number(fxToEur);
+    const unitEur = Number((unitOriginal * fx).toFixed(4));
+    const totalCostEur = Number((unitEur * qty).toFixed(2));
+
+    const item = await prisma.$transaction(async (tx) => {
+      const created = await tx.purchaseOrderItem.create({
+        data: {
+          storeId,
+          purchaseOrderId: purchaseId,
+          productId: linkedProduct?.id || null,
+          title: String(title).trim(),
+          ean: ean || null,
+          quantityOrdered: qty,
+          quantityReceived: 0,
+          unitCostOriginal: String(unitOriginal),
+          currencyCode: normalizedCurrency,
+          fxToEur: String(fx),
+          unitCostEurFrozen: String(unitEur),
+          totalCostEur: String(totalCostEur),
+        },
+      });
+
+      const totals = await tx.purchaseOrderItem.aggregate({
+        where: { purchaseOrderId: purchaseId },
+        _sum: { totalCostEur: true },
+      });
+
+      await tx.purchaseOrder.update({
+        where: { id: purchaseId },
+        data: { totalAmountEur: String(normalizeMoney(totals._sum.totalCostEur) || 0) },
+      });
+
+      return created;
+    });
+
+    return res.status(201).json({
+      item: {
+        ...item,
+        unitCostOriginal: normalizeMoney(item.unitCostOriginal),
+        fxToEur: normalizeMoney(item.fxToEur),
+        unitCostEurFrozen: normalizeMoney(item.unitCostEurFrozen),
+        totalCostEur: normalizeMoney(item.totalCostEur),
+      },
+    });
+  } catch (err) {
+    console.error("POST /purchases/:purchaseId/items error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });

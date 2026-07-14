@@ -24,26 +24,21 @@ type Purchase = {
   status: string;
   orderedAt: string;
   totalAmountEur: number;
+  note?: string | null;
   supplier: Supplier;
 };
-
-type Product = { id: string; ean: string; brand: string; model: string; name: string };
 
 export default function PurchasesPage() {
   const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [error, setError] = useState("");
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
 
   const [poNumber, setPoNumber] = useState("");
+  const [orderedAt, setOrderedAt] = useState(new Date().toISOString().slice(0, 10));
   const [supplierId, setSupplierId] = useState("");
-  const [productId, setProductId] = useState("");
-  const [qty, setQty] = useState("1");
-  const [unitCost, setUnitCost] = useState("0");
-  const [currency, setCurrency] = useState("EUR");
-  const [fx, setFx] = useState("1");
+  const [conceptName, setConceptName] = useState("");
   const [receiveWarehouseId, setReceiveWarehouseId] = useState("");
   const [receivingPurchaseId, setReceivingPurchaseId] = useState("");
   const [creatingPo, setCreatingPo] = useState(false);
@@ -55,21 +50,18 @@ export default function PurchasesPage() {
     setError("");
     setLoadingRows(true);
     try {
-      const [pRes, sRes, prRes, bRes] = await Promise.all([
+      const [pRes, sRes, bRes] = await Promise.all([
         fetch(`${API_BASE}/purchases?storeId=${encodeURIComponent(currentStoreId)}`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE}/suppliers?storeId=${encodeURIComponent(currentStoreId)}`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API_BASE}/products?storeId=${encodeURIComponent(currentStoreId)}`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE}/stores/${currentStoreId}/bootstrap`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       const pData = await pRes.json();
       const sData = await sRes.json();
-      const prData = await prRes.json();
       const bData = await bRes.json();
 
       if (pRes.ok) setPurchases(pData.purchases || []);
       else setError(pData.error || "Error loading purchases");
       if (sRes.ok) setSuppliers(sData.suppliers || []);
-      if (prRes.ok) setProducts(prData.products || []);
       if (bRes.ok) {
         const nextWarehouses = bData.warehouses || [];
         setWarehouses(nextWarehouses);
@@ -103,25 +95,9 @@ export default function PurchasesPage() {
   async function createPurchase(e: React.FormEvent) {
     e.preventDefault();
     const token = requireTokenOrRedirect();
-    if (!token || !storeId || !poNumber || !supplierId || !productId) return;
-    const parsedQty = Number(qty);
-    const parsedUnitCost = Number(unitCost);
-    const parsedFx = Number(fx);
-    if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
-      setError("Cantidad invalida");
-      return;
-    }
-    if (!Number.isFinite(parsedUnitCost) || parsedUnitCost <= 0) {
-      setError("Costo unitario invalido");
-      return;
-    }
-    if (!Number.isFinite(parsedFx) || parsedFx <= 0) {
-      setError("FX invalido");
-      return;
-    }
+    if (!token || !storeId || !poNumber || !supplierId) return;
 
     setCreatingPo(true);
-    const p = products.find((x) => x.id === productId);
     const res = await fetch(`${API_BASE}/purchases`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -129,17 +105,9 @@ export default function PurchasesPage() {
         storeId,
         supplierId,
         poNumber,
-        items: [
-          {
-            productId,
-            title: p?.name || `${p?.brand || ""} ${p?.model || ""}`.trim(),
-            ean: p?.ean || null,
-            quantityOrdered: parsedQty,
-            unitCostOriginal: parsedUnitCost,
-            currencyCode: currency,
-            fxToEur: parsedFx,
-          },
-        ],
+        orderedAt,
+        note: conceptName.trim() || null,
+        items: [],
       }),
     });
     const data = await res.json();
@@ -149,12 +117,9 @@ export default function PurchasesPage() {
     }
 
     setPoNumber("");
-    setProductId("");
     setSupplierId("");
-    setQty("1");
-    setUnitCost("1200");
-    setCurrency("TRY");
-    setFx("0.092");
+    setOrderedAt(new Date().toISOString().slice(0, 10));
+    setConceptName("");
     await loadAll(storeId);
     setCreatingPo(false);
   }
@@ -208,30 +173,27 @@ export default function PurchasesPage() {
 
         <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h2 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>Nuevo PO</h2>
-          <form className="grid gap-2 md:grid-cols-8" onSubmit={createPurchase}>
+          <form className="grid gap-3 md:grid-cols-5" onSubmit={createPurchase}>
             <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" placeholder="PO-2026-0002" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} required />
+            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="date" value={orderedAt} onChange={(e) => setOrderedAt(e.target.value)} required />
             <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={supplierId} onChange={(e) => setSupplierId(e.target.value)} required>
               <option value="">Proveedor</option>
               {suppliers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={productId} onChange={(e) => setProductId(e.target.value)} required>
-              <option value="">Producto</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.brand} {p.model}</option>
-              ))}
-            </select>
-            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="number" min="1" placeholder="Cantidad" value={qty} onChange={(e) => setQty(e.target.value)} />
-            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="number" min="0" step="0.0001" placeholder="Costo unitario" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
-            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none uppercase" placeholder="Moneda (EUR)" value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
-            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="number" min="0" step="0.000001" placeholder="FX a EUR" value={fx} onChange={(e) => setFx(e.target.value)} />
+            <input
+              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+              placeholder="Concepto del pedido: Relojes, Box, Pedido verano..."
+              value={conceptName}
+              onChange={(e) => setConceptName(e.target.value)}
+            />
             <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white disabled:opacity-60" type="submit" disabled={creatingPo}>
               {creatingPo ? "Creando..." : "Crear"}
             </button>
           </form>
           <div className="mt-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-            Completa proveedor, producto, cantidad, costo y FX. El PO se crea en estado inicial y luego puedes recibirlo por almacén.
+            Crea primero la cabecera del PO. Luego, dentro de Detalle, agregas las líneas del pedido con productos existentes o texto libre.
           </div>
         </div>
 
@@ -279,6 +241,7 @@ export default function PurchasesPage() {
                     </td>
                     <td className="px-3 py-2 text-[#212A45]">
                       {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
+                      {p.note ? <div className="mt-1 text-[12px] text-[#6E768E]">{p.note}</div> : null}
                     </td>
                     <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
                     <td className="px-3 py-2">

@@ -58,6 +58,7 @@ type PurchaseDetail = {
   status: string;
   orderedAt: string;
   expectedAt: string | null;
+  note?: string | null;
   trackingCode: string | null;
   trackingUrl: string | null;
   totalAmountEur: number;
@@ -69,6 +70,10 @@ type PurchaseDetail = {
     ean: string | null;
     quantityOrdered: number;
     quantityReceived: number;
+    unitCostOriginal: number;
+    currencyCode: string;
+    fxToEur: number;
+    unitCostEurFrozen: number;
     totalCostEur: number;
   }[];
   payments: {
@@ -101,6 +106,14 @@ type PurchaseDetail = {
   };
 };
 
+type ProductSuggestion = {
+  id: string;
+  ean: string;
+  brand: string;
+  model: string;
+  name: string;
+};
+
 function formatDate(date: string | null | undefined) {
   if (!date) return "-";
   const parsed = new Date(date);
@@ -120,6 +133,7 @@ export default function PurchaseDetailPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
+  const [products, setProducts] = useState<ProductSuggestion[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [status, setStatus] = useState("draft");
   const [receiveWarehouseId, setReceiveWarehouseId] = useState("");
@@ -138,6 +152,14 @@ export default function PurchaseDetailPage() {
   const [legCurrency, setLegCurrency] = useState("EUR");
   const [legFx, setLegFx] = useState("1");
   const [legStatus, setLegStatus] = useState("planned");
+  const [lineSearch, setLineSearch] = useState("");
+  const [lineProductId, setLineProductId] = useState("");
+  const [lineTitle, setLineTitle] = useState("");
+  const [lineEan, setLineEan] = useState("");
+  const [lineQty, setLineQty] = useState("1");
+  const [lineUnitCost, setLineUnitCost] = useState("0");
+  const [lineCurrency, setLineCurrency] = useState("EUR");
+  const [lineFx, setLineFx] = useState("1");
 
   const loadAll = useCallback(async (sid: string, poId: string) => {
     const token = requireTokenOrRedirect();
@@ -145,17 +167,21 @@ export default function PurchaseDetailPage() {
     setError("");
 
     try {
-      const [poRes, bootRes] = await Promise.all([
+      const [poRes, bootRes, productRes] = await Promise.all([
         fetch(`${API_BASE}/purchases/${poId}?storeId=${encodeURIComponent(sid)}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
         fetch(`${API_BASE}/stores/${sid}/bootstrap`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        fetch(`${API_BASE}/products?storeId=${encodeURIComponent(sid)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
 
       const poData = await poRes.json();
       const bootData = await bootRes.json();
+      const productData = await productRes.json();
 
       if (!poRes.ok) {
         setError(poData.error || "Error loading purchase detail");
@@ -175,6 +201,10 @@ export default function PurchaseDetailPage() {
         if (!receiveWarehouseId && nextWarehouses.length > 0) {
           setReceiveWarehouseId(nextWarehouses[0].id);
         }
+      }
+
+      if (productRes.ok) {
+        setProducts(productData.products || []);
       }
     } catch {
       setError("Connection error");
@@ -196,6 +226,26 @@ export default function PurchaseDetailPage() {
     }
     return map;
   }, [purchase]);
+
+  const productSuggestions = useMemo(() => {
+    const query = lineSearch.trim().toLowerCase();
+    if (!query) return [];
+    return products
+      .filter((product) =>
+        [product.ean, product.brand, product.model, product.name]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query))
+      )
+      .slice(0, 6);
+  }, [products, lineSearch]);
+
+  function selectSuggestion(product: ProductSuggestion) {
+    const label = `${product.brand} ${product.model}`.trim() || product.name;
+    setLineProductId(product.id);
+    setLineSearch(label);
+    setLineTitle(product.name || label);
+    setLineEan(product.ean || "");
+  }
 
   async function updateStatus() {
     const token = requireTokenOrRedirect();
@@ -371,6 +421,47 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function addPurchaseLine(e: React.FormEvent) {
+    e.preventDefault();
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId || !lineTitle.trim()) return;
+
+    setBusyAction("add_line");
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          productId: lineProductId || null,
+          title: lineTitle.trim(),
+          ean: lineEan.trim() || null,
+          quantityOrdered: Number(lineQty),
+          unitCostOriginal: Number(lineUnitCost),
+          currencyCode: lineCurrency,
+          fxToEur: Number(lineFx),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || "No se pudo agregar la línea");
+      setInfo("Línea agregada al PO");
+      setLineSearch("");
+      setLineProductId("");
+      setLineTitle("");
+      setLineEan("");
+      setLineQty("1");
+      setLineUnitCost("0");
+      setLineCurrency("EUR");
+      setLineFx("1");
+      await loadAll(storeId, purchaseId);
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
   if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
   if (!permissions.financeRead) {
@@ -406,6 +497,11 @@ export default function PurchaseDetailPage() {
                 <p className="mt-2 text-[15px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                   Proveedor: {purchase?.supplier?.name || "-"}
                 </p>
+                {purchase?.note ? (
+                  <p className="mt-2 text-[14px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Concepto: {purchase.note}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -513,6 +609,85 @@ export default function PurchaseDetailPage() {
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <h3 className="mb-2 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Agregar línea al PO</h3>
+          <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+            Escribe referencia, modelo o nombre. Si existe en catálogo te lo sugerimos; si no, puedes guardarlo como línea libre.
+          </p>
+          <form className="grid gap-3 md:grid-cols-[minmax(0,2fr)_1.1fr_0.8fr_0.8fr_0.8fr_auto]" onSubmit={addPurchaseLine}>
+            <div className="relative">
+              <input
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                placeholder="Buscar o escribir producto: AR11238, Reloj Maserati..."
+                value={lineSearch}
+                onChange={(e) => {
+                  setLineSearch(e.target.value);
+                  setLineProductId("");
+                  setLineTitle(e.target.value);
+                }}
+              />
+              {productSuggestions.length > 0 ? (
+                <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-2xl border border-[#D4D9E4] bg-white shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                  {productSuggestions.map((product) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      className="flex w-full items-start justify-between gap-3 border-b border-[#EEF1F6] px-3 py-2 text-left last:border-b-0 hover:bg-[#F7F9FC]"
+                      onClick={() => selectSuggestion(product)}
+                    >
+                      <span className="text-[14px] text-[#141A39]">{`${product.brand} ${product.model}`.trim() || product.name}</span>
+                      <span className="text-[12px] text-[#6E768E]">{product.ean}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <input
+              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+              placeholder="EAN opcional"
+              value={lineEan}
+              onChange={(e) => setLineEan(e.target.value)}
+            />
+            <input
+              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+              type="number"
+              min="1"
+              placeholder="Cant."
+              value={lineQty}
+              onChange={(e) => setLineQty(e.target.value)}
+            />
+            <input
+              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+              type="number"
+              min="0"
+              step="0.0001"
+              placeholder="Costo"
+              value={lineUnitCost}
+              onChange={(e) => setLineUnitCost(e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] uppercase outline-none"
+                placeholder="Moneda"
+                value={lineCurrency}
+                onChange={(e) => setLineCurrency(e.target.value.toUpperCase())}
+              />
+              <input
+                className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                type="number"
+                min="0"
+                step="0.000001"
+                placeholder="FX"
+                value={lineFx}
+                onChange={(e) => setLineFx(e.target.value)}
+              />
+            </div>
+            <button className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" type="submit" disabled={busyAction === "add_line"}>
+              {busyAction === "add_line" ? "..." : "Agregar línea"}
+            </button>
+          </form>
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Timeline de estado</h3>
           <div className="flex flex-wrap gap-2 mb-3">
             {STATUS_FLOW.map((step) => (
@@ -566,6 +741,9 @@ export default function PurchaseDetailPage() {
                 <tr>
                   <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
                   <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Moneda</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Costo unit.</th>
+                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Total EUR</th>
                   <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
                   <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Recibido</th>
                   <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pendiente</th>
@@ -579,6 +757,9 @@ export default function PurchaseDetailPage() {
                     <tr key={item.id} className="border-b border-[#EEF1F6] last:border-b-0">
                       <td className="px-3 py-3 text-[#25304F]">{item.title}</td>
                       <td className="px-3 py-3 text-[#626A82]">{item.ean || "-"}</td>
+                      <td className="px-3 py-3 text-[#25304F]">{item.currencyCode}</td>
+                      <td className="px-3 py-3 text-[#25304F]">{item.unitCostOriginal}</td>
+                      <td className="px-3 py-3 text-[#25304F]">{formatMoney(item.totalCostEur)}</td>
                       <td className="px-3 py-3 text-[#25304F]">{item.quantityOrdered}</td>
                       <td className="px-3 py-3 text-[#25304F]">{item.quantityReceived}</td>
                       <td className="px-3 py-3">
