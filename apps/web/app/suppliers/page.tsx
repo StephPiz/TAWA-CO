@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import localFont from "next/font/local";
 import { requireTokenOrRedirect } from "../lib/auth";
 import { useStorePermissions } from "../lib/access";
 
 const API_BASE = "http://localhost:3001";
+const headingFont = localFont({
+  src: "../fonts/HFHySans_Black.ttf",
+  variable: "--font-suppliers-heading",
+});
+const bodyFont = localFont({
+  src: "../fonts/HFHySans_Regular.ttf",
+  variable: "--font-suppliers-body",
+});
 
 const COUNTRY_OPTIONS = [
   "España",
@@ -228,11 +237,13 @@ export default function SuppliersPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#E8EAEC] p-6">
+    <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="mx-auto max-w-7xl space-y-4">
         <div className="mb-2">
-          <h1 className="text-[29px] leading-none text-[#141A39]">Proveedores</h1>
-          <p className="mt-1 text-[13px] text-[#616984]">
+          <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-suppliers-heading)" }}>
+            Proveedores
+          </h1>
+          <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-suppliers-body)" }}>
             {storeName ? `Tienda: ${storeName}` : "Base de proveedores para compras, seguimiento y catálogo"}
           </p>
         </div>
