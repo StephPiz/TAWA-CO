@@ -368,6 +368,22 @@ export default function ProductDetailPage() {
     void loadAll(selectedStoreId);
   }, [loadAll]);
 
+  useEffect(() => {
+    if (!product) {
+      setTextName("");
+      setTextDescription("");
+      return;
+    }
+
+    const selectedText =
+      product.texts.find((tx) => tx.locale === textLocale && !tx.channelId) ||
+      product.texts.find((tx) => tx.locale === textLocale) ||
+      null;
+
+    setTextName(selectedText?.publicName || "");
+    setTextDescription(selectedText?.description || "");
+  }, [product, textLocale]);
+
   function updateEditField<K extends keyof ProductEditState>(key: K, value: ProductEditState[K]) {
     setEditState((prev) => ({ ...prev, [key]: value }));
   }
@@ -1206,6 +1222,7 @@ export default function ProductDetailPage() {
                   product.texts.map((tx) => (
                     <div key={tx.id}>
                       [{tx.locale}] {tx.publicName}
+                      {tx.description ? ` - ${tx.description}` : ""}
                     </div>
                   ))
                 )}
