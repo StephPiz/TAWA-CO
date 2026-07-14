@@ -43,6 +43,7 @@ type Supplier = {
   defaultCurrencyCode: string | null;
   paymentMethod: string | null;
   catalogUrl: string | null;
+  accessCode: string | null;
   vacationNote: string | null;
   isActive: boolean;
 };
@@ -59,6 +60,7 @@ type SupplierFormState = {
   defaultCurrencyCode: string;
   paymentMethod: string;
   catalogUrl: string;
+  accessCode: string;
   vacationNote: string;
   isActive: boolean;
 };
@@ -75,6 +77,7 @@ const EMPTY_FORM: SupplierFormState = {
   defaultCurrencyCode: "TRY",
   paymentMethod: "Transferencia",
   catalogUrl: "",
+  accessCode: "",
   vacationNote: "",
   isActive: true,
 };
@@ -172,6 +175,7 @@ export default function SuppliersPage() {
           defaultCurrencyCode: form.defaultCurrencyCode.trim() || null,
           paymentMethod: form.paymentMethod.trim() || null,
           catalogUrl: form.catalogUrl.trim() || null,
+          accessCode: form.accessCode.trim() || null,
           vacationNote: form.vacationNote.trim() || null,
           isActive: form.isActive,
         }),
@@ -212,6 +216,7 @@ export default function SuppliersPage() {
       defaultCurrencyCode: supplier.defaultCurrencyCode || "TRY",
       paymentMethod: supplier.paymentMethod || "Transferencia",
       catalogUrl: supplier.catalogUrl || "",
+      accessCode: supplier.accessCode || "",
       vacationNote: supplier.vacationNote || "",
       isActive: supplier.isActive,
     });
@@ -420,13 +425,22 @@ export default function SuppliersPage() {
               </button>
             </div>
 
-            <div className="col-span-6">
+            <div className="col-span-4">
               <FieldLabel>Link tienda / catálogo</FieldLabel>
               <input
                 className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 placeholder="https://proveedor.com/catalogo"
                 value={form.catalogUrl}
                 onChange={(e) => updateForm("catalogUrl", e.target.value)}
+              />
+            </div>
+            <div className="col-span-2">
+              <FieldLabel>Código</FieldLabel>
+              <input
+                className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                placeholder="ABCD1234"
+                value={form.accessCode}
+                onChange={(e) => updateForm("accessCode", e.target.value)}
               />
             </div>
             <div className="col-span-6">
@@ -482,6 +496,7 @@ export default function SuppliersPage() {
                   <th className="px-4 py-3 font-semibold">País</th>
                   <th className="px-4 py-3 font-semibold">Moneda</th>
                   <th className="px-4 py-3 font-semibold">Pago</th>
+                  <th className="px-4 py-3 font-semibold">Código</th>
                   <th className="px-4 py-3 font-semibold">Estado</th>
                   <th className="px-4 py-3 font-semibold">Acciones</th>
                 </tr>
@@ -489,7 +504,7 @@ export default function SuppliersPage() {
               <tbody className="bg-white text-[#3B4256]">
                 {suppliers.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
+                    <td colSpan={10} className="px-4 py-10 text-center text-[16px] text-[#7B839C]">
                       Sin proveedores registrados.
                     </td>
                   </tr>
@@ -514,6 +529,7 @@ export default function SuppliersPage() {
                       <td className="px-4 py-4">{supplier.country || "-"}</td>
                       <td className="px-4 py-4">{supplier.defaultCurrencyCode || "-"}</td>
                       <td className="px-4 py-4">{supplier.paymentMethod || "-"}</td>
+                      <td className="px-4 py-4">{supplier.accessCode || "-"}</td>
                       <td className="px-4 py-4">
                         <span
                           className={`inline-flex rounded-full px-3 py-1 text-[13px] ${
