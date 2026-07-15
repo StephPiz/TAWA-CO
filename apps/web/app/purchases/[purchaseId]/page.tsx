@@ -127,6 +127,30 @@ function normalizeCatalogText(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
 
+function scoreProductSuggestion(product: ProductSuggestion, query: string) {
+  const normalizedQuery = normalizeCatalogText(query);
+  const modelRef = normalizeCatalogText(product.modelRef);
+  const model = normalizeCatalogText(product.model);
+  const name = normalizeCatalogText(product.name);
+  const brand = normalizeCatalogText(product.brand);
+  const ean = normalizeCatalogText(product.ean);
+
+  if (modelRef && modelRef === normalizedQuery) return 100;
+  if (model && model === normalizedQuery) return 95;
+  if (name && name === normalizedQuery) return 90;
+  if (ean && ean === normalizedQuery) return 85;
+  if (modelRef && modelRef.startsWith(normalizedQuery)) return 80;
+  if (model && model.startsWith(normalizedQuery)) return 70;
+  if (name && name.startsWith(normalizedQuery)) return 60;
+  if (brand && brand.startsWith(normalizedQuery)) return 50;
+  if (modelRef && modelRef.includes(normalizedQuery)) return 40;
+  if (model && model.includes(normalizedQuery)) return 35;
+  if (name && name.includes(normalizedQuery)) return 30;
+  if (brand && brand.includes(normalizedQuery)) return 20;
+  if (ean && ean.includes(normalizedQuery)) return 10;
+  return 0;
+}
+
 function formatDate(date: string | null | undefined) {
   if (!date) return "-";
   const parsed = new Date(date);
@@ -340,16 +364,15 @@ export default function PurchaseDetailPage() {
     const query = lineSearch.trim().toLowerCase();
     if (!query) return [];
     return products
-      .filter((product) =>
-        [product.ean, product.brand, product.modelRef, product.model, product.name]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(query))
-      )
+      .map((product) => ({ product, score: scoreProductSuggestion(product, query) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ product }) => product)
       .slice(0, 6);
   }, [products, lineSearch]);
 
   function selectSuggestion(product: ProductSuggestion) {
-    const label = `${product.brand} ${product.model}`.trim() || product.name;
+    const label = [product.brand, product.model, product.modelRef].filter(Boolean).join(" · ") || product.name;
     setLineProductId(product.id);
     setLineSearch(label);
     setLineTitle(product.name || label);
@@ -933,7 +956,7 @@ export default function PurchaseDetailPage() {
                       >
                         <span>
                           <span className="block text-[14px] text-[#141A39]">
-                            {product.model || product.name || "Producto"}
+                            {[product.model || product.name || "Producto", product.modelRef].filter(Boolean).join(" · ")}
                           </span>
                           <span className="mt-0.5 block text-[12px] text-[#6E768E]">
                             {[product.brand, product.ean].filter(Boolean).join(" · ")}
