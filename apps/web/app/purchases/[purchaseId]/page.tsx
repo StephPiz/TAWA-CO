@@ -146,6 +146,18 @@ function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
   return item.product?.mainImageUrl || null;
 }
 
+function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"][number]) {
+  const params = new URLSearchParams({
+    returnTo: `/store/purchases/${purchaseId}#lista-compra`,
+    prefillBrand: item.product?.brand || "",
+    prefillModel: item.product?.model || item.title || "",
+    prefillModelRef: item.product?.modelRef || item.ean || "",
+    prefillEan: item.ean || "",
+    prefillName: item.title || "",
+  });
+  return `/store/products?${params.toString()}`;
+}
+
 export default function PurchaseDetailPage() {
   const { purchaseId } = useParams<{ purchaseId: string }>();
   const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
@@ -504,7 +516,7 @@ export default function PurchaseDetailPage() {
           </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+        <div id="lista-compra" className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-3">
               <Link href="/store/purchases" className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] px-4 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -617,6 +629,8 @@ export default function PurchaseDetailPage() {
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Modelo #</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Marca</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Cantidad</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Catálogo</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Acción</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -644,6 +658,30 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="px-3 py-3 text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {item.quantityOrdered}
+                      </td>
+                      <td className="px-3 py-3">
+                        {item.productId ? (
+                          <span className="inline-flex rounded-full bg-[#E9F8EE] px-3 py-1 text-[12px] text-[#1F7A3E]">Existe</span>
+                        ) : (
+                          <span className="inline-flex rounded-full bg-[#FFF4E5] px-3 py-1 text-[12px] text-[#B54708]">Nuevo</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">
+                        {item.productId ? (
+                          <Link
+                            href={`/store/products/${item.productId}`}
+                            className="inline-flex rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]"
+                          >
+                            Ver producto
+                          </Link>
+                        ) : (
+                          <Link
+                            href={buildCreateProductHref(purchaseId, item)}
+                            className="inline-flex rounded-full bg-[#0B1230] px-3 py-2 text-[12px] text-white"
+                          >
+                            Crear producto
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   ))}

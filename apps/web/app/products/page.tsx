@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import localFont from "next/font/local";
 import { requireTokenOrRedirect } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
@@ -96,6 +97,7 @@ function productTypeLabel(type: string) {
 
 export default function ProductsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { t } = useI18n();
   const [storeId, setStoreId] = useState("");
   const [storeName, setStoreName] = useState("");
@@ -116,6 +118,14 @@ export default function ProductsPage() {
   const [internalDescription, setInternalDescription] = useState("");
   const [useInternalEan, setUseInternalEan] = useState(false);
   const [createSuccess, setCreateSuccess] = useState("");
+  const [prefillApplied, setPrefillApplied] = useState(false);
+
+  const returnTo = searchParams.get("returnTo") || "";
+  const prefillBrand = searchParams.get("prefillBrand") || "";
+  const prefillModel = searchParams.get("prefillModel") || "";
+  const prefillModelRef = searchParams.get("prefillModelRef") || "";
+  const prefillEan = searchParams.get("prefillEan") || "";
+  const prefillName = searchParams.get("prefillName") || "";
 
   const skuPreview = [slugSkuPart(brand), slugSkuPart(modelRef || model)].filter(Boolean).join("-");
   const visibleProducts = useMemo(() => {
@@ -194,6 +204,17 @@ export default function ProductsPage() {
     loadProducts(selectedStoreId, "");
   }, [router]);
 
+  useEffect(() => {
+    if (prefillApplied) return;
+    if (!prefillBrand && !prefillModel && !prefillModelRef && !prefillEan && !prefillName) return;
+    setBrand(prefillBrand);
+    setModel(prefillModel);
+    setModelRef(prefillModelRef);
+    setEan(prefillEan);
+    setProductName(prefillName);
+    setPrefillApplied(true);
+  }, [prefillApplied, prefillBrand, prefillModel, prefillModelRef, prefillEan, prefillName]);
+
   async function createProduct(e: React.FormEvent) {
     e.preventDefault();
     const token = requireTokenOrRedirect();
@@ -233,7 +254,9 @@ export default function ProductsPage() {
       setUseInternalEan(false);
       setCreateSuccess(`Producto creado con SKU ${data.product?.sku || skuPreview || "-"}`);
       await loadProducts(storeId, query);
-      router.push(`/store/products/${data.product.id}`);
+      if (!returnTo) {
+        router.push(`/store/products/${data.product.id}`);
+      }
     } catch {
       setError("Connection error");
     }
@@ -250,6 +273,18 @@ export default function ProductsPage() {
             {storeName ? `Tienda: ${storeName}` : "Catalogo maestro de productos"}
           </p>
         </div>
+
+        {returnTo ? (
+          <div className="flex items-center gap-3">
+            <Link
+              href={returnTo}
+              className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.05)]"
+            >
+              ← Volver a compras
+            </Link>
+            <div className="text-[13px] text-[#616984]">Estás creando un producto nuevo desde la lista de compra.</div>
+          </div>
+        ) : null}
 
         <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <form
@@ -350,7 +385,21 @@ export default function ProductsPage() {
             <span>Tipo: {productTypeLabel(type)}</span>
             <span>Categoria: {categoryLabel(category)}</span>
           </div>
-          {createSuccess ? <div className="mt-2 rounded-xl bg-[#ECFDF3] p-3 text-sm text-[#067647]">{createSuccess}</div> : null}
+          {createSuccess ? (
+            <div className="mt-2 rounded-xl bg-[#ECFDF3] p-3 text-sm text-[#067647]">
+              <div>{createSuccess}</div>
+              {returnTo ? (
+                <div className="mt-3">
+                  <Link
+                    href={returnTo}
+                    className="inline-flex h-10 items-center rounded-full bg-[#0B1230] px-4 text-[13px] text-white"
+                  >
+                    Volver a compras
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {error ? <div className="mt-2 rounded-xl bg-[#FDECEC] p-3 text-sm text-[#B42318]">{error}</div> : null}
         </div>
 
