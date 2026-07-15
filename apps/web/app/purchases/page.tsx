@@ -33,11 +33,11 @@ function buildPurchaseNumber(dateValue: string, supplier?: Supplier | null) {
   const compactDate = raw
     ? raw.replaceAll("-", "").slice(2)
     : new Date().toISOString().slice(0, 10).replaceAll("-", "").slice(2);
-  const supplierBase = (supplier?.code || supplier?.name || "PO")
+  const supplierBase = (supplier?.name || supplier?.code || "PO")
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const shortSupplier = supplierBase.split("-").filter(Boolean)[0]?.slice(0, 6) || "PO";
+  const shortSupplier = supplierBase.replaceAll("-", "").slice(0, 3) || "PO";
   return `PO-${compactDate}-${shortSupplier}`;
 }
 
