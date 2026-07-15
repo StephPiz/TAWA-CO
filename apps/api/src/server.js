@@ -4022,6 +4022,86 @@ app.post("/purchases/:purchaseId/items", requireAuth, async (req, res) => {
   }
 });
 
+app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId, itemId } = req.params;
+    const { storeId, quantityOrdered } = req.body || {};
+
+    if (!storeId) {
+      return res.status(400).json({ error: "Missing storeId" });
+    }
+    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) <= 0) {
+      return res.status(400).json({ error: "Cantidad inválida" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      select: { id: true },
+    });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    const existingItem = await prisma.purchaseOrderItem.findFirst({
+      where: { id: itemId, purchaseOrderId: purchaseId, storeId },
+      select: {
+        id: true,
+        quantityReceived: true,
+        unitCostEurFrozen: true,
+      },
+    });
+    if (!existingItem) return res.status(404).json({ error: "Item not found" });
+
+    const qty = Number(quantityOrdered);
+    const received = Number(existingItem.quantityReceived || 0);
+    if (qty < received) {
+      return res.status(400).json({ error: "La cantidad no puede ser menor que lo ya recibido" });
+    }
+
+    const unitEur = Number(existingItem.unitCostEurFrozen || 0);
+    const totalCostEur = Number((unitEur * qty).toFixed(2));
+
+    const item = await prisma.$transaction(async (tx) => {
+      const updated = await tx.purchaseOrderItem.update({
+        where: { id: itemId },
+        data: {
+          quantityOrdered: qty,
+          totalCostEur: String(totalCostEur),
+        },
+      });
+
+      const totals = await tx.purchaseOrderItem.aggregate({
+        where: { purchaseOrderId: purchaseId },
+        _sum: { totalCostEur: true },
+      });
+
+      await tx.purchaseOrder.update({
+        where: { id: purchaseId },
+        data: { totalAmountEur: String(normalizeMoney(totals._sum.totalCostEur) || 0) },
+      });
+
+      return updated;
+    });
+
+    return res.json({
+      item: {
+        ...item,
+        unitCostOriginal: normalizeMoney(item.unitCostOriginal),
+        fxToEur: normalizeMoney(item.fxToEur),
+        unitCostEurFrozen: normalizeMoney(item.unitCostEurFrozen),
+        totalCostEur: normalizeMoney(item.totalCostEur),
+      },
+    });
+  } catch (err) {
+    console.error("PATCH /purchases/:purchaseId/items/:itemId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;

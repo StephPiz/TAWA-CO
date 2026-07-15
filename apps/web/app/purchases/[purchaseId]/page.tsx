@@ -189,9 +189,7 @@ export default function PurchaseDetailPage() {
   const [lineTitle, setLineTitle] = useState("");
   const [lineEan, setLineEan] = useState("");
   const [lineQty, setLineQty] = useState("1");
-  const [lineUnitCost, setLineUnitCost] = useState("0");
-  const [lineCurrency, setLineCurrency] = useState("EUR");
-  const [lineFx, setLineFx] = useState("1");
+  const [qtyDraftByItem, setQtyDraftByItem] = useState<Record<string, string>>({});
 
   const loadAll = useCallback(async (sid: string, poId: string) => {
     const token = requireTokenOrRedirect();
@@ -257,6 +255,14 @@ export default function PurchaseDetailPage() {
       map[item.id] = Math.max(Number(item.quantityOrdered || 0) - Number(item.quantityReceived || 0), 0);
     }
     return map;
+  }, [purchase]);
+
+  useEffect(() => {
+    const nextDrafts: Record<string, string> = {};
+    for (const item of purchase?.items || []) {
+      nextDrafts[item.id] = String(item.quantityOrdered || 1);
+    }
+    setQtyDraftByItem(nextDrafts);
   }, [purchase]);
 
   const productSuggestions = useMemo(() => {
@@ -470,9 +476,9 @@ export default function PurchaseDetailPage() {
           title: lineTitle.trim(),
           ean: lineEan.trim() || null,
           quantityOrdered: Number(lineQty),
-          unitCostOriginal: Number(lineUnitCost),
-          currencyCode: lineCurrency,
-          fxToEur: Number(lineFx),
+          unitCostOriginal: 0.0001,
+          currencyCode: "EUR",
+          fxToEur: 1,
         }),
       });
       const data = await res.json();
@@ -483,9 +489,33 @@ export default function PurchaseDetailPage() {
       setLineTitle("");
       setLineEan("");
       setLineQty("1");
-      setLineUnitCost("0");
-      setLineCurrency("EUR");
-      setLineFx("1");
+      await loadAll(storeId, purchaseId);
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function updatePurchaseLineQty(itemId: string, nextQty: number) {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    if (!Number.isInteger(nextQty) || nextQty <= 0) return;
+
+    setBusyAction(`qty_${itemId}`);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/items/${itemId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          quantityOrdered: nextQty,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || "No se pudo actualizar la cantidad");
+      setInfo("Cantidad actualizada");
       await loadAll(storeId, purchaseId);
     } catch {
       setError("Connection error");
@@ -605,19 +635,16 @@ export default function PurchaseDetailPage() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                Lista de compra
+                Agregar línea al PO
               </h3>
               <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Aquí construyes el pedido: buscas referencias existentes, agregas nuevas líneas y dejas lista la base para exportarla al proveedor.
+                Busca una referencia existente o escribe una nueva para ir construyendo este pedido.
               </p>
-            </div>
-            <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {(purchase?.items || []).length} líneas
             </div>
           </div>
 
-          <form className="mb-5 rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
-            <div className="grid gap-3 md:grid-cols-[minmax(0,2.4fr)_1fr_0.8fr_auto]">
+          <form className="rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
+            <div className="grid gap-3 md:grid-cols-[minmax(0,2.8fr)_0.9fr_auto]">
               <div className="relative">
                 <input
                   className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
@@ -657,13 +684,6 @@ export default function PurchaseDetailPage() {
 
               <input
                 className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
-                placeholder="EAN"
-                value={lineEan}
-                onChange={(e) => setLineEan(e.target.value)}
-              />
-
-              <input
-                className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                 type="number"
                 min="1"
                 placeholder="Cantidad"
@@ -681,7 +701,7 @@ export default function PurchaseDetailPage() {
                 Si existe en catálogo, lo enlazamos aquí.
               </span>
               <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
-                Si no existe, se guarda como línea nueva para crear producto después.
+                La cantidad inicial la puedes cambiar luego en la lista de compra.
               </span>
               {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
                 <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
@@ -690,10 +710,26 @@ export default function PurchaseDetailPage() {
               ) : null}
             </div>
           </form>
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                Lista de compra
+              </h3>
+              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Aquí revisas el pedido, ajustas cantidades y dejas lista la base para exportarla al proveedor.
+              </p>
+            </div>
+            <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {(purchase?.items || []).length} líneas
+            </div>
+          </div>
 
           {(purchase?.items || []).length === 0 ? (
             <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              Aún no hay líneas en este pedido. Primero agrega los productos que quieres comprar y luego seguiremos con el PDF y el resto del flujo.
+              Aún no hay líneas en este pedido. Usa el bloque de arriba para empezar a construir la compra.
             </div>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-[#E3E7F0]">
@@ -735,8 +771,51 @@ export default function PurchaseDetailPage() {
                       <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         {item.ean || "-"}
                       </td>
-                      <td className="px-3 py-3 text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                        {item.quantityOrdered}
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                            disabled={busyAction === `qty_${item.id}` || Number(qtyDraftByItem[item.id] || item.quantityOrdered) <= 1}
+                            onClick={() => {
+                              const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                              const next = Math.max(1, current - 1);
+                              setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
+                              void updatePurchaseLineQty(item.id, next);
+                            }}
+                          >
+                            -
+                          </button>
+                          <input
+                            className="h-10 w-16 rounded-xl border border-[#D4D9E4] px-2 text-center text-[16px] font-semibold text-[#141A39] outline-none"
+                            value={qtyDraftByItem[item.id] ?? String(item.quantityOrdered)}
+                            onChange={(e) =>
+                              setQtyDraftByItem((prev) => ({
+                                ...prev,
+                                [item.id]: e.target.value.replace(/[^\d]/g, ""),
+                              }))
+                            }
+                            onBlur={() => {
+                              const next = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                              if (next > 0 && next !== item.quantityOrdered) {
+                                void updatePurchaseLineQty(item.id, next);
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                            disabled={busyAction === `qty_${item.id}`}
+                            onClick={() => {
+                              const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                              const next = current + 1;
+                              setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
+                              void updatePurchaseLineQty(item.id, next);
+                            }}
+                          >
+                            +
+                          </button>
+                        </div>
                       </td>
                       <td className="px-3 py-3">
                         {item.productId ? (
