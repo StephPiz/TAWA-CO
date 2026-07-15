@@ -3939,7 +3939,7 @@ app.post("/purchases/:purchaseId/items", requireAuth, async (req, res) => {
     if (!storeId || !title) {
       return res.status(400).json({ error: "Missing storeId/title" });
     }
-    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) <= 0) {
+    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) < 0) {
       return res.status(400).json({ error: "Cantidad inválida" });
     }
     if (!isPositiveNumber(unitCostOriginal) || !isPositiveNumber(fxToEur)) {
@@ -4058,6 +4058,30 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
 
     const qty = Number(quantityOrdered);
     const received = Number(existingItem.quantityReceived || 0);
+    if (qty === 0) {
+      if (received > 0) {
+        return res.status(400).json({ error: "No se puede eliminar una línea que ya tiene unidades recibidas" });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.purchaseOrderItem.delete({
+          where: { id: itemId },
+        });
+
+        const totals = await tx.purchaseOrderItem.aggregate({
+          where: { purchaseOrderId: purchaseId },
+          _sum: { totalCostEur: true },
+        });
+
+        await tx.purchaseOrder.update({
+          where: { id: purchaseId },
+          data: { totalAmountEur: String(normalizeMoney(totals._sum.totalCostEur) || 0) },
+        });
+      });
+
+      return res.json({ removed: true, itemId });
+    }
+
     if (qty < received) {
       return res.status(400).json({ error: "La cantidad no puede ser menor que lo ya recibido" });
     }

@@ -500,7 +500,7 @@ export default function PurchaseDetailPage() {
   async function updatePurchaseLineQty(itemId: string, nextQty: number) {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !purchaseId) return;
-    if (!Number.isInteger(nextQty) || nextQty <= 0) return;
+    if (!Number.isInteger(nextQty) || nextQty < 0) return;
 
     setBusyAction(`qty_${itemId}`);
     setError("");
@@ -515,7 +515,7 @@ export default function PurchaseDetailPage() {
       });
       const data = await res.json();
       if (!res.ok) return setError(data.error || "No se pudo actualizar la cantidad");
-      setInfo("Cantidad actualizada");
+      setInfo(nextQty === 0 ? "Línea eliminada del pedido" : "Cantidad actualizada");
       await loadAll(storeId, purchaseId);
     } catch {
       setError("Connection error");
@@ -703,6 +703,9 @@ export default function PurchaseDetailPage() {
               <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
                 La cantidad inicial la puedes cambiar luego en la lista de compra.
               </span>
+              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
+                Si pones 0 en cantidad, la línea se elimina del pedido.
+              </span>
               {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
                 <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
                   Nuevo: esta referencia no existe todavía en catálogo.
@@ -776,10 +779,10 @@ export default function PurchaseDetailPage() {
                           <button
                             type="button"
                             className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
-                            disabled={busyAction === `qty_${item.id}` || Number(qtyDraftByItem[item.id] || item.quantityOrdered) <= 1}
+                            disabled={busyAction === `qty_${item.id}`}
                             onClick={() => {
                               const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
-                              const next = Math.max(1, current - 1);
+                              const next = Math.max(0, current - 1);
                               setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
                               void updatePurchaseLineQty(item.id, next);
                             }}
@@ -796,8 +799,9 @@ export default function PurchaseDetailPage() {
                               }))
                             }
                             onBlur={() => {
-                              const next = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
-                              if (next > 0 && next !== item.quantityOrdered) {
+                              const rawValue = qtyDraftByItem[item.id];
+                              const next = rawValue === "" ? item.quantityOrdered : Number(rawValue);
+                              if (next >= 0 && next !== item.quantityOrdered) {
                                 void updatePurchaseLineQty(item.id, next);
                               }
                             }}
