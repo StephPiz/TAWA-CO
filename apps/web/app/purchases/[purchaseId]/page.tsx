@@ -586,45 +586,6 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Costo PO (EUR)</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.poCostEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Logística 3PL</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.logistics3plEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Landed cost</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.landedCostEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Ingreso estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.estimatedRevenueEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Profit estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.estimatedGrossProfitEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Margen estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
-            </div>
-          </div>
-        </div>
-
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
 
@@ -690,6 +651,45 @@ export default function PurchaseDetailPage() {
               </table>
             </div>
           )}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Costo PO (EUR)</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {formatMoney(purchase?.summary?.poCostEur)}
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Logística 3PL</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {formatMoney(purchase?.summary?.logistics3plEur)}
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Landed cost</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {formatMoney(purchase?.summary?.landedCostEur)}
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Ingreso estimado</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {formatMoney(purchase?.summary?.estimatedRevenueEur)}
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Profit estimado</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {formatMoney(purchase?.summary?.estimatedGrossProfitEur)}
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Margen estimado</div>
+            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
+            </div>
+          </div>
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
