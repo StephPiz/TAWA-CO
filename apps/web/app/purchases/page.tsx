@@ -28,6 +28,19 @@ type Purchase = {
   supplier: Supplier;
 };
 
+function buildPurchaseNumber(dateValue: string, supplier?: Supplier | null) {
+  const raw = String(dateValue || "").trim();
+  const compactDate = raw
+    ? raw.replaceAll("-", "").slice(2)
+    : new Date().toISOString().slice(0, 10).replaceAll("-", "").slice(2);
+  const supplierBase = (supplier?.code || supplier?.name || "PO")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const shortSupplier = supplierBase.split("-").filter(Boolean)[0]?.slice(0, 6) || "PO";
+  return `PO-${compactDate}-${shortSupplier}`;
+}
+
 export default function PurchasesPage() {
   const { loading, storeId, storeName, permissions, error: permissionsError } = useStorePermissions();
   const [error, setError] = useState("");
@@ -43,6 +56,11 @@ export default function PurchasesPage() {
   const [receivingPurchaseId, setReceivingPurchaseId] = useState("");
   const [creatingPo, setCreatingPo] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
+
+  useEffect(() => {
+    const selectedSupplier = suppliers.find((supplier) => supplier.id === supplierId) || null;
+    setPoNumber(buildPurchaseNumber(orderedAt, selectedSupplier));
+  }, [orderedAt, supplierId, suppliers]);
 
   const loadAll = useCallback(async (currentStoreId: string) => {
     const token = requireTokenOrRedirect();
@@ -174,7 +192,13 @@ export default function PurchasesPage() {
         <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h2 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>Nuevo PO</h2>
           <form className="grid gap-3 md:grid-cols-5" onSubmit={createPurchase}>
-            <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" placeholder="PO-2026-0002" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} required />
+            <input
+              className="h-11 rounded-xl border border-[#D4D9E4] bg-[#F7F9FC] px-3 text-[14px] text-[#25304F] outline-none"
+              placeholder="PO automático"
+              value={poNumber}
+              readOnly
+              required
+            />
             <input className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" type="date" value={orderedAt} onChange={(e) => setOrderedAt(e.target.value)} required />
             <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={supplierId} onChange={(e) => setSupplierId(e.target.value)} required>
               <option value="">Proveedor</option>
@@ -193,7 +217,7 @@ export default function PurchasesPage() {
             </button>
           </form>
           <div className="mt-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-            Crea primero la cabecera del PO. Luego, dentro de Detalle, agregas las líneas del pedido con productos existentes o texto libre.
+            El nombre del PO se genera automáticamente con la fecha y el proveedor. Primero creas la cabecera y luego, dentro de Detalle, agregas las líneas del pedido.
           </div>
         </div>
 
