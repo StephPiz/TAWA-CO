@@ -4055,7 +4055,20 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
       where: { id: purchaseId, storeId },
       include: {
         supplier: true,
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                brand: true,
+                model: true,
+                modelRef: true,
+                name: true,
+                mainImageUrl: true,
+              },
+            },
+          },
+        },
         payments: true,
         shipments3pl: { include: { legs: { orderBy: { legOrder: "asc" } } } },
       },
@@ -4107,6 +4120,7 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
           fxToEur: normalizeMoney(it.fxToEur),
           unitCostEurFrozen: normalizeMoney(it.unitCostEurFrozen),
           totalCostEur: normalizeMoney(it.totalCostEur),
+          product: it.product,
         })),
         payments: purchase.payments.map((p) => ({
           ...p,

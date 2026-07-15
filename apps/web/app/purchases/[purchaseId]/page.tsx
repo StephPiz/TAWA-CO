@@ -75,6 +75,14 @@ type PurchaseDetail = {
     fxToEur: number;
     unitCostEurFrozen: number;
     totalCostEur: number;
+    product?: {
+      id: string;
+      brand: string;
+      model: string;
+      modelRef: string | null;
+      name: string;
+      mainImageUrl: string | null;
+    } | null;
   }[];
   payments: {
     id: string;
@@ -124,6 +132,18 @@ function formatDate(date: string | null | undefined) {
 function formatMoney(value: number | null | undefined) {
   if (value == null || Number.isNaN(Number(value))) return "-";
   return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(Number(value));
+}
+
+function purchaseItemModel(item: PurchaseDetail["items"][number]) {
+  return item.product?.modelRef || item.product?.model || item.ean || item.title || "-";
+}
+
+function purchaseItemBrand(item: PurchaseDetail["items"][number]) {
+  return item.product?.brand || "-";
+}
+
+function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
+  return item.product?.mainImageUrl || null;
 }
 
 export default function PurchaseDetailPage() {
@@ -607,6 +627,70 @@ export default function PurchaseDetailPage() {
 
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                Lista de compra
+              </h3>
+              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Este bloque será la base para revisar, ordenar y luego exportar el pedido para el proveedor.
+              </p>
+            </div>
+            <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {(purchase?.items || []).length} líneas
+            </div>
+          </div>
+
+          {(purchase?.items || []).length === 0 ? (
+            <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              Aún no hay líneas en este pedido. Primero agrega los productos que quieres comprar y luego seguiremos con el PDF y el resto del flujo.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-[#E3E7F0]">
+              <table className="min-w-full text-sm">
+                <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
+                  <tr>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Foto</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Modelo #</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Marca</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Cantidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(purchase?.items || []).map((item) => (
+                    <tr key={`supplier-list-${item.id}`} className="border-b border-[#EEF1F6] last:border-b-0">
+                      <td className="px-3 py-3">
+                        {purchaseItemPhoto(item) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={purchaseItemPhoto(item) || ""}
+                            alt={item.title}
+                            className="h-20 w-20 rounded-2xl border border-[#E3E7F0] object-contain bg-white p-1"
+                          />
+                        ) : (
+                          <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-dashed border-[#D4D9E4] bg-[#F9FAFC] text-[11px] text-[#8A91A8]">
+                            Sin foto
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-[22px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {purchaseItemModel(item)}
+                      </td>
+                      <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        {purchaseItemBrand(item)}
+                      </td>
+                      <td className="px-3 py-3 text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {item.quantityOrdered}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <h3 className="mb-2 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Agregar línea al PO</h3>
