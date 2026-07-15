@@ -121,6 +121,8 @@ function ProductsPageContent() {
   const [prefillApplied, setPrefillApplied] = useState(false);
 
   const returnTo = searchParams.get("returnTo") || "";
+  const linkPurchaseId = searchParams.get("linkPurchaseId") || "";
+  const linkPurchaseItemId = searchParams.get("linkPurchaseItemId") || "";
   const prefillBrand = searchParams.get("prefillBrand") || "";
   const prefillModel = searchParams.get("prefillModel") || "";
   const prefillModelRef = searchParams.get("prefillModelRef") || "";
@@ -252,6 +254,23 @@ function ProductsPageContent() {
       setCategory("watch");
       setInternalDescription("");
       setUseInternalEan(false);
+
+      if (returnTo && linkPurchaseId && linkPurchaseItemId) {
+        const linkRes = await fetch(`${API_BASE}/purchases/${linkPurchaseId}/items/${linkPurchaseItemId}/link-product`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            storeId,
+            productId: data.product.id,
+          }),
+        });
+        const linkData = await linkRes.json();
+        if (!linkRes.ok) {
+          setError(linkData.error || "No se pudo vincular el producto al pedido");
+          return;
+        }
+      }
+
       setCreateSuccess(`Producto creado con SKU ${data.product?.sku || skuPreview || "-"}`);
       await loadProducts(storeId, query);
       if (!returnTo) {

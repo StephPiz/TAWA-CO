@@ -4126,6 +4126,55 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
   }
 });
 
+app.patch("/purchases/:purchaseId/items/:itemId/link-product", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId, itemId } = req.params;
+    const { storeId, productId } = req.body || {};
+
+    if (!storeId || !productId) {
+      return res.status(400).json({ error: "Missing storeId/productId" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      select: { id: true },
+    });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    const item = await prisma.purchaseOrderItem.findFirst({
+      where: { id: itemId, purchaseOrderId: purchaseId, storeId },
+      select: { id: true, ean: true },
+    });
+    if (!item) return res.status(404).json({ error: "Item not found" });
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, storeId },
+      select: { id: true, ean: true, name: true, modelRef: true },
+    });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    const updated = await prisma.purchaseOrderItem.update({
+      where: { id: itemId },
+      data: {
+        productId: product.id,
+        ean: item.ean || product.ean || null,
+        title: product.modelRef || product.name || undefined,
+      },
+    });
+
+    return res.json({ item: updated });
+  } catch (err) {
+    console.error("PATCH /purchases/:purchaseId/items/:itemId/link-product error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;

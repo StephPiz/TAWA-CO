@@ -149,6 +149,8 @@ function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
 function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"][number]) {
   const params = new URLSearchParams({
     returnTo: `/store/purchases/${purchaseId}#lista-compra`,
+    linkPurchaseId: purchaseId,
+    linkPurchaseItemId: item.id,
     prefillBrand: item.product?.brand || "",
     prefillModel: item.product?.model || "",
     prefillModelRef: item.product?.modelRef || item.title || item.ean || "",
@@ -190,6 +192,7 @@ export default function PurchaseDetailPage() {
   const [lineEan, setLineEan] = useState("");
   const [lineQty, setLineQty] = useState("1");
   const [qtyDraftByItem, setQtyDraftByItem] = useState<Record<string, string>>({});
+  const [lineInfoOpen, setLineInfoOpen] = useState(false);
 
   const loadAll = useCallback(async (sid: string, poId: string) => {
     const token = requireTokenOrRedirect();
@@ -633,13 +636,30 @@ export default function PurchaseDetailPage() {
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                Agregar línea al PO
-              </h3>
+            <div className="relative">
+              <div className="flex items-center gap-2">
+                <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Agregar línea al PO
+                </h3>
+                <button
+                  type="button"
+                  aria-label="Información de agregar línea al PO"
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-[#D4D9E4] bg-white text-[14px] font-semibold text-[#616984] hover:bg-[#F7F9FC]"
+                  onClick={() => setLineInfoOpen((value) => !value)}
+                >
+                  i
+                </button>
+              </div>
               <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 Busca una referencia existente o escribe una nueva para ir construyendo este pedido.
               </p>
+              {lineInfoOpen ? (
+                <div className="absolute left-0 top-[calc(100%+10px)] z-20 w-[340px] rounded-2xl border border-[#D4D9E4] bg-white p-4 text-[13px] text-[#4F5568] shadow-[0_14px_32px_rgba(0,0,0,0.12)]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  <div>Si existe en el catálogo, lo enlazamos aquí.</div>
+                  <div className="mt-2">La cantidad inicial la puedes cambiar luego en la lista de compra.</div>
+                  <div className="mt-2">Si pones 0 en cantidad, la línea se elimina del pedido.</div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -697,15 +717,6 @@ export default function PurchaseDetailPage() {
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
-                Si existe en catálogo, lo enlazamos aquí.
-              </span>
-              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
-                La cantidad inicial la puedes cambiar luego en la lista de compra.
-              </span>
-              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
-                Si pones 0 en cantidad, la línea se elimina del pedido.
-              </span>
               {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
                 <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
                   Nuevo: esta referencia no existe todavía en catálogo.
