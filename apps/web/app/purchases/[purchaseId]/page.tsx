@@ -135,7 +135,7 @@ function formatMoney(value: number | null | undefined) {
 }
 
 function purchaseItemModel(item: PurchaseDetail["items"][number]) {
-  return item.product?.modelRef || item.product?.model || item.ean || item.title || "-";
+  return item.product?.modelRef || item.product?.model || item.title || item.ean || "-";
 }
 
 function purchaseItemBrand(item: PurchaseDetail["items"][number]) {
@@ -150,10 +150,10 @@ function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"
   const params = new URLSearchParams({
     returnTo: `/store/purchases/${purchaseId}#lista-compra`,
     prefillBrand: item.product?.brand || "",
-    prefillModel: item.product?.model || item.title || "",
-    prefillModelRef: item.product?.modelRef || item.ean || "",
+    prefillModel: item.product?.model || "",
+    prefillModelRef: item.product?.modelRef || item.title || item.ean || "",
     prefillEan: item.ean || "",
-    prefillName: item.title || "",
+    prefillName: item.product?.name || item.title || "",
   });
   return `/store/products?${params.toString()}`;
 }
@@ -683,6 +683,11 @@ export default function PurchaseDetailPage() {
               <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
                 Si no existe, se guarda como línea nueva para crear producto después.
               </span>
+              {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
+                <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
+                  Nuevo: esta referencia no existe todavía en catálogo.
+                </span>
+              ) : null}
             </div>
           </form>
 
