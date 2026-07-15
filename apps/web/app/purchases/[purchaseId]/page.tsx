@@ -608,13 +608,83 @@ export default function PurchaseDetailPage() {
                 Lista de compra
               </h3>
               <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Este bloque será la base para revisar, ordenar y luego exportar el pedido para el proveedor.
+                Aquí construyes el pedido: buscas referencias existentes, agregas nuevas líneas y dejas lista la base para exportarla al proveedor.
               </p>
             </div>
             <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               {(purchase?.items || []).length} líneas
             </div>
           </div>
+
+          <form className="mb-5 rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
+            <div className="grid gap-3 md:grid-cols-[minmax(0,2.4fr)_1fr_0.8fr_auto]">
+              <div className="relative">
+                <input
+                  className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Buscar o escribir producto: AR1925, AR2434, Reloj Maserati..."
+                  value={lineSearch}
+                  onChange={(e) => {
+                    setLineSearch(e.target.value);
+                    setLineProductId("");
+                    setLineTitle(e.target.value);
+                  }}
+                />
+                {productSuggestions.length > 0 ? (
+                  <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-2xl border border-[#D4D9E4] bg-white shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                    {productSuggestions.map((product) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        className="flex w-full items-start justify-between gap-3 border-b border-[#EEF1F6] px-3 py-2 text-left last:border-b-0 hover:bg-[#F7F9FC]"
+                        onClick={() => selectSuggestion(product)}
+                      >
+                        <span>
+                          <span className="block text-[14px] text-[#141A39]">
+                            {product.model || product.name || "Producto"}
+                          </span>
+                          <span className="mt-0.5 block text-[12px] text-[#6E768E]">
+                            {[product.brand, product.ean].filter(Boolean).join(" · ")}
+                          </span>
+                        </span>
+                        <span className="rounded-full bg-[#E9F8EE] px-2 py-1 text-[11px] text-[#1F7A3E]">
+                          Existe
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <input
+                className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                placeholder="EAN"
+                value={lineEan}
+                onChange={(e) => setLineEan(e.target.value)}
+              />
+
+              <input
+                className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                type="number"
+                min="1"
+                placeholder="Cantidad"
+                value={lineQty}
+                onChange={(e) => setLineQty(e.target.value)}
+              />
+
+              <button className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" type="submit" disabled={busyAction === "add_line"}>
+                {busyAction === "add_line" ? "..." : "Agregar"}
+              </button>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
+                Si existe en catálogo, lo enlazamos aquí.
+              </span>
+              <span className="rounded-full bg-white px-3 py-1 border border-[#D4D9E4]">
+                Si no existe, se guarda como línea nueva para crear producto después.
+              </span>
+            </div>
+          </form>
 
           {(purchase?.items || []).length === 0 ? (
             <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -628,6 +698,7 @@ export default function PurchaseDetailPage() {
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Foto</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Modelo #</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Marca</th>
+                    <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">EAN</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Cantidad</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Catálogo</th>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Acción</th>
@@ -655,6 +726,9 @@ export default function PurchaseDetailPage() {
                       </td>
                       <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         {purchaseItemBrand(item)}
+                      </td>
+                      <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        {item.ean || "-"}
                       </td>
                       <td className="px-3 py-3 text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {item.quantityOrdered}
@@ -728,85 +802,6 @@ export default function PurchaseDetailPage() {
               {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
             </div>
           </div>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <h3 className="mb-2 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Agregar línea al PO</h3>
-          <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-            Escribe referencia, modelo o nombre. Si existe en catálogo te lo sugerimos; si no, puedes guardarlo como línea libre.
-          </p>
-          <form className="grid gap-3 md:grid-cols-[minmax(0,2fr)_1.1fr_0.8fr_0.8fr_0.8fr_auto]" onSubmit={addPurchaseLine}>
-            <div className="relative">
-              <input
-                className="h-11 w-full rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-                placeholder="Buscar o escribir producto: AR11238, Reloj Maserati..."
-                value={lineSearch}
-                onChange={(e) => {
-                  setLineSearch(e.target.value);
-                  setLineProductId("");
-                  setLineTitle(e.target.value);
-                }}
-              />
-              {productSuggestions.length > 0 ? (
-                <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-2xl border border-[#D4D9E4] bg-white shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
-                  {productSuggestions.map((product) => (
-                    <button
-                      key={product.id}
-                      type="button"
-                      className="flex w-full items-start justify-between gap-3 border-b border-[#EEF1F6] px-3 py-2 text-left last:border-b-0 hover:bg-[#F7F9FC]"
-                      onClick={() => selectSuggestion(product)}
-                    >
-                      <span className="text-[14px] text-[#141A39]">{`${product.brand} ${product.model}`.trim() || product.name}</span>
-                      <span className="text-[12px] text-[#6E768E]">{product.ean}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              placeholder="EAN opcional"
-              value={lineEan}
-              onChange={(e) => setLineEan(e.target.value)}
-            />
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              type="number"
-              min="1"
-              placeholder="Cant."
-              value={lineQty}
-              onChange={(e) => setLineQty(e.target.value)}
-            />
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              type="number"
-              min="0"
-              step="0.0001"
-              placeholder="Costo"
-              value={lineUnitCost}
-              onChange={(e) => setLineUnitCost(e.target.value)}
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] uppercase outline-none"
-                placeholder="Moneda"
-                value={lineCurrency}
-                onChange={(e) => setLineCurrency(e.target.value.toUpperCase())}
-              />
-              <input
-                className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-                type="number"
-                min="0"
-                step="0.000001"
-                placeholder="FX"
-                value={lineFx}
-                onChange={(e) => setLineFx(e.target.value)}
-              />
-            </div>
-            <button className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" type="submit" disabled={busyAction === "add_line"}>
-              {busyAction === "add_line" ? "..." : "Agregar línea"}
-            </button>
-          </form>
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
