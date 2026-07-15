@@ -298,6 +298,28 @@ export default function PurchaseDetailPage() {
     });
   }, [loading, storeId, purchaseId, permissions.financeRead, loadAll]);
 
+  useEffect(() => {
+    if (loading || !storeId || !purchaseId || !permissions.financeRead) return;
+
+    const reloadPurchase = () => {
+      void loadAll(storeId, purchaseId);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        reloadPurchase();
+      }
+    };
+
+    window.addEventListener("focus", reloadPurchase);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("focus", reloadPurchase);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [loading, storeId, purchaseId, permissions.financeRead, loadAll]);
+
   const pendingByItem = useMemo(() => {
     const map: Record<string, number> = {};
     for (const item of purchase?.items || []) {
@@ -319,7 +341,7 @@ export default function PurchaseDetailPage() {
     if (!query) return [];
     return products
       .filter((product) =>
-        [product.ean, product.brand, product.model, product.name]
+        [product.ean, product.brand, product.modelRef, product.model, product.name]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(query))
       )
