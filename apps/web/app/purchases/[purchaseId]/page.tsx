@@ -930,7 +930,10 @@ export default function PurchaseDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(purchase?.items || []).map((item) => (
+                  {(purchase?.items || []).map((item) => {
+                    const currentQty = Number(qtyDraftByItem[item.id] ?? item.quantityOrdered ?? 0);
+                    const showDeleteAction = listEditMode && currentQty === 0;
+                    return (
                     <tr key={`supplier-list-${item.id}`} className="border-b border-[#EEF1F6] last:border-b-0">
                       <td className="px-3 py-3">
                         {purchaseItemPhoto(item) ? (
@@ -1016,7 +1019,18 @@ export default function PurchaseDetailPage() {
                         )}
                       </td>
                       <td className="px-3 py-3">
-                        {item.productId ? (
+                        {showDeleteAction ? (
+                          <button
+                            type="button"
+                            className="inline-flex rounded-full bg-[#B42318] px-3 py-2 text-[12px] text-white disabled:opacity-50"
+                            disabled={busyAction === `qty_${item.id}`}
+                            onClick={() => {
+                              void updatePurchaseLineQty(item.id, 0);
+                            }}
+                          >
+                            Eliminar
+                          </button>
+                        ) : item.productId ? (
                           <Link
                             href={`/store/products/${item.productId}`}
                             className="inline-flex rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]"
@@ -1033,7 +1047,7 @@ export default function PurchaseDetailPage() {
                         )}
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
