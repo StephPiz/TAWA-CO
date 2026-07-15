@@ -4031,7 +4031,7 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
     if (!storeId) {
       return res.status(400).json({ error: "Missing storeId" });
     }
-    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) <= 0) {
+    if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) < 0) {
       return res.status(400).json({ error: "Cantidad inválida" });
     }
 
@@ -4122,6 +4122,59 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
     });
   } catch (err) {
     console.error("PATCH /purchases/:purchaseId/items/:itemId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.delete("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId, itemId } = req.params;
+    const storeId = String(req.query.storeId || "").trim();
+
+    if (!storeId) {
+      return res.status(400).json({ error: "Missing storeId" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      select: { id: true },
+    });
+    if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+    const existingItem = await prisma.purchaseOrderItem.findFirst({
+      where: { id: itemId, purchaseOrderId: purchaseId, storeId },
+      select: { id: true, quantityReceived: true },
+    });
+    if (!existingItem) return res.status(404).json({ error: "Item not found" });
+    if (Number(existingItem.quantityReceived || 0) > 0) {
+      return res.status(400).json({ error: "No se puede eliminar una línea que ya tiene unidades recibidas" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.purchaseOrderItem.delete({
+        where: { id: itemId },
+      });
+
+      const totals = await tx.purchaseOrderItem.aggregate({
+        where: { purchaseOrderId: purchaseId },
+        _sum: { totalCostEur: true },
+      });
+
+      await tx.purchaseOrder.update({
+        where: { id: purchaseId },
+        data: { totalAmountEur: String(normalizeMoney(totals._sum.totalCostEur) || 0) },
+      });
+    });
+
+    return res.json({ removed: true, itemId });
+  } catch (err) {
+    console.error("DELETE /purchases/:purchaseId/items/:itemId error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });

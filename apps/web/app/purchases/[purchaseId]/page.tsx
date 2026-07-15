@@ -613,6 +613,42 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function deletePurchaseLine(itemId: string) {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+
+    setBusyAction(`delete_${itemId}`);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/items/${itemId}?storeId=${encodeURIComponent(storeId)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || "No se pudo eliminar la línea");
+
+      setPurchase((prev) => {
+        if (!prev) return prev;
+        const nextItems = (prev.items || []).filter((item) => item.id !== itemId);
+        return {
+          ...prev,
+          items: nextItems,
+          totalAmountEur: nextItems.reduce((sum, item) => sum + Number(item.totalCostEur || 0), 0),
+        };
+      });
+      setQtyDraftByItem((prev) => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      setInfo("Línea eliminada del pedido");
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function sendPurchaseReviewTask() {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !purchaseId || !purchase) return;
@@ -1115,9 +1151,9 @@ export default function PurchaseDetailPage() {
                           <button
                             type="button"
                             className="inline-flex rounded-full bg-[#B42318] px-3 py-2 text-[12px] text-white disabled:opacity-50"
-                            disabled={busyAction === `qty_${item.id}`}
+                            disabled={busyAction === `qty_${item.id}` || busyAction === `delete_${item.id}`}
                             onClick={() => {
-                              void updatePurchaseLineQty(item.id, 0);
+                              void deletePurchaseLine(item.id);
                             }}
                           >
                             Eliminar
