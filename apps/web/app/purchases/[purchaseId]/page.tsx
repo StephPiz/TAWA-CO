@@ -118,9 +118,14 @@ type ProductSuggestion = {
   id: string;
   ean: string;
   brand: string;
+  modelRef?: string | null;
   model: string;
   name: string;
 };
+
+function normalizeCatalogText(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
 
 function formatDate(date: string | null | undefined) {
   if (!date) return "-";
@@ -193,6 +198,7 @@ export default function PurchaseDetailPage() {
   const [lineQty, setLineQty] = useState("1");
   const [qtyDraftByItem, setQtyDraftByItem] = useState<Record<string, string>>({});
   const [lineInfoOpen, setLineInfoOpen] = useState(false);
+  const [listEditMode, setListEditMode] = useState(false);
 
   const loadAll = useCallback(async (sid: string, poId: string) => {
     const token = requireTokenOrRedirect();
@@ -221,13 +227,6 @@ export default function PurchaseDetailPage() {
         return;
       }
 
-      const nextPurchase = poData.purchase as PurchaseDetail;
-      setPurchase(nextPurchase);
-      setStatus(nextPurchase.status);
-      setSelectedShipmentId((current) =>
-        current || (nextPurchase.shipments3pl && nextPurchase.shipments3pl.length > 0 ? nextPurchase.shipments3pl[0].id : "")
-      );
-
       if (bootRes.ok) {
         const nextWarehouses = (bootData.warehouses || []) as Warehouse[];
         setWarehouses(nextWarehouses);
@@ -236,9 +235,56 @@ export default function PurchaseDetailPage() {
         }
       }
 
+      const catalogProducts = productRes.ok ? ((productData.products || []) as ProductSuggestion[]) : [];
       if (productRes.ok) {
-        setProducts(productData.products || []);
+        setProducts(catalogProducts);
       }
+
+      let nextPurchase = poData.purchase as PurchaseDetail;
+      const unresolvedItems = (nextPurchase.items || []).filter((item) => !item.productId);
+      const relinkTargets = unresolvedItems
+        .map((item) => {
+          const itemTitle = normalizeCatalogText(item.title);
+          const itemEan = normalizeCatalogText(item.ean);
+          const match = catalogProducts.find((product) => {
+            const productModelRef = normalizeCatalogText(product.modelRef);
+            const productEan = normalizeCatalogText(product.ean);
+            const productName = normalizeCatalogText(product.name);
+            return (
+              (itemEan && productEan && itemEan === productEan) ||
+              (itemTitle && productModelRef && itemTitle === productModelRef) ||
+              (itemTitle && productName && itemTitle === productName)
+            );
+          });
+          return match ? { itemId: item.id, productId: match.id } : null;
+        })
+        .filter(Boolean) as { itemId: string; productId: string }[];
+
+      if (relinkTargets.length > 0) {
+        await Promise.all(
+          relinkTargets.map(({ itemId, productId }) =>
+            fetch(`${API_BASE}/purchases/${poId}/items/${itemId}/link-product`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ storeId: sid, productId }),
+            })
+          )
+        );
+
+        const refreshedPoRes = await fetch(`${API_BASE}/purchases/${poId}?storeId=${encodeURIComponent(sid)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const refreshedPoData = await refreshedPoRes.json();
+        if (refreshedPoRes.ok) {
+          nextPurchase = refreshedPoData.purchase as PurchaseDetail;
+        }
+      }
+
+      setPurchase(nextPurchase);
+      setStatus(nextPurchase.status);
+      setSelectedShipmentId((current) =>
+        current || (nextPurchase.shipments3pl && nextPurchase.shipments3pl.length > 0 ? nextPurchase.shipments3pl[0].id : "")
+      );
     } catch {
       setError("Connection error");
     }
@@ -527,6 +573,114 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function sendPurchaseReviewTask() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId || !purchase) return;
+
+    setBusyAction("review_task");
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          title: `Revisar y enviar pedido ${purchase.poNumber}`,
+          description: `Proveedor: ${purchase.supplier?.name || "-"}\nLíneas: ${purchase.items?.length || 0}\nConcepto: ${purchase.note || "-"}`,
+          priority: "medium",
+          linkedEntityType: "purchase_order",
+          linkedEntityId: purchaseId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || "No se pudo crear la tarea de revisión");
+      setInfo("Tarea de revisión creada correctamente");
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function downloadPurchaseCsv() {
+    if (!purchase) return;
+    const rows = [
+      ["Modelo #", "Marca", "EAN", "Cantidad", "Estado catálogo"],
+      ...(purchase.items || []).map((item) => [
+        purchaseItemModel(item),
+        purchaseItemBrand(item),
+        item.ean || "",
+        String(item.quantityOrdered || 0),
+        item.productId ? "Existe" : "Nuevo",
+      ]),
+    ];
+    const csv = rows
+      .map((row) => row.map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${purchase.poNumber || "lista-compra"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadPurchasePdf() {
+    if (!purchase) return;
+    const printWindow = window.open("", "_blank", "width=980,height=760");
+    if (!printWindow) return;
+    const rows = (purchase.items || [])
+      .map(
+        (item) => `
+          <tr>
+            <td>${purchaseItemModel(item)}</td>
+            <td>${purchaseItemBrand(item)}</td>
+            <td>${item.ean || "-"}</td>
+            <td>${item.quantityOrdered || 0}</td>
+            <td>${item.productId ? "Existe" : "Nuevo"}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${purchase.poNumber}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #141A39; }
+            h1 { margin: 0 0 8px; }
+            .meta { margin-bottom: 20px; color: #4F5568; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+            th, td { border: 1px solid #D9DDE7; padding: 10px; text-align: left; }
+            th { background: #F7F8FB; }
+          </style>
+        </head>
+        <body>
+          <h1>${purchase.poNumber}</h1>
+          <div class="meta">Proveedor: ${purchase.supplier?.name || "-"}</div>
+          <div class="meta">Concepto: ${purchase.note || "-"}</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Modelo #</th>
+                <th>Marca</th>
+                <th>EAN</th>
+                <th>Cantidad</th>
+                <th>Catálogo</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }
+
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
   if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
   if (!permissions.financeRead) {
@@ -736,8 +890,24 @@ export default function PurchaseDetailPage() {
                 Aquí revisas el pedido, ajustas cantidades y dejas lista la base para exportarla al proveedor.
               </p>
             </div>
-            <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {(purchase?.items || []).length} líneas
+            <div className="flex items-center gap-2">
+              <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {(purchase?.items || []).length} líneas
+              </div>
+              <button
+                type="button"
+                className={`rounded-full px-4 py-2 text-[12px] ${listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
+                onClick={() => setListEditMode(true)}
+              >
+                Editar
+              </button>
+              <button
+                type="button"
+                className={`rounded-full px-4 py-2 text-[12px] ${!listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
+                onClick={() => setListEditMode(false)}
+              >
+                Guardar
+              </button>
             </div>
           </div>
 
@@ -786,51 +956,57 @@ export default function PurchaseDetailPage() {
                         {item.ean || "-"}
                       </td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
-                            disabled={busyAction === `qty_${item.id}`}
-                            onClick={() => {
-                              const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
-                              const next = Math.max(0, current - 1);
-                              setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
-                              void updatePurchaseLineQty(item.id, next);
-                            }}
-                          >
-                            -
-                          </button>
-                          <input
-                            className="h-10 w-16 rounded-xl border border-[#D4D9E4] px-2 text-center text-[16px] font-semibold text-[#141A39] outline-none"
-                            value={qtyDraftByItem[item.id] ?? String(item.quantityOrdered)}
-                            onChange={(e) =>
-                              setQtyDraftByItem((prev) => ({
-                                ...prev,
-                                [item.id]: e.target.value.replace(/[^\d]/g, ""),
-                              }))
-                            }
-                            onBlur={() => {
-                              const rawValue = qtyDraftByItem[item.id];
-                              const next = rawValue === "" ? item.quantityOrdered : Number(rawValue);
-                              if (next >= 0 && next !== item.quantityOrdered) {
+                        {listEditMode ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                              disabled={busyAction === `qty_${item.id}`}
+                              onClick={() => {
+                                const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                                const next = Math.max(0, current - 1);
+                                setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
                                 void updatePurchaseLineQty(item.id, next);
+                              }}
+                            >
+                              -
+                            </button>
+                            <input
+                              className="h-10 w-16 rounded-xl border border-[#D4D9E4] px-2 text-center text-[16px] font-semibold text-[#141A39] outline-none"
+                              value={qtyDraftByItem[item.id] ?? String(item.quantityOrdered)}
+                              onChange={(e) =>
+                                setQtyDraftByItem((prev) => ({
+                                  ...prev,
+                                  [item.id]: e.target.value.replace(/[^\d]/g, ""),
+                                }))
                               }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
-                            disabled={busyAction === `qty_${item.id}`}
-                            onClick={() => {
-                              const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
-                              const next = current + 1;
-                              setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
-                              void updatePurchaseLineQty(item.id, next);
-                            }}
-                          >
-                            +
-                          </button>
-                        </div>
+                              onBlur={() => {
+                                const rawValue = qtyDraftByItem[item.id];
+                                const next = rawValue === "" ? item.quantityOrdered : Number(rawValue);
+                                if (next >= 0 && next !== item.quantityOrdered) {
+                                  void updatePurchaseLineQty(item.id, next);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                              disabled={busyAction === `qty_${item.id}`}
+                              onClick={() => {
+                                const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                                const next = current + 1;
+                                setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
+                                void updatePurchaseLineQty(item.id, next);
+                              }}
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                            {item.quantityOrdered}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-3">
                         {item.productId ? (
@@ -862,6 +1038,46 @@ export default function PurchaseDetailPage() {
               </table>
             </div>
           )}
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="mb-3">
+            <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              Acciones del pedido
+            </h3>
+            <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              Cuando la lista esté lista, puedes descargarla o enviarla a revisión antes del envío al proveedor.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F7F9FC]"
+              onClick={downloadPurchasePdf}
+            >
+              Descargar en PDF
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F7F9FC]"
+              onClick={downloadPurchaseCsv}
+            >
+              Descargar Excel
+            </button>
+            <button
+              type="button"
+              className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+              onClick={sendPurchaseReviewTask}
+              disabled={busyAction === "review_task" || !permissions.tasksWrite}
+            >
+              {busyAction === "review_task" ? "..." : "Enviar a revisión"}
+            </button>
+          </div>
+          {!permissions.tasksWrite ? (
+            <div className="mt-3 text-[12px] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              Tu usuario no tiene permiso para crear tareas de revisión.
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
