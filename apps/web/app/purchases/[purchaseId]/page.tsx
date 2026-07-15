@@ -586,8 +586,26 @@ export default function PurchaseDetailPage() {
       });
       const data = await res.json();
       if (!res.ok) return setError(data.error || "No se pudo actualizar la cantidad");
-      setInfo(nextQty === 0 ? "Línea eliminada del pedido" : "Cantidad actualizada");
-      await loadAll(storeId, purchaseId);
+      if (nextQty === 0) {
+        setPurchase((prev) => {
+          if (!prev) return prev;
+          const nextItems = (prev.items || []).filter((item) => item.id !== itemId);
+          return {
+            ...prev,
+            items: nextItems,
+            totalAmountEur: nextItems.reduce((sum, item) => sum + Number(item.totalCostEur || 0), 0),
+          };
+        });
+        setQtyDraftByItem((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+        setInfo("Línea eliminada del pedido");
+      } else {
+        setInfo("Cantidad actualizada");
+        await loadAll(storeId, purchaseId);
+      }
     } catch {
       setError("Connection error");
     } finally {
@@ -626,20 +644,33 @@ export default function PurchaseDetailPage() {
 
   function downloadPurchaseCsv() {
     if (!purchase) return;
+    const totalUnits = (purchase.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const formattedDate = purchase.orderedAt
+      ? new Date(purchase.orderedAt).toLocaleDateString("es-ES", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        }).replaceAll("/", " / ")
+      : "-";
     const rows = [
-      ["Modelo #", "Marca", "EAN", "Cantidad", "Estado catálogo"],
+      ["Date", formattedDate],
+      ["Order", String(totalUnits)],
+      [],
+      ["Photo", "Model", "Brand", "EAN", "Quantity"],
       ...(purchase.items || []).map((item) => [
+        purchaseItemPhoto(item) || "",
         purchaseItemModel(item),
         purchaseItemBrand(item),
         item.ean || "",
         String(item.quantityOrdered || 0),
-        item.productId ? "Existe" : "Nuevo",
       ]),
+      [],
+      ["", "", "", "Total quantity", String(totalUnits)],
     ];
     const csv = rows
-      .map((row) => row.map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(","))
+      .map((row) => row.map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(";"))
       .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -652,15 +683,29 @@ export default function PurchaseDetailPage() {
     if (!purchase) return;
     const printWindow = window.open("", "_blank", "width=980,height=760");
     if (!printWindow) return;
+    const totalUnits = (purchase.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const formattedDate = purchase.orderedAt
+      ? new Date(purchase.orderedAt).toLocaleDateString("es-ES", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        }).replaceAll("/", " / ")
+      : "-";
     const rows = (purchase.items || [])
       .map(
         (item) => `
           <tr>
+            <td class="photo-cell">
+              ${
+                purchaseItemPhoto(item)
+                  ? `<img src="${purchaseItemPhoto(item)}" alt="${purchaseItemModel(item)}" class="item-photo" />`
+                  : `<div class="photo-placeholder">No photo</div>`
+              }
+            </td>
             <td>${purchaseItemModel(item)}</td>
             <td>${purchaseItemBrand(item)}</td>
             <td>${item.ean || "-"}</td>
-            <td>${item.quantityOrdered || 0}</td>
-            <td>${item.productId ? "Existe" : "Nuevo"}</td>
+            <td class="qty-cell">${item.quantityOrdered || 0}</td>
           </tr>
         `
       )
@@ -672,28 +717,53 @@ export default function PurchaseDetailPage() {
           <title>${purchase.poNumber}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 24px; color: #141A39; }
-            h1 { margin: 0 0 8px; }
-            .meta { margin-bottom: 20px; color: #4F5568; }
+            h1 { margin: 0; font-size: 28px; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 24px; }
+            .meta-wrap { display: flex; gap: 14px; flex-wrap: wrap; }
+            .meta-card { min-width: 180px; border: 1px solid #D9DDE7; border-radius: 16px; padding: 14px 16px; background: #F7F8FB; }
+            .meta-label { font-size: 12px; color: #616984; text-transform: uppercase; letter-spacing: 0.04em; }
+            .meta-value { margin-top: 6px; font-size: 24px; font-weight: 700; color: #141A39; }
             table { width: 100%; border-collapse: collapse; margin-top: 16px; }
             th, td { border: 1px solid #D9DDE7; padding: 10px; text-align: left; }
             th { background: #F7F8FB; }
+            .photo-cell { width: 110px; }
+            .item-photo { width: 82px; height: 82px; object-fit: contain; display: block; margin: 0 auto; }
+            .photo-placeholder { width: 82px; height: 82px; display: flex; align-items: center; justify-content: center; margin: 0 auto; border: 1px dashed #D4D9E4; border-radius: 14px; color: #8A91A8; font-size: 11px; }
+            .qty-cell { font-weight: 700; text-align: center; }
+            .total-row td { font-weight: 700; background: #F7F8FB; }
           </style>
         </head>
         <body>
-          <h1>${purchase.poNumber}</h1>
-          <div class="meta">Proveedor: ${purchase.supplier?.name || "-"}</div>
-          <div class="meta">Concepto: ${purchase.note || "-"}</div>
+          <div class="header">
+            <h1>${purchase.poNumber}</h1>
+            <div class="meta-wrap">
+              <div class="meta-card">
+                <div class="meta-label">Date</div>
+                <div class="meta-value">${formattedDate}</div>
+              </div>
+              <div class="meta-card">
+                <div class="meta-label">Order</div>
+                <div class="meta-value">${totalUnits}</div>
+              </div>
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
-                <th>Modelo #</th>
-                <th>Marca</th>
+                <th>Photo</th>
+                <th>Model</th>
+                <th>Brand</th>
                 <th>EAN</th>
-                <th>Cantidad</th>
-                <th>Catálogo</th>
+                <th>Quantity</th>
               </tr>
             </thead>
-            <tbody>${rows}</tbody>
+            <tbody>
+              ${rows}
+              <tr class="total-row">
+                <td colspan="4">Total quantity</td>
+                <td class="qty-cell">${totalUnits}</td>
+              </tr>
+            </tbody>
           </table>
         </body>
       </html>
