@@ -46,6 +46,10 @@ type SortMode =
 
 function categoryLabel(category: string) {
   switch (String(category || "").toLowerCase()) {
+    case "box":
+      return "Box";
+    case "shopping-bag":
+      return "Shopping Bag";
     case "watch":
       return "Reloj";
     case "bag":
@@ -76,6 +80,10 @@ function slugSkuPart(value: string) {
 
 function productTypeLabel(type: string) {
   switch (String(type || "").toLowerCase()) {
+    case "box":
+      return "Box";
+    case "shopping-bag":
+      return "Shopping Bag";
     case "watch":
       return "Reloj";
     case "bag":
@@ -96,7 +104,47 @@ function productTypeLabel(type: string) {
 }
 
 function buildSuggestedProductName(category: string, brand: string, model: string, modelRef: string) {
+  if (!brand.trim() && !model.trim() && !modelRef.trim()) {
+    return "";
+  }
   return [categoryLabel(category), brand.trim(), model.trim(), modelRef.trim()].filter(Boolean).join(" ").trim();
+}
+
+function packagingKindLabel(kind: string) {
+  switch (String(kind || "").toLowerCase()) {
+    case "box":
+      return "Box";
+    case "shopping-bag":
+      return "Shopping Bag";
+    default:
+      return "Packaging";
+  }
+}
+
+function buildSuggestedPackagingName(kind: string, brand: string, model: string, modelRef: string) {
+  if (!brand.trim() && !model.trim() && !modelRef.trim()) {
+    return "";
+  }
+  return [packagingKindLabel(kind), brand.trim(), model.trim(), modelRef.trim()].filter(Boolean).join(" ").trim();
+}
+
+function isPackagingProduct(product: ProductRow) {
+  const haystack = [
+    product.name,
+    product.brand,
+    product.model,
+    product.modelRef || "",
+    product.category || "",
+    product.type || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes("box") || haystack.includes("shopping bag") || haystack.includes("shopping-bag");
+}
+
+function isMainCatalogProduct(product: ProductRow) {
+  return !isPackagingProduct(product);
 }
 
 function ProductsPageContent() {
@@ -111,6 +159,7 @@ function ProductsPageContent() {
   const [loading, setLoading] = useState(true);
   const [withImages, setWithImages] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("recent");
+  const [packagingOnly, setPackagingOnly] = useState(false);
 
   const [brand, setBrand] = useState("");
   const [model, setModel] = useState("");
@@ -124,6 +173,17 @@ function ProductsPageContent() {
   const [createSuccess, setCreateSuccess] = useState("");
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [productNameEdited, setProductNameEdited] = useState(false);
+  const [showCreateProductForm, setShowCreateProductForm] = useState(true);
+  const [packagingKind, setPackagingKind] = useState("box");
+  const [packagingBrand, setPackagingBrand] = useState("");
+  const [packagingModel, setPackagingModel] = useState("");
+  const [packagingModelRef, setPackagingModelRef] = useState("");
+  const [packagingProductName, setPackagingProductName] = useState("");
+  const [packagingEan, setPackagingEan] = useState("");
+  const [packagingUseInternalEan, setPackagingUseInternalEan] = useState(false);
+  const [packagingProductNameEdited, setPackagingProductNameEdited] = useState(false);
+  const [packagingCreateSuccess, setPackagingCreateSuccess] = useState("");
+  const [showPackagingForm, setShowPackagingForm] = useState(false);
 
   const returnTo = searchParams.get("returnTo") || "";
   const linkPurchaseId = searchParams.get("linkPurchaseId") || "";
@@ -138,8 +198,14 @@ function ProductsPageContent() {
   const suggestedProductName = useMemo(() => {
     return buildSuggestedProductName(category, brand, model, modelRef) || prefillName;
   }, [category, brand, model, modelRef, prefillName]);
+  const packagingSkuPreview = [slugSkuPart(packagingBrand), slugSkuPart(packagingModelRef || packagingModel)].filter(Boolean).join("-");
+  const packagingSuggestedProductName = useMemo(() => {
+    return buildSuggestedPackagingName(packagingKind, packagingBrand, packagingModel, packagingModelRef);
+  }, [packagingKind, packagingBrand, packagingModel, packagingModelRef]);
   const visibleProducts = useMemo(() => {
-    const rows = [...products];
+    const rows = packagingOnly
+      ? products.filter((product) => isPackagingProduct(product))
+      : products.filter((product) => isMainCatalogProduct(product));
     switch (sortMode) {
       case "oldest":
         return rows.reverse();
@@ -165,7 +231,7 @@ function ProductsPageContent() {
       default:
         return rows;
     }
-  }, [products, sortMode]);
+  }, [products, sortMode, packagingOnly]);
 
   async function loadProducts(currentStoreId: string, q: string) {
     const token = requireTokenOrRedirect();
@@ -230,6 +296,15 @@ function ProductsPageContent() {
     setProductName(suggestedProductName);
   }, [suggestedProductName, productNameEdited]);
 
+  useEffect(() => {
+    if (packagingProductNameEdited) return;
+    setPackagingProductName(packagingSuggestedProductName);
+  }, [packagingSuggestedProductName, packagingProductNameEdited]);
+
+  useEffect(() => {
+    setType(category);
+  }, [category]);
+
   async function createProduct(e: React.FormEvent) {
     e.preventDefault();
     const token = requireTokenOrRedirect();
@@ -286,6 +361,70 @@ function ProductsPageContent() {
       }
 
       setCreateSuccess(`Producto creado con SKU ${data.product?.sku || skuPreview || "-"}`);
+      setPackagingCreateSuccess("");
+      await loadProducts(storeId, query);
+      if (!returnTo) {
+        router.push(`/store/products/${data.product.id}`);
+      }
+    } catch {
+      setError("Connection error");
+    }
+  }
+
+  async function createPackagingProduct(e: React.FormEvent) {
+    e.preventDefault();
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId) return;
+    setError("");
+    setCreateSuccess("");
+    setPackagingCreateSuccess("");
+    try {
+      const res = await fetch(`${API_BASE}/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          brand: packagingBrand.trim(),
+          model: packagingModel.trim(),
+          ean: packagingUseInternalEan ? undefined : packagingEan.trim() || undefined,
+          type: "other",
+          modelRef: packagingModelRef.trim() || undefined,
+          category: packagingKind,
+          name: packagingProductName.trim() || `${packagingKindLabel(packagingKind)} ${packagingBrand.trim()} ${packagingModel.trim()} ${packagingModelRef.trim()}`.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Cannot create product");
+        return;
+      }
+
+      setPackagingBrand("");
+      setPackagingModel("");
+      setPackagingModelRef("");
+      setPackagingProductName("");
+      setPackagingProductNameEdited(false);
+      setPackagingEan("");
+      setPackagingKind("box");
+      setPackagingUseInternalEan(false);
+
+      if (returnTo && linkPurchaseId && linkPurchaseItemId) {
+        const linkRes = await fetch(`${API_BASE}/purchases/${linkPurchaseId}/items/${linkPurchaseItemId}/link-product`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            storeId,
+            productId: data.product.id,
+          }),
+        });
+        const linkData = await linkRes.json();
+        if (!linkRes.ok) {
+          setError(linkData.error || "No se pudo vincular el producto al pedido");
+          return;
+        }
+      }
+
+      setPackagingCreateSuccess(`Producto creado con SKU ${data.product?.sku || packagingSkuPreview || "-"}`);
       await loadProducts(storeId, query);
       if (!returnTo) {
         router.push(`/store/products/${data.product.id}`);
@@ -334,7 +473,7 @@ function ProductsPageContent() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <div className="self-center text-sm text-[#6E768E] md:col-span-3">{products.length} items</div>
+            <div className="self-center text-sm text-[#6E768E] md:col-span-3">{visibleProducts.length} items</div>
             <button className="h-11 rounded-xl border border-[#D4D9E4] px-4 text-[14px] text-[#1D2647] hover:bg-[#F7F9FC]" type="submit">
               {t("search")}
             </button>
@@ -342,99 +481,190 @@ function ProductsPageContent() {
         </div>
 
         <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <h2 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-products-heading)" }}>
-            Crear producto
-          </h2>
-          <form className="grid gap-2 md:grid-cols-6" onSubmit={createProduct}>
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              placeholder="Marca"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              required
-            />
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              placeholder="Modelo"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              required
-            />
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              placeholder="Modelo #"
-              value={modelRef}
-              onChange={(e) => setModelRef(e.target.value)}
-            />
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              placeholder={useInternalEan ? "EAN interno automatico" : "EAN (opcional)"}
-              value={ean}
-              onChange={(e) => setEan(e.target.value)}
-              disabled={useInternalEan}
-            />
-            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={type} onChange={(e) => setType(e.target.value)}>
-              <option value="watch">Reloj</option>
-              <option value="bag">Bolso</option>
-              <option value="perfume">Perfume</option>
-              <option value="accessory">Accesorio</option>
-              <option value="vintage">Vintage</option>
-              <option value="refurbished">Reacondicionado</option>
-              <option value="other">Otro</option>
-            </select>
-            <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white" type="submit">
-              {t("create")}
-            </button>
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2"
-              placeholder="Nombre del producto"
-              value={productName}
-              onChange={(e) => {
-                setProductNameEdited(true);
-                setProductName(e.target.value);
-              }}
-            />
-            <select
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="watch">Categoria</option>
-              <option value="bag">Bolso</option>
-              <option value="perfume">Perfume</option>
-              <option value="accessory">Accesorio</option>
-              <option value="vintage">Vintage</option>
-              <option value="refurbished">Reacondicionado</option>
-              <option value="other">Otro</option>
-            </select>
-            <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]">
-              <input type="checkbox" checked={useInternalEan} onChange={(e) => setUseInternalEan(e.target.checked)} />
-              Generar EAN interno
-            </label>
-            <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984] md:col-span-2">
-              SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{skuPreview || "Se generara al crear"}</span>
-            </div>
-          </form>
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[#6E768E]">
-            <span>Tipo: {productTypeLabel(type)}</span>
-            <span>Categoria: {categoryLabel(category)}</span>
-          </div>
-          {createSuccess ? (
-            <div className="mt-2 rounded-xl bg-[#ECFDF3] p-3 text-sm text-[#067647]">
-              <div>{createSuccess}</div>
-              {returnTo ? (
-                <div className="mt-3">
-                  <Link
-                    href={returnTo}
-                    className="inline-flex h-10 items-center rounded-full bg-[#0B1230] px-4 text-[13px] text-white"
-                  >
-                    Volver a compras
-                  </Link>
+          <button
+            type="button"
+            onClick={() => setShowCreateProductForm((value) => !value)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-products-heading)" }}>
+              Crear producto
+            </h2>
+            <span className="text-[18px] text-[#616984]">{showCreateProductForm ? "▴" : "▾"}</span>
+          </button>
+          {showCreateProductForm ? (
+            <>
+              <form className="mt-3 grid gap-2 md:grid-cols-6" onSubmit={createProduct}>
+                <select
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                >
+                  <option value="watch">Categoria</option>
+                  <option value="bag">Bolso</option>
+                  <option value="perfume">Perfume</option>
+                  <option value="accessory">Accesorio</option>
+                  <option value="vintage">Vintage</option>
+                  <option value="refurbished">Reacondicionado</option>
+                  <option value="other">Otro</option>
+                </select>
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Marca"
+                  value={brand}
+                  onChange={(e) => setBrand(e.target.value)}
+                  required
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Modelo"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  required
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Modelo #"
+                  value={modelRef}
+                  onChange={(e) => setModelRef(e.target.value)}
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder={useInternalEan ? "EAN interno automatico" : "EAN (opcional)"}
+                  value={ean}
+                  onChange={(e) => setEan(e.target.value)}
+                  disabled={useInternalEan}
+                />
+                <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]">
+                  <input type="checkbox" checked={useInternalEan} onChange={(e) => setUseInternalEan(e.target.checked)} />
+                  Generar EAN interno
+                </label>
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-3"
+                  placeholder="Nombre del producto"
+                  value={productName}
+                  onChange={(e) => {
+                    setProductNameEdited(true);
+                    setProductName(e.target.value);
+                  }}
+                />
+                <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984] md:col-span-2">
+                  SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{skuPreview || "Se generara al crear"}</span>
+                </div>
+                <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white" type="submit">
+                  {t("create")}
+                </button>
+              </form>
+              {createSuccess ? (
+                <div className="mt-2 rounded-xl bg-[#ECFDF3] p-3 text-sm text-[#067647]">
+                  <div>{createSuccess}</div>
+                  {returnTo ? (
+                    <div className="mt-3">
+                      <Link
+                        href={returnTo}
+                        className="inline-flex h-10 items-center rounded-full bg-[#0B1230] px-4 text-[13px] text-white"
+                      >
+                        Volver a compras
+                      </Link>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
-            </div>
+            </>
           ) : null}
           {error ? <div className="mt-2 rounded-xl bg-[#FDECEC] p-3 text-sm text-[#B42318]">{error}</div> : null}
+        </div>
+
+        <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <button
+            type="button"
+            onClick={() => setShowPackagingForm((value) => !value)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-products-heading)" }}>
+              Crear Box / Shopping Bag
+            </h2>
+            <span className="text-[18px] text-[#616984]">{showPackagingForm ? "▴" : "▾"}</span>
+          </button>
+
+          {showPackagingForm ? (
+            <>
+              <form className="mt-3 grid gap-2 md:grid-cols-6" onSubmit={createPackagingProduct}>
+                <select
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  value={packagingKind}
+                  onChange={(e) => setPackagingKind(e.target.value)}
+                >
+                  <option value="box">Box</option>
+                  <option value="shopping-bag">Shopping Bag</option>
+                </select>
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Marca"
+                  value={packagingBrand}
+                  onChange={(e) => setPackagingBrand(e.target.value)}
+                  required
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Modelo"
+                  value={packagingModel}
+                  onChange={(e) => setPackagingModel(e.target.value)}
+                  required
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Modelo #"
+                  value={packagingModelRef}
+                  onChange={(e) => setPackagingModelRef(e.target.value)}
+                />
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+                  placeholder={packagingUseInternalEan ? "EAN interno automatico" : "EAN (opcional)"}
+                  value={packagingEan}
+                  onChange={(e) => setPackagingEan(e.target.value)}
+                  disabled={packagingUseInternalEan}
+                />
+                <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]">
+                  <input
+                    type="checkbox"
+                    checked={packagingUseInternalEan}
+                    onChange={(e) => setPackagingUseInternalEan(e.target.checked)}
+                  />
+                  Generar EAN interno
+                </label>
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-3"
+                  placeholder="Nombre del producto"
+                  value={packagingProductName}
+                  onChange={(e) => {
+                    setPackagingProductNameEdited(true);
+                    setPackagingProductName(e.target.value);
+                  }}
+                />
+                <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984] md:col-span-2">
+                  SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{packagingSkuPreview || "Se generara al crear"}</span>
+                </div>
+                <button className="h-11 rounded-xl bg-[#0B1230] px-3 text-[14px] text-white" type="submit">
+                  {t("create")}
+                </button>
+              </form>
+              {packagingCreateSuccess ? (
+                <div className="mt-2 rounded-xl bg-[#ECFDF3] p-3 text-sm text-[#067647]">
+                  <div>{packagingCreateSuccess}</div>
+                  {returnTo ? (
+                    <div className="mt-3">
+                      <Link
+                        href={returnTo}
+                        className="inline-flex h-10 items-center rounded-full bg-[#0B1230] px-4 text-[13px] text-white"
+                      >
+                        Volver a compras
+                      </Link>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : null}
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -453,12 +683,21 @@ function ProductsPageContent() {
               >
                 {withImages ? "👁 Ocultar imagen" : "👁 Mostrar imagen"}
               </button>
+              <button
+                className={`h-10 rounded-full border px-4 text-[13px] ${
+                  packagingOnly ? "border-[#0B1230] bg-[#0B1230] text-white" : "border-[#D4D9E4] bg-white text-[#1D2647] hover:bg-[#F7F9FC]"
+                }`}
+                type="button"
+                onClick={() => setPackagingOnly((value) => !value)}
+              >
+                {packagingOnly ? "Productos" : "Box / SB"}
+              </button>
               <select
                 className="h-10 rounded-full border border-[#D4D9E4] bg-white px-4 text-[13px] text-[#1D2647] outline-none"
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value as SortMode)}
               >
-                <option value="recent">Cómo filtrar y ordenar: Últimos creados</option>
+                <option value="recent">Filtros</option>
                 <option value="oldest">Cómo filtrar y ordenar: Primeros creados</option>
                 <option value="brand-asc">Marca A - Z</option>
                 <option value="brand-desc">Marca Z - A</option>

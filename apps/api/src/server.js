@@ -6669,6 +6669,45 @@ app.put("/products/:productId", requireAuth, async (req, res) => {
   }
 });
 
+app.delete("/products/:productId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { productId } = req.params;
+    const storeId = String(req.query.storeId || "");
+
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManageCatalog(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage products" });
+
+    const existing = await prisma.product.findFirst({
+      where: { id: productId, storeId },
+      select: { id: true, name: true },
+    });
+    if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    const [lotsCount, movementsCount, receptionsCount] = await Promise.all([
+      prisma.inventoryLot.count({ where: { productId, storeId } }),
+      prisma.inventoryMovement.count({ where: { productId, storeId } }),
+      prisma.purchaseOrderItem.count({ where: { productId, storeId, quantityReceived: { gt: 0 } } }),
+    ]);
+
+    if (lotsCount > 0 || movementsCount > 0 || receptionsCount > 0) {
+      return res.status(409).json({
+        error: "No se puede eliminar este producto porque ya tiene stock, movimientos o recepciones registradas.",
+      });
+    }
+
+    await prisma.product.delete({ where: { id: productId } });
+    return res.json({ removed: true, productId, name: existing.name || null });
+  } catch (err) {
+    console.error("DELETE /products/:productId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.post("/products/:productId/ean-aliases", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;

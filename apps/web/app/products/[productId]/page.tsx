@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import localFont from "next/font/local";
 import { handleUnauthorized, requireTokenOrRedirect } from "../../lib/auth";
 
@@ -212,6 +212,7 @@ function buildEditState(nextProduct: ProductPayload): ProductEditState {
 }
 
 export default function ProductDetailPage() {
+  const router = useRouter();
   const { productId } = useParams<{ productId: string }>();
   const [storeId, setStoreId] = useState("");
   const [storeName, setStoreName] = useState("");
@@ -229,6 +230,8 @@ export default function ProductDetailPage() {
   const [editingMainImage, setEditingMainImage] = useState(false);
   const [editingGallery, setEditingGallery] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
+  const [deletingProduct, setDeletingProduct] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [eanValidationError, setEanValidationError] = useState("");
   const [editState, setEditState] = useState<ProductEditState>({
     ean: "",
@@ -412,7 +415,37 @@ export default function ProductDetailPage() {
     setEditMode(false);
     setEditingMainImage(false);
     setEditingGallery(false);
+    setShowDeleteConfirm(false);
     setError("");
+  }
+
+  async function deleteProduct() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !product) return;
+    try {
+      setDeletingProduct(true);
+      setError("");
+      const res = await fetch(`${API_BASE}/products/${product.id}?storeId=${encodeURIComponent(storeId)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const raw = await res.text();
+      const isJson = (res.headers.get("content-type") || "").includes("application/json");
+      const data = isJson && raw ? JSON.parse(raw) : null;
+      if (handleUnauthorized(res.status)) return;
+      if (!res.ok) {
+        if (!isJson && raw.includes("<!DOCTYPE")) {
+          throw new Error("El borrado aún no está disponible en el backend activo. Reinicia apps/api y vuelve a intentarlo.");
+        }
+        throw new Error(data?.error || "No se pudo eliminar el producto.");
+      }
+      router.push("/store/products");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo eliminar el producto.");
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeletingProduct(false);
+    }
   }
 
   async function saveProductChanges() {
@@ -701,22 +734,26 @@ export default function ProductDetailPage() {
                       ? img.imageUrl === editState.mainImageUrl
                       : img.imageUrl === primaryImage;
                     return (
-                      <button
+                      <div
                         key={img.id}
-                        type="button"
-                        disabled={!editMode}
-                        onClick={() => {
-                          if (!editMode) return;
-                          updateEditField("mainImageUrl", img.imageUrl);
-                          setEditingMainImage(true);
-                        }}
                         className={`relative overflow-hidden rounded-xl border bg-white text-left ${
                           isSelectedMain ? "border-[#3147D4] ring-2 ring-[#3147D4]/20" : "border-[#E2E6EF]"
-                        } ${editMode ? "cursor-pointer" : "cursor-default"}`}
+                        }`}
                         title={editMode ? "Usar como foto principal" : product.name}
                       >
+                        <button
+                          type="button"
+                          disabled={!editMode}
+                          onClick={() => {
+                            if (!editMode) return;
+                            updateEditField("mainImageUrl", img.imageUrl);
+                            setEditingMainImage(true);
+                          }}
+                          className={`block w-full ${editMode ? "cursor-pointer" : "cursor-default"}`}
+                        >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img.imageUrl} alt={product.name} className="h-[64px] w-full object-cover" />
+                          <img src={img.imageUrl} alt={product.name} className="h-[64px] w-full object-cover" />
+                        </button>
                         {editMode ? (
                           <>
                             <span className="absolute bottom-1 left-1 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-medium text-[#25304F]">
@@ -742,7 +779,7 @@ export default function ProductDetailPage() {
                             </button>
                           </>
                         ) : null}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -793,6 +830,14 @@ export default function ProductDetailPage() {
                     <div className="flex gap-2">
                       <button
                         type="button"
+                        disabled={deletingProduct}
+                        className="rounded-full bg-[#C9342C] px-4 py-2 text-[13px] text-white disabled:opacity-60"
+                        onClick={() => setShowDeleteConfirm(true)}
+                      >
+                        Eliminar
+                      </button>
+                      <button
+                        type="button"
                         className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F]"
                         onClick={cancelEdit}
                       >
@@ -800,7 +845,7 @@ export default function ProductDetailPage() {
                       </button>
                       <button
                         type="button"
-                        disabled={savingProduct}
+                        disabled={savingProduct || deletingProduct}
                         className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-60"
                         onClick={saveProductChanges}
                       >
@@ -903,6 +948,36 @@ export default function ProductDetailPage() {
                     </div>
                   </div>
                 )}
+
+                {editMode && showDeleteConfirm ? (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(11,18,48,0.35)] p-4">
+                    <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+                      <div className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-product-detail-heading)" }}>
+                        Eliminar producto
+                      </div>
+                      <p className="mt-2 text-[14px] text-[#4F5568]" style={{ fontFamily: "var(--font-product-detail-body)" }}>
+                        ¿Estás seguro de eliminar este item?
+                      </p>
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F]"
+                          onClick={() => setShowDeleteConfirm(false)}
+                        >
+                          No
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingProduct}
+                          className="rounded-full bg-[#C9342C] px-4 py-2 text-[13px] text-white disabled:opacity-60"
+                          onClick={deleteProduct}
+                        >
+                          {deletingProduct ? "Eliminando..." : "Sí"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
