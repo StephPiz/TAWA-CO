@@ -157,6 +157,20 @@ function productTypeLabel(type: string) {
   }
 }
 
+function displayProductType(type: string, category?: string | null, attributes?: Record<string, unknown> | null) {
+  const attrs = (attributes || {}) as Record<string, unknown>;
+  const productGroup = String(attrs.productGroup || "").toLowerCase();
+  const packagingKind = String(attrs.packagingKind || "").toLowerCase();
+  const normalizedCategory = String(category || "").toLowerCase();
+
+  if (productGroup === "packaging") {
+    if (packagingKind === "shopping-bag" || normalizedCategory === "shopping-bag") return "Shopping Bag";
+    return "Box";
+  }
+
+  return productTypeLabel(type);
+}
+
 function displayCategory(category?: string | null) {
   if (!category) return "-";
   return productTypeLabel(category);
@@ -925,7 +939,7 @@ export default function ProductDetailPage() {
                     <div><b>SKU:</b> {product.sku || "-"}</div>
                     <div><b>Categoría:</b> {displayCategory(product.category)}</div>
                     <div><b>Subcategoría:</b> {String(product.attributes?.subcategory || "-")}</div>
-                    <div><b>Tipo:</b> {productTypeLabel(product.type)}</div>
+                    <div><b>Tipo:</b> {displayProductType(product.type, product.category, product.attributes || null)}</div>
                     <div><b>Nombre del producto:</b> {product.name}</div>
                     <div><b>Modelo:</b> {product.model}</div>
                     <div><b>Número de modelo:</b> {product.modelRef || "-"}</div>

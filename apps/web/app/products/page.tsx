@@ -79,6 +79,20 @@ function slugSkuPart(value: string) {
     .toUpperCase();
 }
 
+function displayProductType(product: Pick<ProductRow, "type" | "category" | "attributes">) {
+  const attrs = (product.attributes || {}) as Record<string, unknown>;
+  const productGroup = String(attrs.productGroup || "").toLowerCase();
+  const packagingKind = String(attrs.packagingKind || "").toLowerCase();
+  const normalizedCategory = String(product.category || "").toLowerCase();
+
+  if (productGroup === "packaging") {
+    if (packagingKind === "shopping-bag" || normalizedCategory === "shopping-bag") return "Shopping Bag";
+    return "Box";
+  }
+
+  return productTypeLabel(product.type);
+}
+
 function productTypeLabel(type: string) {
   switch (String(type || "").toLowerCase()) {
     case "box":
@@ -771,7 +785,7 @@ function ProductsPageContent() {
                     <td className="px-3 py-2 text-[#212A45]">{p.brand}</td>
                     <td className="px-3 py-2 font-medium text-[#212A45]">{p.modelRef || "-"}</td>
                     <td className="px-3 py-2 font-medium text-[#131936]">{p.model}</td>
-                    <td className="px-3 py-2 text-[#212A45]">{productTypeLabel(p.type)}</td>
+                    <td className="px-3 py-2 text-[#212A45]">{displayProductType(p)}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex rounded-full bg-[#EEF2FF] px-2.5 py-1 text-[12px] font-medium text-[#3730A3]">{p.status}</span>
                     </td>

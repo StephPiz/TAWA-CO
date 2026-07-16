@@ -1871,10 +1871,57 @@ async function nextInvoiceNumber(tx, storeId) {
   return number;
 }
 
-async function generateInternalEan(storeId) {
-  const count = await prisma.product.count({ where: { storeId, isInternalEan: true } });
-  const next = String(count + 1).padStart(6, "0");
-  return `INT-${next}`;
+function resolveInternalEanPrefix(category, type, attributes) {
+  const normalizedCategory = String(category || "").trim().toLowerCase();
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const productGroup = String(attributes?.productGroup || "").trim().toLowerCase();
+  const packagingKind = String(attributes?.packagingKind || "").trim().toLowerCase();
+
+  if (
+    productGroup === "packaging" ||
+    packagingKind === "box" ||
+    packagingKind === "shopping-bag" ||
+    normalizedCategory.includes("box") ||
+    normalizedCategory.includes("shopping") ||
+    normalizedCategory.includes("bag")
+  ) {
+    return "1";
+  }
+
+  if (normalizedType === "watch" || normalizedCategory.includes("reloj") || normalizedCategory.includes("watch")) {
+    return "2";
+  }
+
+  if (normalizedType === "bag") return "3";
+  if (normalizedType === "perfume") return "4";
+  if (normalizedType === "accessory") return "5";
+  if (normalizedType === "vintage") return "6";
+  if (normalizedType === "refurbished") return "7";
+
+  return "8";
+}
+
+async function generateInternalEan(storeId, { category, type, attributes } = {}) {
+  const prefix = resolveInternalEanPrefix(category, type, attributes);
+  const internalProducts = await prisma.product.findMany({
+    where: { storeId, isInternalEan: true },
+    select: { ean: true },
+  });
+
+  let maxSequence = 0;
+  for (const product of internalProducts) {
+    const rawEan = String(product.ean || "").trim();
+    if (!/^\d{12}$/.test(rawEan)) continue;
+    if (!rawEan.startsWith(prefix)) continue;
+
+    const sequence = Number(rawEan.slice(1));
+    if (Number.isFinite(sequence) && sequence > maxSequence) {
+      maxSequence = sequence;
+    }
+  }
+
+  const nextSequence = String(maxSequence + 1).padStart(11, "0");
+  return `${prefix}${nextSequence}`;
 }
 
 async function findProductByScan(storeId, scanCode) {
@@ -6547,7 +6594,13 @@ app.post("/products", requireAuth, async (req, res) => {
     const membership = await getStoreMembership(userId, storeId);
     if (!membership) return res.status(403).json({ error: "No access to store" });
 
-    const finalEan = ean ? String(ean).trim() : await generateInternalEan(storeId);
+    const finalEan = ean
+      ? String(ean).trim()
+      : await generateInternalEan(storeId, {
+          category,
+          type,
+          attributes: attributes && typeof attributes === "object" ? attributes : null,
+        });
     const finalName = name ? String(name).trim() : `${brand} ${model}`;
     const finalSku = sku ? String(sku).trim() : await generateDefaultSku(storeId, brand, model);
     const isInternalEan = !ean;
