@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import localFont from "next/font/local";
@@ -123,6 +123,25 @@ type ProductSuggestion = {
   name: string;
 };
 
+function purchaseSuggestionLabel(product: ProductSuggestion) {
+  const normalizedName = String(product.name || "").toLowerCase();
+  if (normalizedName.startsWith("box ")) {
+    return ["Box", product.brand, product.model, product.modelRef].filter(Boolean).join(" · ");
+  }
+  if (normalizedName.startsWith("shopping bag ") || normalizedName.startsWith("shopping-bag ")) {
+    return ["Shopping Bag", product.brand, product.model, product.modelRef].filter(Boolean).join(" · ");
+  }
+  return [product.model || product.name || "Producto", product.modelRef].filter(Boolean).join(" · ");
+}
+
+function isPurchaseBoxItem(item: PurchaseDetail["items"][number]) {
+  const source = [item.title, item.product?.name, item.product?.brand, item.product?.model, item.product?.modelRef]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return source.includes("box") || source.includes("shopping bag") || source.includes("shopping-bag");
+}
+
 function normalizeCatalogText(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
@@ -229,6 +248,13 @@ export default function PurchaseDetailPage() {
   const [qtyDraftByItem, setQtyDraftByItem] = useState<Record<string, string>>({});
   const [lineInfoOpen, setLineInfoOpen] = useState(false);
   const [listEditMode, setListEditMode] = useState(false);
+  const [addBoxChoice, setAddBoxChoice] = useState<"yes" | "no">("no");
+  const lineSearchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const boxChoiceStorageKey = useMemo(() => {
+    if (!purchaseId) return "";
+    return `purchase-add-box:${purchaseId}`;
+  }, [purchaseId]);
 
   const loadAll = useCallback(async (sid: string, poId: string) => {
     const token = requireTokenOrRedirect();
@@ -358,6 +384,10 @@ export default function PurchaseDetailPage() {
     return map;
   }, [purchase]);
 
+  const purchaseItems = purchase?.items || [];
+  const mainPurchaseItems = useMemo(() => purchaseItems.filter((item) => !isPurchaseBoxItem(item)), [purchaseItems]);
+  const boxPurchaseItems = useMemo(() => purchaseItems.filter((item) => isPurchaseBoxItem(item)), [purchaseItems]);
+
   useEffect(() => {
     const nextDrafts: Record<string, string> = {};
     for (const item of purchase?.items || []) {
@@ -378,7 +408,7 @@ export default function PurchaseDetailPage() {
   }, [products, lineSearch]);
 
   function selectSuggestion(product: ProductSuggestion) {
-    const label = [product.brand, product.model, product.modelRef].filter(Boolean).join(" · ") || product.name;
+    const label = purchaseSuggestionLabel(product) || product.name;
     setLineProductId(product.id);
     setLineSearch(label);
     setLineTitle(product.name || label);
@@ -673,7 +703,8 @@ export default function PurchaseDetailPage() {
 
   function downloadPurchaseCsv() {
     if (!purchase) return;
-    const totalUnits = (purchase.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const watchUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const boxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
     const formattedDate = purchase.orderedAt
       ? new Date(purchase.orderedAt).toLocaleDateString("es-ES", {
           day: "2-digit",
@@ -681,29 +712,178 @@ export default function PurchaseDetailPage() {
           year: "numeric",
         }).replaceAll("/", " / ")
       : "-";
-    const rows = [
-      ["Date", formattedDate],
-      ["Order", String(totalUnits)],
-      [],
-      ["Photo", "Model", "Brand", "EAN", "Quantity"],
-      ...(purchase.items || []).map((item) => [
-        purchaseItemPhoto(item) || "",
-        purchaseItemModel(item),
-        purchaseItemBrand(item),
-        excelText(item.ean),
-        String(item.quantityOrdered || 0),
-      ]),
-      [],
-      ["", "", "", "Total quantity", String(totalUnits)],
-    ];
-    const csv = rows
-      .map((row) => row.map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(";"))
-      .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+
+    const buildExcelRow = (item: PurchaseDetail["items"][number]) => `
+      <tr>
+        <td class="photo-cell">
+          ${
+            purchaseItemPhoto(item)
+              ? `<a href="${purchaseItemPhoto(item)}" class="photo-link">View photo</a>`
+              : `<span class="photo-placeholder">No photo</span>`
+          }
+        </td>
+        <td class="cell-text">${purchaseItemModel(item)}</td>
+        <td class="cell-text">${purchaseItemBrand(item)}</td>
+        <td class="cell-text cell-ean">${excelText(item.ean || "-")}</td>
+        <td class="cell-qty">${item.quantityOrdered || 0}</td>
+      </tr>
+    `;
+
+    const watchRows = mainPurchaseItems.map((item) => buildExcelRow(item)).join("");
+    const boxRows = boxPurchaseItems.map((item) => buildExcelRow(item)).join("");
+
+    const workbookHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office"
+            xmlns:x="urn:schemas-microsoft-com:office:excel"
+            xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8" />
+          <!--[if gte mso 9]>
+          <xml>
+            <x:ExcelWorkbook>
+              <x:ExcelWorksheets>
+                <x:ExcelWorksheet>
+                  <x:Name>${purchase.poNumber || "Purchase"}</x:Name>
+                  <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+                </x:ExcelWorksheet>
+              </x:ExcelWorksheets>
+            </x:ExcelWorkbook>
+          </xml>
+          <![endif]-->
+          <style>
+            body { font-family: Arial, sans-serif; padding: 22px; color: #141A39; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
+            .po-title { font-size: 28px; font-weight: 700; line-height: 1.05; color: #141A39; }
+            .meta-wrap { display: flex; gap: 14px; align-items: stretch; }
+            .meta-card { width: 220px; border: 1px solid #D9DDE7; border-radius: 16px; padding: 14px 16px; background: #F7F8FB; box-sizing: border-box; }
+            .meta-card--compact { width: 170px; }
+            .meta-label { font-size: 12px; color: #616984; text-transform: uppercase; letter-spacing: 0.04em; }
+            .meta-value { margin-top: 6px; font-size: 24px; font-weight: 700; color: #141A39; }
+            .table-title { margin-top: 24px; margin-bottom: 8px; font-size: 16px; font-weight: 700; text-transform: uppercase; color: #141A39; letter-spacing: 0.04em; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+            th, td { border: 1px solid #D9DDE7; padding: 10px; vertical-align: middle; background: white; }
+            th { background: #F7F8FB; text-align: left; font-size: 12px; color: #4F5568; }
+            .photo-cell { width: 92px; text-align: center; }
+            .photo-link { display: inline-block; padding: 6px 10px; border: 1px solid #CAD2E5; border-radius: 999px; color: #3147D4; text-decoration: none; font-size: 11px; font-weight: 700; }
+            .photo-placeholder { display: inline-block; padding: 6px 10px; border: 1px dashed #D4D9E4; border-radius: 999px; color: #8A91A8; font-size: 11px; }
+            .cell-text { font-size: 14px; color: #25304F; }
+            .cell-ean { mso-number-format:"\\@"; }
+            .cell-qty { font-size: 22px; font-weight: 700; color: #141A39; text-align: center; }
+            .total-row td { background: #F7F8FB; font-weight: 700; }
+            .summary-table { width: 420px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="po-title">${purchase.poNumber || "-"}</div>
+            <div class="meta-wrap">
+              <div class="meta-card">
+                <div class="meta-label">Date</div>
+                <div class="meta-value">${formattedDate}</div>
+              </div>
+              <div class="meta-card meta-card--compact">
+                <div class="meta-label">Total Items</div>
+                <div class="meta-value">${watchUnits}</div>
+              </div>
+              ${
+                boxUnits > 0
+                  ? `
+              <div class="meta-card meta-card--compact">
+                <div class="meta-label">Total Box</div>
+                <div class="meta-value">${boxUnits}</div>
+              </div>
+              `
+                  : ""
+              }
+            </div>
+          </div>
+
+          ${
+            watchRows
+              ? `
+          <div class="table-title">Products</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Model</th>
+                <th>Brand</th>
+                <th>EAN</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${watchRows}
+              <tr class="total-row">
+                <td colspan="4">Total items quantity</td>
+                <td class="cell-qty">${watchUnits}</td>
+              </tr>
+            </tbody>
+          </table>
+          `
+              : ""
+          }
+
+          ${
+            boxRows
+              ? `
+          <div class="table-title">Box</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Model</th>
+                <th>Brand</th>
+                <th>EAN</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${boxRows}
+              <tr class="total-row">
+                <td colspan="4">Total box quantity</td>
+                <td class="cell-qty">${boxUnits}</td>
+              </tr>
+            </tbody>
+          </table>
+          `
+              : ""
+          }
+
+          <div class="table-title">Summary</div>
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="cell-text">Watch total quantity</td>
+                <td class="cell-qty">${watchUnits}</td>
+              </tr>
+              ${
+                boxUnits > 0
+                  ? `
+              <tr>
+                <td class="cell-text">Box total quantity</td>
+                <td class="cell-qty">${boxUnits}</td>
+              </tr>
+              `
+                  : ""
+              }
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+
+    const blob = new Blob(["\uFEFF" + workbookHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${purchase.poNumber || "lista-compra"}.csv`;
+    link.download = `${purchase.poNumber || "lista-compra"}.xls`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -712,7 +892,8 @@ export default function PurchaseDetailPage() {
     if (!purchase) return;
     const printWindow = window.open("", "_blank", "width=980,height=760");
     if (!printWindow) return;
-    const totalUnits = (purchase.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const watchUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+    const boxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
     const formattedDate = purchase.orderedAt
       ? new Date(purchase.orderedAt).toLocaleDateString("es-ES", {
           day: "2-digit",
@@ -720,9 +901,8 @@ export default function PurchaseDetailPage() {
           year: "numeric",
         }).replaceAll("/", " / ")
       : "-";
-    const rows = (purchase.items || [])
-      .map(
-        (item) => `
+
+    const buildRow = (item: PurchaseDetail["items"][number]) => `
           <tr>
             <td class="photo-cell">
               ${
@@ -736,6 +916,20 @@ export default function PurchaseDetailPage() {
             <td>${item.ean || "-"}</td>
             <td class="qty-cell">${item.quantityOrdered || 0}</td>
           </tr>
+        `;
+
+    const watchRows = mainPurchaseItems
+      .map(
+        (item) => `
+          ${buildRow(item)}
+        `
+      )
+      .join("");
+
+    const boxRows = boxPurchaseItems
+      .map(
+        (item) => `
+          ${buildRow(item)}
         `
       )
       .join("");
@@ -748,8 +942,9 @@ export default function PurchaseDetailPage() {
             body { font-family: Arial, sans-serif; padding: 24px; color: #141A39; }
             h1 { margin: 0; font-size: 28px; }
             .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 24px; }
-            .meta-wrap { display: flex; gap: 14px; flex-wrap: wrap; }
-            .meta-card { min-width: 180px; border: 1px solid #D9DDE7; border-radius: 16px; padding: 14px 16px; background: #F7F8FB; }
+            .meta-wrap { display: flex; gap: 14px; flex-wrap: nowrap; align-items: stretch; }
+            .meta-card { width: 220px; border: 1px solid #D9DDE7; border-radius: 16px; padding: 14px 16px; background: #F7F8FB; box-sizing: border-box; }
+            .meta-card--compact { width: 170px; }
             .meta-label { font-size: 12px; color: #616984; text-transform: uppercase; letter-spacing: 0.04em; }
             .meta-value { margin-top: 6px; font-size: 24px; font-weight: 700; color: #141A39; }
             table { width: 100%; border-collapse: collapse; margin-top: 16px; }
@@ -760,6 +955,8 @@ export default function PurchaseDetailPage() {
             .photo-placeholder { width: 82px; height: 82px; display: flex; align-items: center; justify-content: center; margin: 0 auto; border: 1px dashed #D4D9E4; border-radius: 14px; color: #8A91A8; font-size: 11px; }
             .qty-cell { font-weight: 700; text-align: center; }
             .total-row td { font-weight: 700; background: #F7F8FB; }
+            .table-title { margin-top: 22px; margin-bottom: 8px; font-size: 16px; font-weight: 700; color: #141A39; text-transform: uppercase; letter-spacing: 0.04em; }
+            .summary-table { width: 420px; }
           </style>
         </head>
         <body>
@@ -770,12 +967,26 @@ export default function PurchaseDetailPage() {
                 <div class="meta-label">Date</div>
                 <div class="meta-value">${formattedDate}</div>
               </div>
-              <div class="meta-card">
-                <div class="meta-label">Order</div>
-                <div class="meta-value">${totalUnits}</div>
+              <div class="meta-card meta-card--compact">
+                <div class="meta-label">Total Items</div>
+                <div class="meta-value">${watchUnits}</div>
               </div>
+              ${
+                boxUnits > 0
+                  ? `
+              <div class="meta-card meta-card--compact">
+                <div class="meta-label">Total Box</div>
+                <div class="meta-value">${boxUnits}</div>
+              </div>
+              `
+                  : ""
+              }
             </div>
           </div>
+          ${
+            watchRows
+              ? `
+          <div class="table-title">Products</div>
           <table>
             <thead>
               <tr>
@@ -787,11 +998,64 @@ export default function PurchaseDetailPage() {
               </tr>
             </thead>
             <tbody>
-              ${rows}
+              ${watchRows}
               <tr class="total-row">
-                <td colspan="4">Total quantity</td>
-                <td class="qty-cell">${totalUnits}</td>
+                <td colspan="4">Total items quantity</td>
+                <td class="qty-cell">${watchUnits}</td>
               </tr>
+            </tbody>
+          </table>
+          `
+              : ""
+          }
+          ${
+            boxRows
+              ? `
+          <div class="table-title">Box</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Model</th>
+                <th>Brand</th>
+                <th>EAN</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${boxRows}
+              <tr class="total-row">
+                <td colspan="4">Total box quantity</td>
+                <td class="qty-cell">${boxUnits}</td>
+              </tr>
+            </tbody>
+          </table>
+          `
+              : ""
+          }
+          <div class="table-title">Summary</div>
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Watch total quantity</td>
+                <td class="qty-cell">${watchUnits}</td>
+              </tr>
+              ${
+                boxUnits > 0
+                  ? `
+              <tr>
+                <td>Box total quantity</td>
+                <td class="qty-cell">${boxUnits}</td>
+              </tr>
+              `
+                  : ""
+              }
             </tbody>
           </table>
         </body>
@@ -802,7 +1066,31 @@ export default function PurchaseDetailPage() {
     printWindow.print();
   }
 
-  const totalUnits = (purchase?.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+  const totalUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+  const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+
+  useEffect(() => {
+    if (!boxChoiceStorageKey || typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(boxChoiceStorageKey);
+    if (stored === "yes" || stored === "no") {
+      setAddBoxChoice(stored);
+    }
+  }, [boxChoiceStorageKey]);
+
+  useEffect(() => {
+    if (!boxChoiceStorageKey || typeof window === "undefined") return;
+    window.localStorage.setItem(boxChoiceStorageKey, addBoxChoice);
+  }, [boxChoiceStorageKey, addBoxChoice]);
+
+  useEffect(() => {
+    if (addBoxChoice !== "yes") return;
+    setLineSearch((current) => (current.trim() ? current : "box"));
+    setLineTitle((current) => (current.trim() ? current : "box"));
+    queueMicrotask(() => {
+      lineSearchInputRef.current?.focus();
+      lineSearchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [addBoxChoice]);
 
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
   if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
@@ -950,6 +1238,7 @@ export default function PurchaseDetailPage() {
             <div className="grid gap-3 md:grid-cols-[minmax(0,2.8fr)_0.9fr_auto]">
               <div className="relative">
                 <input
+                  ref={lineSearchInputRef}
                   className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
                   placeholder="Buscar o escribir producto: AR1925, AR2434, Reloj Maserati..."
                   value={lineSearch}
@@ -970,7 +1259,7 @@ export default function PurchaseDetailPage() {
                       >
                         <span>
                           <span className="block text-[14px] text-[#141A39]">
-                            {[product.model || product.name || "Producto", product.modelRef].filter(Boolean).join(" · ")}
+                            {purchaseSuggestionLabel(product)}
                           </span>
                           <span className="mt-0.5 block text-[12px] text-[#6E768E]">
                             {[product.brand, product.ean].filter(Boolean).join(" · ")}
@@ -1040,13 +1329,22 @@ export default function PurchaseDetailPage() {
             </div>
           </div>
 
-          {(purchase?.items || []).length === 0 ? (
+          {mainPurchaseItems.length === 0 ? (
             <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[14px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               Aún no hay líneas en este pedido. Usa el bloque de arriba para empezar a construir la compra.
             </div>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-[#E3E7F0]">
               <table className="min-w-full text-sm">
+                <colgroup>
+                  <col style={{ width: "140px" }} />
+                  <col style={{ width: "220px" }} />
+                  <col style={{ width: "180px" }} />
+                  <col style={{ width: "190px" }} />
+                  <col style={{ width: "170px" }} />
+                  <col style={{ width: "130px" }} />
+                  <col style={{ width: "170px" }} />
+                </colgroup>
                 <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
                   <tr>
                     <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Foto</th>
@@ -1059,7 +1357,7 @@ export default function PurchaseDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(purchase?.items || []).map((item) => {
+                  {mainPurchaseItems.map((item) => {
                     const currentQty = Number(qtyDraftByItem[item.id] ?? item.quantityOrdered ?? 0);
                     const showDeleteAction = listEditMode && currentQty === 0;
                     return (
@@ -1183,15 +1481,209 @@ export default function PurchaseDetailPage() {
                     </td>
                     <td className="border-t border-[#D9DDE7] px-3 py-4">
                       <div className="text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                        {(purchase?.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0)}
+                        {totalUnits}
                       </div>
                     </td>
-                    <td colSpan={2} className="border-t border-[#D9DDE7] px-3 py-4" />
+                    <td colSpan={2} className="border-t border-[#D9DDE7] px-3 py-4">
+                      <div className="flex flex-wrap items-center justify-end gap-3">
+                        <span className="text-[13px] text-[#5F6780]">Agregar box?</span>
+                        <div className="inline-flex rounded-full border border-[#D4D9E4] bg-white p-1">
+                          <button
+                            type="button"
+                            className={`rounded-full px-3 py-1.5 text-[12px] transition ${
+                              addBoxChoice === "yes" ? "bg-[#0B1230] text-white" : "text-[#25304F] hover:bg-[#F5F7FB]"
+                            }`}
+                            onClick={() => setAddBoxChoice("yes")}
+                          >
+                            Sí
+                          </button>
+                          <button
+                            type="button"
+                            className={`rounded-full px-3 py-1.5 text-[12px] transition ${
+                              addBoxChoice === "no" ? "bg-[#0B1230] text-white" : "text-[#25304F] hover:bg-[#F5F7FB]"
+                            }`}
+                            onClick={() => setAddBoxChoice("no")}
+                          >
+                            No
+                          </button>
+                        </div>
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>
             </div>
           )}
+
+          {addBoxChoice === "yes" || boxPurchaseItems.length > 0 ? (
+            <div className="mt-5 overflow-x-auto rounded-2xl border border-[#E3E7F0]">
+              <div className="border-b border-[#D9DDE7] bg-[#F7F8FB] px-4 py-3">
+                <h4 className="text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Lista de box
+                </h4>
+              </div>
+              {boxPurchaseItems.length === 0 ? (
+                <div className="p-4 text-[14px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Aún no has agregado box a este pedido.
+                </div>
+              ) : (
+                <table className="min-w-full text-sm">
+                  <colgroup>
+                    <col style={{ width: "140px" }} />
+                    <col style={{ width: "220px" }} />
+                    <col style={{ width: "180px" }} />
+                    <col style={{ width: "190px" }} />
+                    <col style={{ width: "170px" }} />
+                    <col style={{ width: "130px" }} />
+                    <col style={{ width: "170px" }} />
+                  </colgroup>
+                  <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
+                    <tr>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Foto</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Modelo #</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Marca</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">EAN</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Cantidad</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Catálogo</th>
+                      <th className="px-3 py-3 text-left text-[13px] text-[#5F6780]">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {boxPurchaseItems.map((item) => {
+                      const currentQty = Number(qtyDraftByItem[item.id] ?? item.quantityOrdered ?? 0);
+                      const showDeleteAction = listEditMode && currentQty === 0;
+                      return (
+                        <tr key={`box-list-${item.id}`} className="border-b border-[#EEF1F6] last:border-b-0">
+                          <td className="px-3 py-3">
+                            {purchaseItemPhoto(item) ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={purchaseItemPhoto(item) || ""}
+                                alt={item.title}
+                                className="h-20 w-20 rounded-2xl border border-[#E3E7F0] object-contain bg-white p-1"
+                              />
+                            ) : (
+                              <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-dashed border-[#D4D9E4] bg-[#F9FAFC] text-[11px] text-[#8A91A8]">
+                                Sin foto
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 text-[22px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                            {purchaseItemModel(item)}
+                          </td>
+                          <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                            {purchaseItemBrand(item)}
+                          </td>
+                          <td className="px-3 py-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                            {item.ean || "-"}
+                          </td>
+                          <td className="px-3 py-3">
+                            {listEditMode ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                                  disabled={busyAction === `qty_${item.id}`}
+                                  onClick={() => {
+                                    const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                                    const next = Math.max(0, current - 1);
+                                    setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
+                                    void updatePurchaseLineQty(item.id, next);
+                                  }}
+                                >
+                                  -
+                                </button>
+                                <input
+                                  className="h-10 w-16 rounded-xl border border-[#D4D9E4] px-2 text-center text-[16px] font-semibold text-[#141A39] outline-none"
+                                  value={qtyDraftByItem[item.id] ?? String(item.quantityOrdered)}
+                                  onChange={(e) =>
+                                    setQtyDraftByItem((prev) => ({
+                                      ...prev,
+                                      [item.id]: e.target.value.replace(/[^\d]/g, ""),
+                                    }))
+                                  }
+                                  onBlur={() => {
+                                    const rawValue = qtyDraftByItem[item.id];
+                                    const next = rawValue === "" ? item.quantityOrdered : Number(rawValue);
+                                    if (next >= 0 && next !== item.quantityOrdered) {
+                                      void updatePurchaseLineQty(item.id, next);
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4D9E4] text-[#25304F] disabled:opacity-40"
+                                  disabled={busyAction === `qty_${item.id}`}
+                                  onClick={() => {
+                                    const current = Number(qtyDraftByItem[item.id] || item.quantityOrdered || 1);
+                                    const next = current + 1;
+                                    setQtyDraftByItem((prev) => ({ ...prev, [item.id]: String(next) }));
+                                    void updatePurchaseLineQty(item.id, next);
+                                  }}
+                                >
+                                  +
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                                {item.quantityOrdered}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-3">
+                            {item.productId ? (
+                              <span className="inline-flex rounded-full bg-[#E9F8EE] px-3 py-1 text-[12px] text-[#1F7A3E]">Existe</span>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-[#FFF4E5] px-3 py-1 text-[12px] text-[#B54708]">Nuevo</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3">
+                            {showDeleteAction ? (
+                              <button
+                                type="button"
+                                className="inline-flex rounded-full bg-[#B42318] px-3 py-2 text-[12px] text-white disabled:opacity-50"
+                                disabled={busyAction === `qty_${item.id}`}
+                                onClick={() => {
+                                  void updatePurchaseLineQty(item.id, 0);
+                                }}
+                              >
+                                Eliminar
+                              </button>
+                            ) : item.productId ? (
+                              <Link
+                                href={`/store/products/${item.productId}`}
+                                className="inline-flex rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]"
+                              >
+                                Ver producto
+                              </Link>
+                            ) : (
+                              <Link
+                                href={buildCreateProductHref(purchaseId, item)}
+                                className="inline-flex rounded-full bg-[#0B1230] px-3 py-2 text-[12px] text-white"
+                              >
+                                Crear producto
+                              </Link>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-[#FBFCFE]">
+                      <td colSpan={4} className="border-t border-[#D9DDE7] px-3 py-4 text-right text-[13px] text-[#5F6780]">
+                        Total box
+                      </td>
+                      <td className="border-t border-[#D9DDE7] px-3 py-4">
+                        <div className="text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                          {totalBoxUnits}
+                        </div>
+                      </td>
+                      <td colSpan={2} className="border-t border-[#D9DDE7] px-3 py-4" />
+                    </tr>
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
