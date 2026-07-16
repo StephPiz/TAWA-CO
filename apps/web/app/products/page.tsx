@@ -95,6 +95,10 @@ function productTypeLabel(type: string) {
   }
 }
 
+function buildSuggestedProductName(category: string, brand: string, model: string, modelRef: string) {
+  return [categoryLabel(category), brand.trim(), model.trim(), modelRef.trim()].filter(Boolean).join(" ").trim();
+}
+
 function ProductsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -119,6 +123,7 @@ function ProductsPageContent() {
   const [useInternalEan, setUseInternalEan] = useState(false);
   const [createSuccess, setCreateSuccess] = useState("");
   const [prefillApplied, setPrefillApplied] = useState(false);
+  const [productNameEdited, setProductNameEdited] = useState(false);
 
   const returnTo = searchParams.get("returnTo") || "";
   const linkPurchaseId = searchParams.get("linkPurchaseId") || "";
@@ -130,6 +135,9 @@ function ProductsPageContent() {
   const prefillName = searchParams.get("prefillName") || "";
 
   const skuPreview = [slugSkuPart(brand), slugSkuPart(modelRef || model)].filter(Boolean).join("-");
+  const suggestedProductName = useMemo(() => {
+    return buildSuggestedProductName(category, brand, model, modelRef) || prefillName;
+  }, [category, brand, model, modelRef, prefillName]);
   const visibleProducts = useMemo(() => {
     const rows = [...products];
     switch (sortMode) {
@@ -217,6 +225,11 @@ function ProductsPageContent() {
     setPrefillApplied(true);
   }, [prefillApplied, prefillBrand, prefillModel, prefillModelRef, prefillEan, prefillName]);
 
+  useEffect(() => {
+    if (productNameEdited) return;
+    setProductName(suggestedProductName);
+  }, [suggestedProductName, productNameEdited]);
+
   async function createProduct(e: React.FormEvent) {
     e.preventDefault();
     const token = requireTokenOrRedirect();
@@ -249,6 +262,7 @@ function ProductsPageContent() {
       setModel("");
       setModelRef("");
       setProductName("");
+      setProductNameEdited(false);
       setEan("");
       setType("watch");
       setCategory("watch");
@@ -375,7 +389,10 @@ function ProductsPageContent() {
               className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2"
               placeholder="Nombre del producto"
               value={productName}
-              onChange={(e) => setProductName(e.target.value)}
+              onChange={(e) => {
+                setProductNameEdited(true);
+                setProductName(e.target.value);
+              }}
             />
             <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="watch">Categoria: Reloj</option>
@@ -386,16 +403,10 @@ function ProductsPageContent() {
               <option value="refurbished">Categoria: Reacondicionado</option>
               <option value="other">Categoria: Otro</option>
             </select>
-            <input
-              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none md:col-span-2"
-              placeholder="Descripcion interna"
-              value={internalDescription}
-              onChange={(e) => setInternalDescription(e.target.value)}
-            />
             <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984]">
               SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{skuPreview || "Se generara al crear"}</span>
             </div>
-            <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]">
+            <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F] md:col-span-2">
               <input type="checkbox" checked={useInternalEan} onChange={(e) => setUseInternalEan(e.target.checked)} />
               Generar EAN interno
             </label>
