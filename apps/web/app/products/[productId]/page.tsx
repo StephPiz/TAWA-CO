@@ -614,21 +614,20 @@ export default function ProductDetailPage() {
   return (
     <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="mx-auto max-w-7xl space-y-4">
-        <div className="flex items-center justify-start">
-          <Link
-            href="/products"
-            className="inline-flex items-center gap-2 rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.05)]"
-            style={{ fontFamily: "var(--font-product-detail-body)" }}
-          >
-            <span aria-hidden="true">←</span>
-            <span>Volver a productos</span>
-          </Link>
-        </div>
-
         <div className="mb-2">
-          <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-product-detail-heading)" }}>
-            Ficha de Producto
-          </h1>
+          <div className="flex items-start justify-between gap-4">
+            <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-product-detail-heading)" }}>
+              Ficha de Producto
+            </h1>
+            <Link
+              href="/store/products"
+              className="inline-flex items-center gap-2 rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.05)]"
+              style={{ fontFamily: "var(--font-product-detail-body)" }}
+            >
+              <span aria-hidden="true">←</span>
+              <span>Volver a productos</span>
+            </Link>
+          </div>
           <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-product-detail-body)" }}>
             {storeName ? `Tienda: ${storeName}` : "Detalle de producto"}
           </p>

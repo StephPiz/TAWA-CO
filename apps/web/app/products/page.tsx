@@ -27,6 +27,7 @@ type ProductRow = {
   name: string;
   type: string;
   category?: string | null;
+  attributes?: Record<string, unknown> | null;
   status: string;
   mainImageUrl?: string | null;
 };
@@ -129,6 +130,11 @@ function buildSuggestedPackagingName(kind: string, brand: string, model: string,
 }
 
 function isPackagingProduct(product: ProductRow) {
+  const attrs = (product.attributes || {}) as Record<string, unknown>;
+  if (String(attrs.productGroup || "").toLowerCase() === "packaging") {
+    return true;
+  }
+
   const haystack = [
     product.name,
     product.brand,
@@ -391,6 +397,10 @@ function ProductsPageContent() {
           modelRef: packagingModelRef.trim() || undefined,
           category: packagingKind,
           name: packagingProductName.trim() || `${packagingKindLabel(packagingKind)} ${packagingBrand.trim()} ${packagingModel.trim()} ${packagingModelRef.trim()}`.trim(),
+          attributes: {
+            productGroup: "packaging",
+            packagingKind,
+          },
         }),
       });
       const data = await res.json();

@@ -6451,6 +6451,7 @@ app.get("/products", requireAuth, async (req, res) => {
         model: true,
         modelRef: true,
         category: true,
+        attributes: true,
         name: true,
         status: true,
         mainImageUrl: true,
