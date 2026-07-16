@@ -327,6 +327,7 @@ const menu: MenuItem[] = [
   { key: "almacenes-movimientos", label: "Movimiento de Stock", path: "/store/inventory", indent: 1 },
   { key: "proveedores", label: "Proveedores", path: "/store/suppliers", isMain: true },
   { key: "compras", label: "Compras", path: "/store/purchases", indent: 1 },
+  { key: "revision-compras", label: "Revisión de compras", path: "/store/purchases#revision-compras", indent: 1 },
   { key: "tracking", label: "Tracking", emptyText: "Tracking aun esta vacio.", indent: 1 },
   { key: "marketplaces", label: "Canales", isMain: true, isGroup: true },
   { key: "shopify-demarca", label: "Shopify Demarca", path: "/store/orders", indent: 1 },

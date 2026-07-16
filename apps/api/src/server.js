@@ -1738,6 +1738,7 @@ const ORDER_STATUSES = new Set(Object.keys(ORDER_STATUS_FLOW));
 const PAYMENT_STATUSES = new Set(Object.keys(PAYMENT_STATUS_FLOW));
 const PURCHASE_ORDER_STATUSES = new Set([
   "draft",
+  "review",
   "sent",
   "priced",
   "paid",

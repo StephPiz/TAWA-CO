@@ -19,6 +19,7 @@ const bodyFont = localFont({
 
 const STATUS_FLOW = [
   "draft",
+  "review",
   "sent",
   "priced",
   "paid",
@@ -34,6 +35,7 @@ const STATUS_FLOW = [
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
+  review: "Revisión de compras",
   sent: "Enviado",
   priced: "Precios recibidos",
   paid: "Pagado",
@@ -673,21 +675,36 @@ export default function PurchaseDetailPage() {
     setBusyAction("review_task");
     setError("");
     try {
+      const statusRes = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          status: "review",
+        }),
+      });
+      const statusData = await statusRes.json();
+      if (!statusRes.ok) return setError(statusData.error || "No se pudo mover el pedido a revisión");
+
       const res = await fetch(`${API_BASE}/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           storeId,
-          title: `Revisar y enviar pedido ${purchase.poNumber}`,
-          description: `Proveedor: ${purchase.supplier?.name || "-"}\nLíneas: ${purchase.items?.length || 0}\nConcepto: ${purchase.note || "-"}`,
+          title: `Revisión de compras ${purchase.poNumber}`,
+          description: `Proveedor: ${purchase.supplier?.name || "-"}\nLíneas: ${purchase.items?.length || 0}\nConcepto: ${purchase.note || "-"}\nSiguiente paso: validar internamente antes de enviar al proveedor.`,
           priority: "medium",
           linkedEntityType: "purchase_order",
           linkedEntityId: purchaseId,
         }),
       });
       const data = await res.json();
-      if (!res.ok) return setError(data.error || "No se pudo crear la tarea de revisión");
-      setInfo("Tarea de revisión creada correctamente");
+      await loadAll(storeId, purchaseId);
+      if (!res.ok) {
+        setInfo("El pedido pasó a Revisión de compras, pero la tarea no se pudo crear.");
+        return setError(data.error || "No se pudo crear la tarea de revisión");
+      }
+      setInfo("Pedido enviado a Revisión de compras y tarea creada correctamente");
     } catch {
       setError("Connection error");
     } finally {
