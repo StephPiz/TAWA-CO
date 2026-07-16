@@ -175,6 +175,12 @@ function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
   return item.product?.mainImageUrl || null;
 }
 
+function excelText(value: string | null | undefined) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return `="${normalized.replace(/"/g, '""')}"`;
+}
+
 function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"][number]) {
   const params = new URLSearchParams({
     returnTo: `/store/purchases/${purchaseId}#lista-compra`,
@@ -684,7 +690,7 @@ export default function PurchaseDetailPage() {
         purchaseItemPhoto(item) || "",
         purchaseItemModel(item),
         purchaseItemBrand(item),
-        item.ean || "",
+        excelText(item.ean),
         String(item.quantityOrdered || 0),
       ]),
       [],
@@ -796,6 +802,8 @@ export default function PurchaseDetailPage() {
     printWindow.print();
   }
 
+  const totalUnits = (purchase?.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
   if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
   if (!permissions.financeRead) {
@@ -809,21 +817,27 @@ export default function PurchaseDetailPage() {
   return (
     <div className={`${headingFont.variable} ${bodyFont.variable} min-h-screen bg-[#E8EAEC] p-6`}>
       <div className="max-w-7xl mx-auto space-y-4">
-        <div className="mb-2">
-          <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-            Detalle PO
-          </h1>
-          <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-            {storeName ? `Tienda: ${storeName}` : "Seguimiento de orden de compra"}
-          </p>
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-[29px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+              Detalle PO
+            </h1>
+            <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {storeName ? `Tienda: ${storeName}` : "Seguimiento de orden de compra"}
+            </p>
+          </div>
+          <Link
+            href="/store/purchases"
+            className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.04)]"
+            style={{ fontFamily: "var(--font-purchase-detail-body)" }}
+          >
+            ← Volver a Compras
+          </Link>
         </div>
 
         <div id="lista-compra" className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-3">
-              <Link href="/store/purchases" className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] px-4 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                ← Volver a Compras
-              </Link>
               <div>
                 <h2 className="text-[28px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                   {purchase?.poNumber || "-"}
@@ -872,7 +886,7 @@ export default function PurchaseDetailPage() {
                 </div>
                 <div>
                   <div className="text-[#7A8196]">Items</div>
-                  <div className="mt-1 text-[#141A39]">{purchase?.items?.length || 0}</div>
+                  <div className="mt-1 text-[#141A39]">{totalUnits}</div>
                 </div>
                 <div>
                   <div className="text-[#7A8196]">Pagos registrados</div>
@@ -1007,7 +1021,7 @@ export default function PurchaseDetailPage() {
             </div>
             <div className="flex items-center gap-2">
               <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                {(purchase?.items || []).length} líneas
+                {totalUnits} ítems
               </div>
               <button
                 type="button"
