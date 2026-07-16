@@ -685,6 +685,8 @@ export default function PurchaseDetailPage() {
       });
       const statusData = await statusRes.json();
       if (!statusRes.ok) return setError(statusData.error || "No se pudo mover el pedido a revisión");
+      setStatus("review");
+      setPurchase((prev) => (prev ? { ...prev, status: "review" } : prev));
 
       const res = await fetch(`${API_BASE}/tasks`, {
         method: "POST",
@@ -699,7 +701,6 @@ export default function PurchaseDetailPage() {
         }),
       });
       const data = await res.json();
-      await loadAll(storeId, purchaseId);
       if (!res.ok) {
         setInfo("El pedido pasó a Revisión de compras, pero la tarea no se pudo crear.");
         return setError(data.error || "No se pudo crear la tarea de revisión");
@@ -730,8 +731,8 @@ export default function PurchaseDetailPage() {
         return;
       }
       setStatus("checklist");
+      setPurchase((prev) => (prev ? { ...prev, status: "checklist" } : prev));
       setInfo("Pedido marcado como Lista completa");
-      await loadAll(storeId, String(purchaseId));
     } catch {
       setError("Connection error");
     } finally {
@@ -1121,11 +1122,11 @@ export default function PurchaseDetailPage() {
             </p>
           </div>
           <Link
-            href={purchase?.status === "review" ? "/store/purchases#revision-compras" : "/store/purchases"}
+            href={effectiveStatus === "review" ? "/store/purchases#revision-compras" : "/store/purchases"}
             className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.04)]"
             style={{ fontFamily: "var(--font-purchase-detail-body)" }}
           >
-            ← Volver a {purchase?.status === "review" ? "Revisión" : "Compras"}
+            ← Volver a {effectiveStatus === "review" ? "Revisión" : "Compras"}
           </Link>
         </div>
 
@@ -1182,12 +1183,12 @@ export default function PurchaseDetailPage() {
                   <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Estado actual</div>
                   <div className="mt-2 flex flex-wrap items-end gap-3">
                     <div className="text-[26px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                      {STATUS_LABELS[purchase?.status || ""] || purchase?.status || "-"}
+                      {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
                     </div>
                     <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                      {purchase?.status === "draft"
+                      {effectiveStatus === "draft"
                         ? "El pedido sigue en construcción."
-                        : purchase?.status === "review"
+                        : effectiveStatus === "review"
                           ? "Pendiente de validación interna."
                           : "El pedido ya avanzó en el flujo."}
                     </div>
@@ -1936,7 +1937,7 @@ export default function PurchaseDetailPage() {
             {STATUS_FLOW.map((step) => (
               <span
                 key={step}
-                className={`rounded-full px-3 py-2 text-[12px] border ${purchase?.status === step ? "border-[#0B1230] bg-[#0B1230] text-white" : "border-[#D5DAE5] bg-[#F7F8FB] text-[#626A82]"}`}
+                className={`rounded-full px-3 py-2 text-[12px] border ${effectiveStatus === step ? "border-[#0B1230] bg-[#0B1230] text-white" : "border-[#D5DAE5] bg-[#F7F8FB] text-[#626A82]"}`}
                 style={{ fontFamily: "var(--font-purchase-detail-body)" }}
               >
                 {STATUS_LABELS[step] || step}

@@ -137,6 +137,7 @@ enum PurchaseOrderStatus {
   paid
   preparing
   checklist
+  review
   tracking_received
   in_transit
   received
