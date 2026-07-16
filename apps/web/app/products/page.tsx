@@ -85,7 +85,7 @@ function displayProductType(product: Pick<ProductRow, "type" | "category" | "att
   const packagingKind = String(attrs.packagingKind || "").toLowerCase();
   const normalizedCategory = String(product.category || "").toLowerCase();
 
-  if (productGroup === "packaging") {
+  if (productGroup === "packaging" || normalizedCategory === "box" || normalizedCategory === "shopping-bag") {
     if (packagingKind === "shopping-bag" || normalizedCategory === "shopping-bag") return "Shopping Bag";
     return "Box";
   }

@@ -163,7 +163,7 @@ function displayProductType(type: string, category?: string | null, attributes?:
   const packagingKind = String(attrs.packagingKind || "").toLowerCase();
   const normalizedCategory = String(category || "").toLowerCase();
 
-  if (productGroup === "packaging") {
+  if (productGroup === "packaging" || normalizedCategory === "box" || normalizedCategory === "shopping-bag") {
     if (packagingKind === "shopping-bag" || normalizedCategory === "shopping-bag") return "Shopping Bag";
     return "Box";
   }
