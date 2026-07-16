@@ -2202,7 +2202,12 @@ export default function DashboardDemarcaPage() {
     }
   }
 
-  const frameSrc = activeItem.path ? `${activeItem.path}?embed=demarca` : "";
+  const frameSrc = useMemo(() => {
+    if (!activeItem.path) return "";
+    const [pathWithoutHash, hash = ""] = activeItem.path.split("#");
+    const joiner = pathWithoutHash.includes("?") ? "&" : "?";
+    return `${pathWithoutHash}${joiner}embed=demarca${hash ? `#${hash}` : ""}`;
+  }, [activeItem.path]);
   const currentLogoSrc = profile.logoUrl || "/branding/logo_demarca02.png";
   const isRemoteLogo = /^https?:\/\//.test(currentLogoSrc);
   const canAddBrandColor = brandColors.length < MAX_EXTRA_BRAND_COLORS;

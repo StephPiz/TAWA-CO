@@ -19,12 +19,12 @@ const bodyFont = localFont({
 
 const STATUS_FLOW = [
   "draft",
+  "checklist",
   "review",
   "sent",
   "priced",
   "paid",
   "preparing",
-  "checklist",
   "tracking_received",
   "in_transit",
   "received",
@@ -40,7 +40,7 @@ const STATUS_LABELS: Record<string, string> = {
   priced: "Precios recibidos",
   paid: "Pagado",
   preparing: "Preparando",
-  checklist: "Checklist",
+  checklist: "Lista completa",
   tracking_received: "Tracking recibido",
   in_transit: "En tránsito",
   received: "Recibido",
@@ -712,6 +712,33 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function markPurchaseListComplete() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    setBusyAction("list_complete");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ storeId, status: "checklist" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo marcar la lista como completa");
+        return;
+      }
+      setStatus("checklist");
+      setInfo("Pedido marcado como Lista completa");
+      await loadAll(storeId, String(purchaseId));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function sendPurchaseToSupplier() {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !purchaseId) return;
@@ -1029,6 +1056,24 @@ export default function PurchaseDetailPage() {
 
   const totalUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
   const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+  const effectiveStatus = status || purchase?.status || "";
+  const isReviewStage = effectiveStatus === "review";
+  const canMarkListComplete = effectiveStatus === "draft";
+  const canSendToReview = effectiveStatus === "checklist";
+  const isListComplete = [
+    "checklist",
+    "review",
+    "sent",
+    "priced",
+    "paid",
+    "preparing",
+    "tracking_received",
+    "in_transit",
+    "received",
+    "verified",
+    "closed",
+    "incident",
+  ].includes(effectiveStatus);
 
   useEffect(() => {
     if (!boxChoiceStorageKey || typeof window === "undefined") return;
@@ -1084,82 +1129,78 @@ export default function PurchaseDetailPage() {
           </Link>
         </div>
 
-        <div id="lista-compra" className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-3">
-              <div>
-                <h2 className="text-[28px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                  {purchase?.poNumber || "-"}
-                </h2>
-                <p className="mt-2 text-[15px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                  Proveedor: {purchase?.supplier?.name || "-"}
-                </p>
-                {purchase?.note ? (
-                  <p className="mt-2 text-[14px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                    Concepto: {purchase.note}
+        <div id="lista-compra" className="overflow-hidden rounded-[32px] bg-white shadow-[0_16px_38px_rgba(0,0,0,0.08)]">
+          <div className="grid gap-0 xl:grid-cols-[1.35fr_0.95fr]">
+            <section className="bg-[linear-gradient(135deg,#101935_0%,#182451_52%,#22347A_100%)] px-8 py-8 text-white">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="max-w-[620px]">
+                  <span className="inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[12px] tracking-[0.08em] text-white/85">
+                    Pedido en seguimiento
+                  </span>
+                  <h2 className="mt-4 text-[46px] leading-[0.95] text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {purchase?.poNumber || "-"}
+                  </h2>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-white/12 bg-white/8 px-4 py-3 backdrop-blur-sm">
+                      <div className="text-[12px] uppercase tracking-[0.08em] text-white/58">Proveedor</div>
+                      <div className="mt-2 text-[24px] leading-none text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {purchase?.supplier?.name || "-"}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-white/12 bg-white/8 px-4 py-3 backdrop-blur-sm">
+                      <div className="text-[12px] uppercase tracking-[0.08em] text-white/58">Concepto</div>
+                      <div className="mt-2 text-[18px] leading-snug text-white/92" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        {purchase?.note || "Sin concepto definido"}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mt-5 max-w-[580px] text-[14px] leading-6 text-white/74" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Esta ficha resume el estado actual del PO, su contexto y las señales rápidas que necesitamos para seguir con compras, revisión, precios o envío.
                   </p>
-                ) : null}
+                </div>
               </div>
-            </div>
 
-            <div className="grid min-w-[420px] grid-cols-2 gap-3 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              <div className="rounded-2xl bg-[#F6F7FA] p-4">
-                <div className="text-[#7A8196]">Estado actual</div>
-                <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                  {STATUS_LABELS[purchase?.status || ""] || purchase?.status || "-"}
+              <div className="mt-6 grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
+                  <div className="text-[12px] uppercase tracking-[0.08em] text-white/58">Items</div>
+                  <div className="mt-2 text-[32px] leading-none text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {totalUnits}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
+                  <div className="text-[12px] uppercase tracking-[0.08em] text-white/58">Box asociados</div>
+                  <div className="mt-2 text-[32px] leading-none text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {totalBoxUnits}
+                  </div>
                 </div>
               </div>
-              <div className="rounded-2xl bg-[#F6F7FA] p-4">
-                <div className="text-[#7A8196]">Total PO</div>
-                <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                  {formatMoney(purchase?.totalAmountEur)}
-                </div>
-              </div>
-              <div className="rounded-2xl bg-[#F6F7FA] p-4">
-                <div className="text-[#7A8196]">Fecha pedido</div>
-                <div className="mt-1 text-[#141A39]">{formatDate(purchase?.orderedAt)}</div>
-              </div>
-              <div className="rounded-2xl bg-[#F6F7FA] p-4">
-                <div className="text-[#7A8196]">Fecha esperada</div>
-                <div className="mt-1 text-[#141A39]">{formatDate(purchase?.expectedAt)}</div>
-              </div>
-            </div>
-          </div>
+            </section>
 
-          <div className="mt-4 grid grid-cols-[minmax(0,1fr)_260px] gap-4">
-            <div className="rounded-2xl bg-[#F6F7FA] p-4 text-[14px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <div className="text-[#7A8196]">Tracking</div>
-                  <div className="mt-1 text-[#141A39]">{purchase?.trackingCode || "-"}</div>
+            <section className="bg-[#FBFCFE] px-7 py-7">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.9fr)]">
+                <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
+                  <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Estado actual</div>
+                  <div className="mt-2 flex flex-wrap items-end gap-3">
+                    <div className="text-[26px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                      {STATUS_LABELS[purchase?.status || ""] || purchase?.status || "-"}
+                    </div>
+                    <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      {purchase?.status === "draft"
+                        ? "El pedido sigue en construcción."
+                        : purchase?.status === "review"
+                          ? "Pendiente de validación interna."
+                          : "El pedido ya avanzó en el flujo."}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-[#7A8196]">Items</div>
-                  <div className="mt-1 text-[#141A39]">{totalUnits}</div>
-                </div>
-                <div>
-                  <div className="text-[#7A8196]">Pagos registrados</div>
-                  <div className="mt-1 text-[#141A39]">{purchase?.payments?.length || 0}</div>
+                <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
+                  <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Fecha pedido</div>
+                  <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatDate(purchase?.orderedAt)}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="flex items-center justify-end">
-              {purchase?.trackingUrl ? (
-                <a
-                  className="inline-flex h-11 items-center justify-center rounded-full bg-[#0B1230] px-5 text-[14px] text-white"
-                  style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-                  href={purchase.trackingUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Abrir tracking
-                </a>
-              ) : (
-                <div className="inline-flex h-11 items-center justify-center rounded-full border border-[#D4D9E4] px-5 text-[14px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                  Sin tracking
-                </div>
-              )}
-            </div>
+            </section>
           </div>
         </div>
 
@@ -1648,14 +1689,154 @@ export default function PurchaseDetailPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                Lista completa
+              </h3>
+              <p className="mt-1 max-w-[720px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Este es el paso intermedio entre construir la lista y mandarla a revisión. Cuando ya no quieras seguir agregando o corrigiendo líneas, marcas el pedido como Lista completa y recién después pasa a revisión.
+              </p>
+            </div>
+            <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {isListComplete ? "Estado: Lista completa" : "Paso previo a revisión"}
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="grid gap-2 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                <div className="inline-flex items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#E9EEFF] text-[#3147D4]">1</span>
+                  <span>Termina la lista de compra y deja cantidades cerradas.</span>
+                </div>
+                <div className="inline-flex items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#E9EEFF] text-[#3147D4]">2</span>
+                  <span>Marca el pedido como Lista completa.</span>
+                </div>
+                <div className="inline-flex items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#E9EEFF] text-[#3147D4]">3</span>
+                  <span>Desde acciones del pedido ya podrás pasarlo a Revisión.</span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {canMarkListComplete ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markPurchaseListComplete}
+                    disabled={busyAction === "list_complete"}
+                  >
+                    {busyAction === "list_complete" ? "..." : "Marcar como Lista completa"}
+                  </button>
+                ) : isReviewStage ? (
+                  <span className="inline-flex rounded-full bg-[#EEF4FF] px-4 py-2 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Ya pasó a revisión
+                  </span>
+                ) : isListComplete ? (
+                  <span className="inline-flex rounded-full bg-[#E9F8EE] px-4 py-2 text-[12px] text-[#1F7A3E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Lista completa confirmada
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                Recepción de la compra
+              </h3>
+              <p className="mt-1 max-w-[720px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Aquí dejamos preparado el almacén que recibirá el pedido y el siguiente paso operativo. Según esta recepción, el flujo cambia de revisión a entrada real de stock.
+              </p>
+            </div>
+            <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {receiveWarehouseId ? "Recepción preparada" : "Pendiente de definir"}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+            <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Almacén de entrada
+                  </div>
+                  <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {receiveWarehouseId
+                      ? warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)
+                        ? `${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.code} - ${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.name}`
+                        : "Recepción preparada"
+                      : "Selecciona dónde se recibirá la compra"}
+                  </div>
+                </div>
+                <div className="inline-flex rounded-full bg-[#E9EEFF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Paso logístico
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <select
+                  className="h-11 min-w-[280px] flex-1 rounded-full border border-[#D5DAE5] bg-white px-4 text-[14px] text-[#25304F] outline-none"
+                  style={{ fontFamily: "var(--font-purchase-detail-body)" }}
+                  value={receiveWarehouseId}
+                  onChange={(e) => setReceiveWarehouseId(e.target.value)}
+                >
+                  <option value="">Selecciona almacén</option>
+                  {warehouses.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.code} - {w.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
+                  style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                  onClick={receiveAllPending}
+                  disabled={!receiveWarehouseId || busyAction === "receive_all"}
+                >
+                  {busyAction === "receive_all" ? "..." : "Recibir pendientes"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+              <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Qué cambia después
+              </div>
+              <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
+                  <span>En revisión definimos si el pedido sigue adelante o vuelve a compras.</span>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
+                  <span>Al enviar al proveedor, este almacén queda como destino operativo para la recepción.</span>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">3</span>
+                  <span>Cuando llegue la compra, desde aquí ya podrás registrar las entradas reales al stock.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="mb-3">
             <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {purchase?.status === "review" ? "Acciones de revisión" : "Acciones del pedido"}
+              {isReviewStage ? "Acciones de revisión" : "Acciones del pedido"}
             </h3>
             <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {purchase?.status === "review"
+              {isReviewStage
                 ? "En esta fase el pedido ya no se está construyendo. Aquí decidimos si vuelve a Compras para corregirse o si ya puede salir al proveedor."
-                : "Cuando la lista esté lista, puedes descargarla o enviarla a revisión antes del envío al proveedor."}
+                : canSendToReview
+                  ? "La lista ya quedó completa. Ahora sí puedes descargarla y mandarla a revisión interna."
+                  : "Primero deja cerrada la lista y márcala como Lista completa. Después se habilita el paso a Revisión."}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -1673,7 +1854,7 @@ export default function PurchaseDetailPage() {
             >
               Descargar Excel
             </button>
-            {purchase?.status === "review" ? (
+            {isReviewStage ? (
               <>
                 <button
                   type="button"
@@ -1697,13 +1878,13 @@ export default function PurchaseDetailPage() {
                 type="button"
                 className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
                 onClick={sendPurchaseReviewTask}
-                disabled={busyAction === "review_task" || !permissions.tasksWrite}
+                disabled={busyAction === "review_task" || !permissions.tasksWrite || !canSendToReview}
               >
-                {busyAction === "review_task" ? "..." : "Enviar a revisión"}
+                {busyAction === "review_task" ? "..." : canSendToReview ? "Enviar a revisión" : "Primero: Lista completa"}
               </button>
             )}
           </div>
-          {!permissions.tasksWrite && purchase?.status !== "review" ? (
+          {!permissions.tasksWrite && !isReviewStage ? (
             <div className="mt-3 text-[12px] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               Tu usuario no tiene permiso para crear tareas de revisión.
             </div>
@@ -1777,25 +1958,10 @@ export default function PurchaseDetailPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Recepción</h3>
-          <div className="flex gap-2 items-center mb-3">
-            <select className="h-11 rounded-full border border-[#D5DAE5] bg-white px-4 text-[14px] text-[#25304F] outline-none" style={{ fontFamily: "var(--font-purchase-detail-body)" }} value={receiveWarehouseId} onChange={(e) => setReceiveWarehouseId(e.target.value)}>
-              <option value="">Selecciona almacén</option>
-              {warehouses.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.code} - {w.name}
-                </option>
-              ))}
-            </select>
-            <button
-              className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
-              style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-              onClick={receiveAllPending}
-              disabled={!receiveWarehouseId || busyAction === "receive_all"}
-            >
-              {busyAction === "receive_all" ? "..." : "Recibir pendientes"}
-            </button>
-          </div>
+          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
+          <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+            Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
+          </p>
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">

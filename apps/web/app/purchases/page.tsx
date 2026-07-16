@@ -424,73 +424,73 @@ export default function PurchasesPage() {
           </>
         )}
 
-        <div className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="border-b border-[#EEF1F6] px-4 py-4">
-            <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-              {activeView === "review" ? "Pedidos en construcción" : "Compras activas"}
-            </h2>
-            <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-              {activeView === "review"
-                ? "Te dejamos esta referencia por si necesitas devolver algún pedido a Compras, pero el foco principal está en la revisión."
-                : "Aquí creas, completas y recibes los pedidos que todavía están en trabajo o ya siguieron otras fases."}
-            </p>
+        {activeView !== "review" ? (
+          <div className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="border-b border-[#EEF1F6] px-4 py-4">
+              <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
+                Compras activas
+              </h2>
+              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
+                Aquí creas, completas y recibes los pedidos que todavía están en trabajo o ya siguieron otras fases.
+              </p>
+            </div>
+            <table className="min-w-full text-sm">
+              <thead className="border-b bg-[#F5F7FB]">
+                <tr>
+                  <th className="text-left px-3 py-2">PO</th>
+                  <th className="text-left px-3 py-2">Proveedor</th>
+                  <th className="text-left px-3 py-2">Estado</th>
+                  <th className="text-left px-3 py-2">Fecha</th>
+                  <th className="text-left px-3 py-2">Total EUR</th>
+                  <th className="text-left px-3 py-2">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingRows ? (
+                  <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Cargando POs...</td></tr>
+                ) : buildPurchases.length === 0 ? (
+                  <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Sin POs</td></tr>
+                ) : (
+                  buildPurchases.map((p) => (
+                    <tr key={p.id} className="border-b border-[#EEF1F6]">
+                      <td className="px-3 py-2 font-medium text-[#131936]">{p.poNumber}</td>
+                      <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
+                          {statusLabel(p.status)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-[#212A45]">
+                        {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
+                        {p.note ? <div className="mt-1 text-[12px] text-[#6E768E]">{p.note}</div> : null}
+                      </td>
+                      <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] disabled:opacity-50"
+                            disabled={
+                              !receiveWarehouseId ||
+                              receivingPurchaseId === p.id ||
+                              String(p.status || "").toLowerCase().includes("received") ||
+                              String(p.status || "").toLowerCase().includes("closed")
+                            }
+                            onClick={() => receivePurchase(p.id)}
+                          >
+                            {receivingPurchaseId === p.id ? "..." : "Recibir"}
+                          </button>
+                          <Link className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
+                            Detalle
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-          <table className="min-w-full text-sm">
-            <thead className="border-b bg-[#F5F7FB]">
-              <tr>
-                <th className="text-left px-3 py-2">PO</th>
-                <th className="text-left px-3 py-2">Proveedor</th>
-                <th className="text-left px-3 py-2">Estado</th>
-                <th className="text-left px-3 py-2">Fecha</th>
-                <th className="text-left px-3 py-2">Total EUR</th>
-                <th className="text-left px-3 py-2">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loadingRows ? (
-                <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Cargando POs...</td></tr>
-              ) : buildPurchases.length === 0 ? (
-                <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Sin POs</td></tr>
-              ) : (
-                buildPurchases.map((p) => (
-                  <tr key={p.id} className="border-b border-[#EEF1F6]">
-                    <td className="px-3 py-2 font-medium text-[#131936]">{p.poNumber}</td>
-                    <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                        {statusLabel(p.status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-[#212A45]">
-                      {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
-                      {p.note ? <div className="mt-1 text-[12px] text-[#6E768E]">{p.note}</div> : null}
-                    </td>
-                    <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] disabled:opacity-50"
-                          disabled={
-                            !receiveWarehouseId ||
-                            receivingPurchaseId === p.id ||
-                            String(p.status || "").toLowerCase().includes("received") ||
-                            String(p.status || "").toLowerCase().includes("closed")
-                          }
-                          onClick={() => receivePurchase(p.id)}
-                        >
-                          {receivingPurchaseId === p.id ? "..." : "Recibir"}
-                        </button>
-                        <Link className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
-                          Detalle
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        ) : null}
 
         <div id="revision-compras" className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="border-b border-[#EEF1F6] px-4 py-4">
