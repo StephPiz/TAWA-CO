@@ -712,6 +712,58 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  async function sendPurchaseToSupplier() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    setBusyAction("send_supplier");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ storeId, status: "sent" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo enviar el pedido al proveedor");
+        return;
+      }
+      setInfo("Pedido marcado como enviado al proveedor");
+      await loadAll(storeId, String(purchaseId));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function returnPurchaseToDraft() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    setBusyAction("return_draft");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ storeId, status: "draft" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo devolver el pedido a Compras");
+        return;
+      }
+      setInfo("Pedido devuelto a Compras para ajustes");
+      await loadAll(storeId, String(purchaseId));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   function downloadPurchaseCsv() {
     if (!purchase) return;
     const watchUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
@@ -1024,11 +1076,11 @@ export default function PurchaseDetailPage() {
             </p>
           </div>
           <Link
-            href="/store/purchases"
+            href={purchase?.status === "review" ? "/store/purchases#revision-compras" : "/store/purchases"}
             className="inline-flex h-11 items-center rounded-full border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#25304F] shadow-[0_8px_20px_rgba(0,0,0,0.04)]"
             style={{ fontFamily: "var(--font-purchase-detail-body)" }}
           >
-            ← Volver a Compras
+            ← Volver a {purchase?.status === "review" ? "Revisión" : "Compras"}
           </Link>
         </div>
 
@@ -1598,10 +1650,12 @@ export default function PurchaseDetailPage() {
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="mb-3">
             <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              Acciones del pedido
+              {purchase?.status === "review" ? "Acciones de revisión" : "Acciones del pedido"}
             </h3>
             <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              Cuando la lista esté lista, puedes descargarla o enviarla a revisión antes del envío al proveedor.
+              {purchase?.status === "review"
+                ? "En esta fase el pedido ya no se está construyendo. Aquí decidimos si vuelve a Compras para corregirse o si ya puede salir al proveedor."
+                : "Cuando la lista esté lista, puedes descargarla o enviarla a revisión antes del envío al proveedor."}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -1619,16 +1673,37 @@ export default function PurchaseDetailPage() {
             >
               Descargar Excel
             </button>
-            <button
-              type="button"
-              className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
-              onClick={sendPurchaseReviewTask}
-              disabled={busyAction === "review_task" || !permissions.tasksWrite}
-            >
-              {busyAction === "review_task" ? "..." : "Enviar a revisión"}
-            </button>
+            {purchase?.status === "review" ? (
+              <>
+                <button
+                  type="button"
+                  className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F7F9FC] disabled:opacity-50"
+                  onClick={returnPurchaseToDraft}
+                  disabled={busyAction === "return_draft"}
+                >
+                  {busyAction === "return_draft" ? "..." : "Devolver a Compras"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                  onClick={sendPurchaseToSupplier}
+                  disabled={busyAction === "send_supplier"}
+                >
+                  {busyAction === "send_supplier" ? "..." : "Enviar al proveedor"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                onClick={sendPurchaseReviewTask}
+                disabled={busyAction === "review_task" || !permissions.tasksWrite}
+              >
+                {busyAction === "review_task" ? "..." : "Enviar a revisión"}
+              </button>
+            )}
           </div>
-          {!permissions.tasksWrite ? (
+          {!permissions.tasksWrite && purchase?.status !== "review" ? (
             <div className="mt-3 text-[12px] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               Tu usuario no tiene permiso para crear tareas de revisión.
             </div>
