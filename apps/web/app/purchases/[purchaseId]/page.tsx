@@ -1163,6 +1163,17 @@ export default function PurchaseDetailPage() {
                       </td>
                     </tr>
                   )})}
+                  <tr className="bg-[#FBFCFE]">
+                    <td colSpan={4} className="border-t border-[#D9DDE7] px-3 py-4 text-right text-[13px] text-[#5F6780]">
+                      Total cantidad
+                    </td>
+                    <td className="border-t border-[#D9DDE7] px-3 py-4">
+                      <div className="text-[24px] font-semibold text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {(purchase?.items || []).reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0)}
+                      </div>
+                    </td>
+                    <td colSpan={2} className="border-t border-[#D9DDE7] px-3 py-4" />
+                  </tr>
                 </tbody>
               </table>
             </div>
