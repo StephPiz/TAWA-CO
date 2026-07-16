@@ -394,22 +394,26 @@ function ProductsPageContent() {
                 setProductName(e.target.value);
               }}
             />
-            <select className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none" value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="watch">Categoria: Reloj</option>
-              <option value="bag">Categoria: Bolso</option>
-              <option value="perfume">Categoria: Perfume</option>
-              <option value="accessory">Categoria: Accesorio</option>
-              <option value="vintage">Categoria: Vintage</option>
-              <option value="refurbished">Categoria: Reacondicionado</option>
-              <option value="other">Categoria: Otro</option>
+            <select
+              className="h-11 rounded-xl border border-[#D4D9E4] px-3 text-[14px] text-[#25304F] outline-none"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              <option value="watch">Categoria</option>
+              <option value="bag">Bolso</option>
+              <option value="perfume">Perfume</option>
+              <option value="accessory">Accesorio</option>
+              <option value="vintage">Vintage</option>
+              <option value="refurbished">Reacondicionado</option>
+              <option value="other">Otro</option>
             </select>
-            <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984]">
-              SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{skuPreview || "Se generara al crear"}</span>
-            </div>
-            <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F] md:col-span-2">
+            <label className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#25304F]">
               <input type="checkbox" checked={useInternalEan} onChange={(e) => setUseInternalEan(e.target.checked)} />
               Generar EAN interno
             </label>
+            <div className="flex h-11 items-center rounded-xl border border-[#D4D9E4] px-3 text-[13px] text-[#616984] md:col-span-2">
+              SKU automatico: <span className="ml-2 font-semibold text-[#25304F]">{skuPreview || "Se generara al crear"}</span>
+            </div>
           </form>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[#6E768E]">
             <span>Tipo: {productTypeLabel(type)}</span>
