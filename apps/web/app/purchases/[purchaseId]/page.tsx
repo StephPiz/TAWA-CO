@@ -194,12 +194,6 @@ function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
   return item.product?.mainImageUrl || null;
 }
 
-function excelText(value: string | null | undefined) {
-  const normalized = String(value || "").trim();
-  if (!normalized) return "";
-  return `="${normalized.replace(/"/g, '""')}"`;
-}
-
 function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"][number]) {
   const params = new URLSearchParams({
     returnTo: `/store/purchases/${purchaseId}#lista-compra`,
@@ -713,177 +707,75 @@ export default function PurchaseDetailPage() {
         }).replaceAll("/", " / ")
       : "-";
 
-    const buildExcelRow = (item: PurchaseDetail["items"][number]) => `
-      <tr>
-        <td class="photo-cell">
-          ${
-            purchaseItemPhoto(item)
-              ? `<a href="${purchaseItemPhoto(item)}" class="photo-link">View photo</a>`
-              : `<span class="photo-placeholder">No photo</span>`
-          }
-        </td>
-        <td class="cell-text">${purchaseItemModel(item)}</td>
-        <td class="cell-text">${purchaseItemBrand(item)}</td>
-        <td class="cell-text cell-ean">${excelText(item.ean || "-")}</td>
-        <td class="cell-qty">${item.quantityOrdered || 0}</td>
-      </tr>
-    `;
+    const csvValue = (value: string | number | null | undefined) => {
+      const normalized = String(value ?? "");
+      return `"${normalized.replaceAll('"', '""')}"`;
+    };
 
-    const watchRows = mainPurchaseItems.map((item) => buildExcelRow(item)).join("");
-    const boxRows = boxPurchaseItems.map((item) => buildExcelRow(item)).join("");
+    const csvTextEan = (value: string | null | undefined) => {
+      const normalized = String(value ?? "").trim();
+      if (!normalized || normalized === "-") return csvValue("-");
+      return csvValue(`="${normalized}"`);
+    };
 
-    const workbookHtml = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office"
-            xmlns:x="urn:schemas-microsoft-com:office:excel"
-            xmlns="http://www.w3.org/TR/REC-html40">
-        <head>
-          <meta charset="utf-8" />
-          <!--[if gte mso 9]>
-          <xml>
-            <x:ExcelWorkbook>
-              <x:ExcelWorksheets>
-                <x:ExcelWorksheet>
-                  <x:Name>${purchase.poNumber || "Purchase"}</x:Name>
-                  <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-                </x:ExcelWorksheet>
-              </x:ExcelWorksheets>
-            </x:ExcelWorkbook>
-          </xml>
-          <![endif]-->
-          <style>
-            body { font-family: Arial, sans-serif; padding: 22px; color: #141A39; }
-            .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
-            .po-title { font-size: 28px; font-weight: 700; line-height: 1.05; color: #141A39; }
-            .meta-wrap { display: flex; gap: 14px; align-items: stretch; }
-            .meta-card { width: 220px; border: 1px solid #D9DDE7; border-radius: 16px; padding: 14px 16px; background: #F7F8FB; box-sizing: border-box; }
-            .meta-card--compact { width: 170px; }
-            .meta-label { font-size: 12px; color: #616984; text-transform: uppercase; letter-spacing: 0.04em; }
-            .meta-value { margin-top: 6px; font-size: 24px; font-weight: 700; color: #141A39; }
-            .table-title { margin-top: 24px; margin-bottom: 8px; font-size: 16px; font-weight: 700; text-transform: uppercase; color: #141A39; letter-spacing: 0.04em; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
-            th, td { border: 1px solid #D9DDE7; padding: 10px; vertical-align: middle; background: white; }
-            th { background: #F7F8FB; text-align: left; font-size: 12px; color: #4F5568; }
-            .photo-cell { width: 92px; text-align: center; }
-            .photo-link { display: inline-block; padding: 6px 10px; border: 1px solid #CAD2E5; border-radius: 999px; color: #3147D4; text-decoration: none; font-size: 11px; font-weight: 700; }
-            .photo-placeholder { display: inline-block; padding: 6px 10px; border: 1px dashed #D4D9E4; border-radius: 999px; color: #8A91A8; font-size: 11px; }
-            .cell-text { font-size: 14px; color: #25304F; }
-            .cell-ean { mso-number-format:"\\@"; }
-            .cell-qty { font-size: 22px; font-weight: 700; color: #141A39; text-align: center; }
-            .total-row td { background: #F7F8FB; font-weight: 700; }
-            .summary-table { width: 420px; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div class="po-title">${purchase.poNumber || "-"}</div>
-            <div class="meta-wrap">
-              <div class="meta-card">
-                <div class="meta-label">Date</div>
-                <div class="meta-value">${formattedDate}</div>
-              </div>
-              <div class="meta-card meta-card--compact">
-                <div class="meta-label">Total Items</div>
-                <div class="meta-value">${watchUnits}</div>
-              </div>
-              ${
-                boxUnits > 0
-                  ? `
-              <div class="meta-card meta-card--compact">
-                <div class="meta-label">Total Box</div>
-                <div class="meta-value">${boxUnits}</div>
-              </div>
-              `
-                  : ""
-              }
-            </div>
-          </div>
+    const makeRow = (cells: Array<string | number | null | undefined>) => cells.map((cell) => csvValue(cell)).join(";");
 
-          ${
-            watchRows
-              ? `
-          <div class="table-title">Products</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Photo</th>
-                <th>Model</th>
-                <th>Brand</th>
-                <th>EAN</th>
-                <th>Quantity</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${watchRows}
-              <tr class="total-row">
-                <td colspan="4">Total items quantity</td>
-                <td class="cell-qty">${watchUnits}</td>
-              </tr>
-            </tbody>
-          </table>
-          `
-              : ""
-          }
+    const rows: string[] = [];
 
-          ${
-            boxRows
-              ? `
-          <div class="table-title">Box</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Photo</th>
-                <th>Model</th>
-                <th>Brand</th>
-                <th>EAN</th>
-                <th>Quantity</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${boxRows}
-              <tr class="total-row">
-                <td colspan="4">Total box quantity</td>
-                <td class="cell-qty">${boxUnits}</td>
-              </tr>
-            </tbody>
-          </table>
-          `
-              : ""
-          }
+    rows.push(makeRow([purchase.poNumber || "-"]));
+    rows.push(makeRow(["Date", formattedDate]));
+    rows.push(makeRow(["Total Items", watchUnits]));
+    if (boxUnits > 0) rows.push(makeRow(["Total Box", boxUnits]));
+    rows.push("");
 
-          <div class="table-title">Summary</div>
-          <table class="summary-table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Quantity</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="cell-text">Watch total quantity</td>
-                <td class="cell-qty">${watchUnits}</td>
-              </tr>
-              ${
-                boxUnits > 0
-                  ? `
-              <tr>
-                <td class="cell-text">Box total quantity</td>
-                <td class="cell-qty">${boxUnits}</td>
-              </tr>
-              `
-                  : ""
-              }
-            </tbody>
-          </table>
-        </body>
-      </html>
-    `;
+    if (mainPurchaseItems.length > 0) {
+      rows.push(makeRow(["Products"]));
+      rows.push(makeRow(["Photo", "Model", "Brand", "EAN", "Quantity"]));
+      mainPurchaseItems.forEach((item) => {
+        rows.push(
+          [
+            purchaseItemPhoto(item) ? "Photo available" : "No photo",
+            purchaseItemModel(item),
+            purchaseItemBrand(item),
+            csvTextEan(item.ean || "-"),
+            csvValue(item.quantityOrdered || 0),
+          ].join(";")
+        );
+      });
+      rows.push(["", "", "", csvValue("Total items quantity"), csvValue(watchUnits)].join(";"));
+      rows.push("");
+    }
 
-    const blob = new Blob(["\uFEFF" + workbookHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    if (boxPurchaseItems.length > 0) {
+      rows.push(makeRow(["Box"]));
+      rows.push(makeRow(["Photo", "Model", "Brand", "EAN", "Quantity"]));
+      boxPurchaseItems.forEach((item) => {
+        rows.push(
+          [
+            purchaseItemPhoto(item) ? "Photo available" : "No photo",
+            purchaseItemModel(item),
+            purchaseItemBrand(item),
+            csvTextEan(item.ean || "-"),
+            csvValue(item.quantityOrdered || 0),
+          ].join(";")
+        );
+      });
+      rows.push(["", "", "", csvValue("Total box quantity"), csvValue(boxUnits)].join(";"));
+      rows.push("");
+    }
+
+    rows.push(makeRow(["Summary"]));
+    rows.push(makeRow(["Type", "Quantity"]));
+    rows.push(makeRow(["Watch total quantity", watchUnits]));
+    if (boxUnits > 0) rows.push(makeRow(["Box total quantity", boxUnits]));
+
+    const csvContent = rows.join("\r\n");
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${purchase.poNumber || "lista-compra"}.xls`;
+    link.download = `${purchase.poNumber || "lista-compra"}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
