@@ -30,19 +30,22 @@ type Purchase = {
 
 const PURCHASE_STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
-  review: "Revisión de compras",
+  review: "Revisión",
   sent: "Enviado al proveedor",
   priced: "Precios recibidos",
   paid: "Pagado",
   preparing: "Preparando",
-  checklist: "Checklist",
+  checklist: "Lista completa",
   tracking_received: "Tracking recibido",
   in_transit: "En tránsito",
   received: "Recibido",
   verified: "Verificado",
-  closed: "Cerrado",
+  closed: "Completado",
   incident: "Incidencia",
 };
+
+const BUILD_STAGE_STATUSES = new Set(["draft", "checklist"]);
+const REVIEW_STAGE_STATUSES = new Set(["review"]);
 
 function buildPurchaseNumber(dateValue: string, supplier?: Supplier | null) {
   const raw = String(dateValue || "").trim();
@@ -136,11 +139,19 @@ export default function PurchasesPage() {
   }
 
   const reviewPurchases = useMemo(
-    () => purchases.filter((purchase) => String(purchase.status || "").toLowerCase() === "review"),
+    () =>
+      purchases.filter((purchase) => {
+        const status = String(purchase.status || "").toLowerCase();
+        return REVIEW_STAGE_STATUSES.has(status);
+      }),
     [purchases],
   );
   const buildPurchases = useMemo(
-    () => purchases.filter((purchase) => String(purchase.status || "").toLowerCase() !== "review"),
+    () =>
+      purchases.filter((purchase) => {
+        const status = String(purchase.status || "").toLowerCase();
+        return BUILD_STAGE_STATUSES.has(status);
+      }),
     [purchases],
   );
   const reviewSupplierCount = useMemo(
@@ -431,7 +442,7 @@ export default function PurchasesPage() {
                 Compras activas
               </h2>
               <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-                Aquí creas, completas y recibes los pedidos que todavía están en trabajo o ya siguieron otras fases.
+                Aquí armamos el pedido desde cero y dejamos la lista lista antes de mandarla a revisión.
               </p>
             </div>
             <table className="min-w-full text-sm">
@@ -449,7 +460,7 @@ export default function PurchasesPage() {
                 {loadingRows ? (
                   <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Cargando POs...</td></tr>
                 ) : buildPurchases.length === 0 ? (
-                  <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">Sin POs</td></tr>
+                  <tr><td colSpan={6} className="px-3 py-4 text-[#6E768E]">No hay pedidos en construcción.</td></tr>
                 ) : (
                   buildPurchases.map((p) => (
                     <tr key={p.id} className="border-b border-[#EEF1F6]">
@@ -472,8 +483,7 @@ export default function PurchasesPage() {
                             disabled={
                               !receiveWarehouseId ||
                               receivingPurchaseId === p.id ||
-                              String(p.status || "").toLowerCase().includes("received") ||
-                              String(p.status || "").toLowerCase().includes("closed")
+                              !BUILD_STAGE_STATUSES.has(String(p.status || "").toLowerCase())
                             }
                             onClick={() => receivePurchase(p.id)}
                           >
@@ -492,59 +502,61 @@ export default function PurchasesPage() {
           </div>
         ) : null}
 
-        <div id="revision-compras" className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="border-b border-[#EEF1F6] px-4 py-4">
-            <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-              Revisión de compras
-            </h2>
-            <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-              Aquí quedan los pedidos que ya salieron de Compras y deben aprobarse, devolverse para cambios o enviarse al proveedor.
-            </p>
+        {activeView === "review" ? (
+          <div id="revision-compras" className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="border-b border-[#EEF1F6] px-4 py-4">
+              <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
+                Revisión de compras
+              </h2>
+              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
+                Aquí quedan los pedidos que ya salieron de Compras y deben aprobarse, devolverse para cambios o enviarse al proveedor.
+              </p>
+            </div>
+            <table className="min-w-full text-sm">
+              <thead className="border-b bg-[#F5F7FB]">
+                <tr>
+                  <th className="text-left px-3 py-2">PO</th>
+                  <th className="text-left px-3 py-2">Proveedor</th>
+                  <th className="text-left px-3 py-2">Concepto</th>
+                  <th className="text-left px-3 py-2">Estado</th>
+                  <th className="text-left px-3 py-2">Fecha</th>
+                  <th className="text-left px-3 py-2">Total EUR</th>
+                  <th className="text-left px-3 py-2">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingRows ? (
+                  <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Cargando revisión...</td></tr>
+                ) : reviewPurchases.length === 0 ? (
+                  <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Aún no hay pedidos en revisión.</td></tr>
+                ) : (
+                  reviewPurchases.map((p) => (
+                    <tr key={`review-${p.id}`} className="border-b border-[#EEF1F6]">
+                      <td className="px-3 py-2 font-medium text-[#131936]">{p.poNumber}</td>
+                      <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
+                      <td className="px-3 py-2 text-[#5F6780]">{p.note || "Sin concepto"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
+                          {statusLabel(p.status)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-[#212A45]">
+                        {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
+                        {p.note ? <div className="mt-1 text-[12px] text-[#6E768E]">{p.note}</div> : null}
+                      </td>
+                      <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
+                      <td className="px-3 py-2">
+                        <Link className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
+                          Abrir revisión
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-          <table className="min-w-full text-sm">
-            <thead className="border-b bg-[#F5F7FB]">
-              <tr>
-                <th className="text-left px-3 py-2">PO</th>
-                <th className="text-left px-3 py-2">Proveedor</th>
-                <th className="text-left px-3 py-2">Concepto</th>
-                <th className="text-left px-3 py-2">Estado</th>
-                <th className="text-left px-3 py-2">Fecha</th>
-                <th className="text-left px-3 py-2">Total EUR</th>
-                <th className="text-left px-3 py-2">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loadingRows ? (
-                <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Cargando revisión...</td></tr>
-              ) : reviewPurchases.length === 0 ? (
-                <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Aún no hay pedidos en revisión.</td></tr>
-              ) : (
-                reviewPurchases.map((p) => (
-                  <tr key={`review-${p.id}`} className="border-b border-[#EEF1F6]">
-                    <td className="px-3 py-2 font-medium text-[#131936]">{p.poNumber}</td>
-                    <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
-                    <td className="px-3 py-2 text-[#5F6780]">{p.note || "Sin concepto"}</td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                        {statusLabel(p.status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-[#212A45]">
-                      {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
-                      {p.note ? <div className="mt-1 text-[12px] text-[#6E768E]">{p.note}</div> : null}
-                    </td>
-                    <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2">
-                      <Link className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
-                        Abrir revisión
-                      </Link>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        ) : null}
       </div>
     </div>
   );

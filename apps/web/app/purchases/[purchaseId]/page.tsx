@@ -17,26 +17,10 @@ const bodyFont = localFont({
   variable: "--font-purchase-detail-body",
 });
 
-const STATUS_FLOW = [
-  "draft",
-  "checklist",
-  "review",
-  "sent",
-  "priced",
-  "paid",
-  "preparing",
-  "tracking_received",
-  "in_transit",
-  "received",
-  "verified",
-  "closed",
-  "incident",
-];
-
 const STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
-  review: "Revisión de compras",
-  sent: "Enviado",
+  review: "Revisión",
+  sent: "Enviado al proveedor",
   priced: "Precios recibidos",
   paid: "Pagado",
   preparing: "Preparando",
@@ -45,7 +29,7 @@ const STATUS_LABELS: Record<string, string> = {
   in_transit: "En tránsito",
   received: "Recibido",
   verified: "Verificado",
-  closed: "Cerrado",
+  closed: "Completado",
   incident: "Incidencia",
   planned: "Planificado",
   delivered: "Entregado",
@@ -184,6 +168,33 @@ function formatMoney(value: number | null | undefined) {
   return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(Number(value));
 }
 
+function purchaseStatusDescription(status: string) {
+  switch (String(status || "").toLowerCase()) {
+    case "draft":
+      return "El pedido sigue en construcción.";
+    case "checklist":
+      return "La lista quedó cerrada y ya puede pasar a revisión.";
+    case "review":
+      return "Pendiente de validación interna.";
+    case "sent":
+      return "El pedido ya salió al proveedor.";
+    case "priced":
+      return "Ya llegaron los precios y toca validarlos.";
+    case "paid":
+      return "La compra quedó pagada y esperamos salida.";
+    case "tracking_received":
+      return "El proveedor ya compartió tracking.";
+    case "in_transit":
+      return "La mercancía está en tránsito.";
+    case "received":
+      return "La compra ya llegó al almacén.";
+    case "closed":
+      return "La compra quedó completada.";
+    default:
+      return "El pedido ya avanzó en el flujo.";
+  }
+}
+
 function purchaseItemModel(item: PurchaseDetail["items"][number]) {
   return item.product?.modelRef || item.product?.model || item.title || item.ean || "-";
 }
@@ -245,6 +256,11 @@ export default function PurchaseDetailPage() {
   const [lineInfoOpen, setLineInfoOpen] = useState(false);
   const [listEditMode, setListEditMode] = useState(false);
   const [addBoxChoice, setAddBoxChoice] = useState<"yes" | "no">("no");
+  const [sendSupplierModalOpen, setSendSupplierModalOpen] = useState(false);
+  const [supplierSentDate, setSupplierSentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [supplierPdfReady, setSupplierPdfReady] = useState(false);
+  const [supplierExcelReady, setSupplierExcelReady] = useState(false);
+  const [supplierOrderConfirmed, setSupplierOrderConfirmed] = useState(false);
   const lineSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const boxChoiceStorageKey = useMemo(() => {
@@ -409,28 +425,6 @@ export default function PurchaseDetailPage() {
     setLineSearch(label);
     setLineTitle(product.name || label);
     setLineEan(product.ean || "");
-  }
-
-  async function updateStatus() {
-    const token = requireTokenOrRedirect();
-    if (!token || !storeId || !purchaseId) return;
-    setBusyAction("status");
-    setError("");
-    try {
-      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ storeId, status }),
-      });
-      const data = await res.json();
-      if (!res.ok) return setError(data.error || "Cannot update status");
-      setInfo("Estado actualizado");
-      await loadAll(storeId, purchaseId);
-    } catch {
-      setError("Connection error");
-    } finally {
-      setBusyAction("");
-    }
   }
 
   async function receiveAllPending() {
@@ -706,6 +700,7 @@ export default function PurchaseDetailPage() {
         return setError(data.error || "No se pudo crear la tarea de revisión");
       }
       setInfo("Pedido enviado a Revisión de compras y tarea creada correctamente");
+      await loadAll(storeId, String(purchaseId));
     } catch {
       setError("Connection error");
     } finally {
@@ -733,6 +728,7 @@ export default function PurchaseDetailPage() {
       setStatus("checklist");
       setPurchase((prev) => (prev ? { ...prev, status: "checklist" } : prev));
       setInfo("Pedido marcado como Lista completa");
+      await loadAll(storeId, String(purchaseId));
     } catch {
       setError("Connection error");
     } finally {
@@ -740,30 +736,76 @@ export default function PurchaseDetailPage() {
     }
   }
 
-  async function sendPurchaseToSupplier() {
+  async function updatePurchaseStatus(nextStatus: string, successMessage: string, busyKey: string) {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !purchaseId) return;
-    setBusyAction("send_supplier");
+    setBusyAction(busyKey);
     setError("");
     setInfo("");
     try {
       const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ storeId, status: "sent" }),
+        body: JSON.stringify({ storeId, status: nextStatus }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "No se pudo enviar el pedido al proveedor");
+        setError(data.error || "No se pudo actualizar el estado del pedido");
         return;
       }
-      setInfo("Pedido marcado como enviado al proveedor");
+      setStatus(nextStatus);
+      setPurchase((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+      setInfo(successMessage);
       await loadAll(storeId, String(purchaseId));
     } catch {
       setError("Connection error");
     } finally {
       setBusyAction("");
     }
+  }
+
+  function openSendSupplierModal() {
+    setSupplierSentDate(new Date().toISOString().slice(0, 10));
+    setSupplierPdfReady(false);
+    setSupplierExcelReady(false);
+    setSupplierOrderConfirmed(false);
+    setSendSupplierModalOpen(true);
+    setError("");
+    setInfo("");
+  }
+
+  function closeSendSupplierModal() {
+    if (busyAction === "send_supplier") return;
+    setSendSupplierModalOpen(false);
+  }
+
+  async function sendPurchaseToSupplier() {
+    await updatePurchaseStatus(
+      "sent",
+      `Pedido marcado como enviado al proveedor el ${formatDate(supplierSentDate)}${supplierPdfReady || supplierExcelReady ? " con archivos preparados" : ""}`,
+      "send_supplier"
+    );
+    setSendSupplierModalOpen(false);
+  }
+
+  async function markSupplierPricesReceived() {
+    await updatePurchaseStatus("priced", "El proveedor ya respondió y ahora toca revisar precios.", "priced");
+  }
+
+  async function markPurchasePaid() {
+    await updatePurchaseStatus("paid", "La compra quedó marcada como pagada.", "paid");
+  }
+
+  async function markTrackingReceived() {
+    await updatePurchaseStatus("tracking_received", "Tracking recibido. Ahora seguimos la llegada del pedido.", "tracking");
+  }
+
+  async function markPurchaseInTransit() {
+    await updatePurchaseStatus("in_transit", "La compra quedó marcada en tránsito.", "in_transit");
+  }
+
+  async function markPurchaseArrived() {
+    await updatePurchaseStatus("received", "La compra ya llegó y está lista para recepción en almacén.", "arrived");
   }
 
   async function returnPurchaseToDraft() {
@@ -1059,6 +1101,22 @@ export default function PurchaseDetailPage() {
   const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
   const effectiveStatus = status || purchase?.status || "";
   const isReviewStage = effectiveStatus === "review";
+  const isSupplierStage = ["sent", "priced", "paid", "preparing", "tracking_received", "in_transit"].includes(effectiveStatus);
+  const isArrivalStage = ["received", "verified", "closed", "incident"].includes(effectiveStatus);
+  const heroTrackingLabel =
+    effectiveStatus === "review"
+      ? "Pedido en revisión"
+      : effectiveStatus === "sent"
+        ? "Pedido enviado"
+        : effectiveStatus === "priced"
+          ? "Precios recibidos"
+          : effectiveStatus === "paid"
+            ? "Compra pagada"
+            : effectiveStatus === "tracking_received"
+              ? "Tracking recibido"
+              : effectiveStatus === "in_transit"
+                ? "Pedido en tránsito"
+      : "Pedido en seguimiento";
   const canMarkListComplete = effectiveStatus === "draft";
   const canSendToReview = effectiveStatus === "checklist";
   const isListComplete = [
@@ -1136,7 +1194,7 @@ export default function PurchaseDetailPage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="max-w-[620px]">
                   <span className="inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[12px] tracking-[0.08em] text-white/85">
-                    Pedido en seguimiento
+                    {heroTrackingLabel}
                   </span>
                   <h2 className="mt-4 text-[46px] leading-[0.95] text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {purchase?.poNumber || "-"}
@@ -1181,19 +1239,15 @@ export default function PurchaseDetailPage() {
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.9fr)]">
                 <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
                   <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Estado actual</div>
-                  <div className="mt-2 flex flex-wrap items-end gap-3">
-                    <div className="text-[26px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                      {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
-                    </div>
-                    <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                      {effectiveStatus === "draft"
-                        ? "El pedido sigue en construcción."
-                        : effectiveStatus === "review"
-                          ? "Pendiente de validación interna."
-                          : "El pedido ya avanzó en el flujo."}
+                    <div className="mt-2 flex flex-wrap items-end gap-3">
+                      <div className="text-[26px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
+                      </div>
+                      <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        {purchaseStatusDescription(effectiveStatus)}
+                      </div>
                     </div>
                   </div>
-                </div>
                 <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
                   <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Fecha pedido</div>
                   <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
@@ -1749,81 +1803,283 @@ export default function PurchaseDetailPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                Recepción de la compra
+                {isReviewStage
+                  ? "Salida al proveedor"
+                  : isSupplierStage
+                    ? "Seguimiento con proveedor"
+                    : isArrivalStage
+                      ? "Recepción de la compra"
+                      : "Recepción prevista"}
               </h3>
               <p className="mt-1 max-w-[720px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Aquí dejamos preparado el almacén que recibirá el pedido y el siguiente paso operativo. Según esta recepción, el flujo cambia de revisión a entrada real de stock.
+                {isReviewStage
+                  ? "Este es el punto donde confirmamos que el pedido ya puede salir al proveedor. Aquí revisamos el archivo, la fecha de salida y dejamos claro el siguiente paso."
+                  : isSupplierStage
+                    ? "El pedido ya salió de la revisión interna. Ahora seguimos la respuesta del proveedor, la validación de precios, el pago y luego el tracking hasta que llegue la mercancía."
+                    : isArrivalStage
+                      ? "Aquí dejamos preparado el almacén que recibirá el pedido y el siguiente paso operativo. Según esta recepción, el flujo cambia de revisión a entrada real de stock."
+                      : "Aunque aún estamos armando el pedido, aquí ya podemos dejar previsto el almacén de entrada para que el flujo quede ordenado desde el inicio."}
               </p>
             </div>
             <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {receiveWarehouseId ? "Recepción preparada" : "Pendiente de definir"}
+              {isReviewStage
+                ? "Pendiente de salida"
+                : isSupplierStage
+                  ? "Proveedor en curso"
+                  : receiveWarehouseId
+                  ? "Recepción preparada"
+                  : "Pendiente de definir"}
             </div>
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-            <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
+            {isReviewStage ? (
+              <>
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Próximo envío
+                      </div>
+                      <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {purchase?.supplier?.name || "Proveedor sin definir"}
+                      </div>
+                    </div>
+                    <div className="inline-flex rounded-full bg-[#FFF4E5] px-3 py-1 text-[12px] text-[#B54708]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Preparar salida
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Archivo sugerido
+                      </div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        PDF o Excel del pedido
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Antes de enviarlo, conviene descargar al menos uno de los dos formatos para compartirlo con el proveedor.
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Fecha sugerida
+                      </div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {formatDate(supplierSentDate || new Date().toISOString().slice(0, 10))}
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        La confirmas al abrir el envío. Así dejamos claro cuándo salió realmente el pedido al proveedor.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
+                      style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                      onClick={openSendSupplierModal}
+                      disabled={busyAction === "send_supplier"}
+                    >
+                      {busyAction === "send_supplier" ? "..." : "Preparar envío al proveedor"}
+                    </button>
+                    <span className="inline-flex items-center rounded-full bg-[#EEF2FF] px-4 py-2 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Después de este paso, el estado cambia a Enviado al proveedor
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                    Almacén de entrada
+                    Qué cambia después
                   </div>
-                  <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                    {receiveWarehouseId
-                      ? warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)
-                        ? `${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.code} - ${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.name}`
-                        : "Recepción preparada"
-                      : "Selecciona dónde se recibirá la compra"}
+                  <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
+                      <span>El pedido deja la fase interna de revisión y ya sale del equipo hacia el proveedor.</span>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
+                      <span>Luego esperaremos la respuesta del proveedor con precios, faltantes o confirmación del pedido.</span>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">3</span>
+                      <span>Más adelante, ese mismo pedido seguirá con pago, tracking y recepción real en almacén.</span>
+                    </div>
                   </div>
                 </div>
-                <div className="inline-flex rounded-full bg-[#E9EEFF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                  Paso logístico
-                </div>
-              </div>
+              </>
+            ) : isSupplierStage ? (
+              <>
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Fase con proveedor
+                      </div>
+                      <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {STATUS_LABELS[effectiveStatus] || effectiveStatus || "Seguimiento activo"}
+                      </div>
+                    </div>
+                    <div className="inline-flex rounded-full bg-[#EEF2FF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Flujo comercial
+                    </div>
+                  </div>
 
-              <div className="mt-4 flex flex-wrap gap-3">
-                <select
-                  className="h-11 min-w-[280px] flex-1 rounded-full border border-[#D5DAE5] bg-white px-4 text-[14px] text-[#25304F] outline-none"
-                  style={{ fontFamily: "var(--font-purchase-detail-body)" }}
-                  value={receiveWarehouseId}
-                  onChange={(e) => setReceiveWarehouseId(e.target.value)}
-                >
-                  <option value="">Selecciona almacén</option>
-                  {warehouses.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.code} - {w.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
-                  style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-                  onClick={receiveAllPending}
-                  disabled={!receiveWarehouseId || busyAction === "receive_all"}
-                >
-                  {busyAction === "receive_all" ? "..." : "Recibir pendientes"}
-                </button>
-              </div>
-            </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "sent" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">1. Envío hecho</div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {effectiveStatus === "sent" ? "Esperando respuesta" : "Completado"}
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]">El pedido ya salió y ahora esperamos confirmación del proveedor.</p>
+                    </div>
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "priced" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">2. Precios</div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {effectiveStatus === "priced" ? "Pendiente de validar" : "Siguiente paso"}
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]">Aquí registraremos la respuesta del proveedor con precios, faltantes o cambios.</p>
+                    </div>
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "paid" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">3. Pago</div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {effectiveStatus === "paid" ? "Pago confirmado" : "Pendiente"}
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]">Una vez aprobados los precios, este pedido pasa al momento real de compra.</p>
+                    </div>
+                    <div className={`rounded-2xl border px-4 py-4 ${["tracking_received", "in_transit"].includes(effectiveStatus) ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">4. Tracking</div>
+                      <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {effectiveStatus === "tracking_received" ? "Tracking recibido" : effectiveStatus === "in_transit" ? "En tránsito" : "Pendiente"}
+                      </div>
+                      <p className="mt-2 text-[13px] leading-6 text-[#616984]">Después del pago, aquí seguimos el código de envío hasta la llegada al almacén.</p>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
-              <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Qué cambia después
-              </div>
-              <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
-                  <span>En revisión definimos si el pedido sigue adelante o vuelve a compras.</span>
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Próxima acción sugerida
+                  </div>
+                  <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    {effectiveStatus === "sent" ? (
+                      <>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">1</span>
+                          <span>Esperar la respuesta del proveedor con disponibilidad y precios.</span>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">2</span>
+                          <span>Cuando llegue esa respuesta, este pedido pasa a “Precios recibidos”.</span>
+                        </div>
+                      </>
+                    ) : effectiveStatus === "priced" ? (
+                      <>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
+                          <span>Revisar si los precios son correctos y si falta algún producto del pedido.</span>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
+                          <span>Después de validar, el pedido ya puede marcarse como pagado.</span>
+                        </div>
+                      </>
+                    ) : effectiveStatus === "paid" ? (
+                      <>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
+                          <span>La compra ya quedó pagada. El siguiente paso es pedir o registrar el tracking.</span>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">2</span>
+                          <span>Con el tracking empezamos la fase real de espera del paquete.</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">1</span>
+                          <span>Ya tenemos tracking. Ahora toca seguir el trayecto hasta que el pedido llegue físicamente.</span>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">2</span>
+                          <span>Cuando llegue, lo pasaremos a recepción en almacén para revisar producto por producto.</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
-                  <span>Al enviar al proveedor, este almacén queda como destino operativo para la recepción.</span>
+              </>
+            ) : (
+              <>
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Almacén de entrada
+                      </div>
+                      <div className="mt-1 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {receiveWarehouseId
+                          ? warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)
+                            ? `${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.code} - ${warehouses.find((warehouse) => warehouse.id === receiveWarehouseId)?.name}`
+                            : "Recepción preparada"
+                          : "Selecciona dónde se recibirá la compra"}
+                      </div>
+                    </div>
+                    <div className="inline-flex rounded-full bg-[#E9EEFF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Paso logístico
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <select
+                      className="h-11 min-w-[280px] flex-1 rounded-full border border-[#D5DAE5] bg-white px-4 text-[14px] text-[#25304F] outline-none"
+                      style={{ fontFamily: "var(--font-purchase-detail-body)" }}
+                      value={receiveWarehouseId}
+                      onChange={(e) => setReceiveWarehouseId(e.target.value)}
+                    >
+                      <option value="">Selecciona almacén</option>
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.code} - {w.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
+                      style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                      onClick={receiveAllPending}
+                      disabled={!receiveWarehouseId || busyAction === "receive_all"}
+                    >
+                      {busyAction === "receive_all" ? "..." : "Recibir pendientes"}
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">3</span>
-                  <span>Cuando llegue la compra, desde aquí ya podrás registrar las entradas reales al stock.</span>
+
+                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Qué cambia después
+                  </div>
+                  <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
+                      <span>En revisión definimos si el pedido sigue adelante o vuelve a compras.</span>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
+                      <span>Al enviar al proveedor, este almacén queda como destino operativo para la recepción.</span>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">3</span>
+                      <span>Cuando llegue la compra, desde aquí ya podrás registrar las entradas reales al stock.</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -1837,7 +2093,11 @@ export default function PurchaseDetailPage() {
                 ? "En esta fase el pedido ya no se está construyendo. Aquí decidimos si vuelve a Compras para corregirse o si ya puede salir al proveedor."
                 : canSendToReview
                   ? "La lista ya quedó completa. Ahora sí puedes descargarla y mandarla a revisión interna."
-                  : "Primero deja cerrada la lista y márcala como Lista completa. Después se habilita el paso a Revisión."}
+                  : isSupplierStage
+                    ? "Aquí seguimos el avance real con el proveedor: respuesta, precios, pago, tracking y llegada al almacén."
+                    : isArrivalStage
+                      ? "El pedido ya entró en la fase de llegada y cierre. Aquí ya no hace falta volver a la revisión inicial."
+                      : "Primero deja cerrada la lista y márcala como Lista completa. Después se habilita el paso a Revisión."}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -1868,11 +2128,67 @@ export default function PurchaseDetailPage() {
                 <button
                   type="button"
                   className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
-                  onClick={sendPurchaseToSupplier}
+                  onClick={openSendSupplierModal}
                   disabled={busyAction === "send_supplier"}
                 >
                   {busyAction === "send_supplier" ? "..." : "Enviar al proveedor"}
                 </button>
+              </>
+            ) : isSupplierStage ? (
+              <>
+                {effectiveStatus === "sent" ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markSupplierPricesReceived}
+                    disabled={busyAction === "priced"}
+                  >
+                    {busyAction === "priced" ? "..." : "Registrar respuesta del proveedor"}
+                  </button>
+                ) : null}
+                {effectiveStatus === "priced" ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markPurchasePaid}
+                    disabled={busyAction === "paid"}
+                  >
+                    {busyAction === "paid" ? "..." : "Marcar como pagado"}
+                  </button>
+                ) : null}
+                {effectiveStatus === "paid" ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markTrackingReceived}
+                    disabled={busyAction === "tracking"}
+                  >
+                    {busyAction === "tracking" ? "..." : "Registrar tracking"}
+                  </button>
+                ) : null}
+                {effectiveStatus === "tracking_received" ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markPurchaseInTransit}
+                    disabled={busyAction === "in_transit"}
+                  >
+                    {busyAction === "in_transit" ? "..." : "Marcar en tránsito"}
+                  </button>
+                ) : null}
+                {effectiveStatus === "in_transit" ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                    onClick={markPurchaseArrived}
+                    disabled={busyAction === "arrived"}
+                  >
+                    {busyAction === "arrived" ? "..." : "Marcar llegada al almacén"}
+                  </button>
+                ) : null}
+                <span className="inline-flex items-center rounded-full bg-[#EEF2FF] px-4 py-2 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Estado actual: {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
+                </span>
               </>
             ) : (
               <button
@@ -1881,7 +2197,13 @@ export default function PurchaseDetailPage() {
                 onClick={sendPurchaseReviewTask}
                 disabled={busyAction === "review_task" || !permissions.tasksWrite || !canSendToReview}
               >
-                {busyAction === "review_task" ? "..." : canSendToReview ? "Enviar a revisión" : "Primero: Lista completa"}
+                {busyAction === "review_task"
+                  ? "..."
+                  : canSendToReview
+                    ? "Enviar a revisión"
+                    : effectiveStatus === "draft"
+                      ? "Primero: Lista completa"
+                      : `Estado: ${STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}`}
               </button>
             )}
           </div>
@@ -1928,33 +2250,6 @@ export default function PurchaseDetailPage() {
             <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
               {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Timeline de estado</h3>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {STATUS_FLOW.map((step) => (
-              <span
-                key={step}
-                className={`rounded-full px-3 py-2 text-[12px] border ${effectiveStatus === step ? "border-[#0B1230] bg-[#0B1230] text-white" : "border-[#D5DAE5] bg-[#F7F8FB] text-[#626A82]"}`}
-                style={{ fontFamily: "var(--font-purchase-detail-body)" }}
-              >
-                {STATUS_LABELS[step] || step}
-              </span>
-            ))}
-          </div>
-          <div className="flex gap-2 items-center">
-            <select className="h-11 rounded-full border border-[#D5DAE5] bg-white px-4 text-[14px] text-[#25304F] outline-none" style={{ fontFamily: "var(--font-purchase-detail-body)" }} value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUS_FLOW.map((step) => (
-                <option key={step} value={step}>
-                  {STATUS_LABELS[step] || step}
-                </option>
-              ))}
-            </select>
-            <button className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} onClick={updateStatus} disabled={busyAction === "status"}>
-              {busyAction === "status" ? "..." : "Guardar estado"}
-            </button>
           </div>
         </div>
 
@@ -2104,6 +2399,114 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
       </div>
+
+      {sendSupplierModalOpen ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-[rgba(11,18,48,0.45)] px-4">
+          <div className="w-full max-w-[560px] rounded-[28px] bg-white p-6 shadow-[0_24px_60px_rgba(11,18,48,0.28)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Enviar al proveedor
+                </h3>
+                <p className="mt-2 text-[14px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Antes de cerrar este paso, deja registrada la fecha de envío y confirma que ya preparaste el archivo que le mandarás al proveedor.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#D4D9E4] text-[18px] text-[#616984] hover:bg-[#F7F9FC]"
+                onClick={closeSendSupplierModal}
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-[#E3E7F0] bg-[#F8FAFD] p-4">
+              <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Recordatorio
+              </div>
+              <p className="mt-2 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                No te olvides de descargar el pedido en PDF o Excel antes de enviarlo. Este paso mueve el pedido desde <strong>Revisión</strong> a <strong>Enviado al proveedor</strong>.
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Fecha de envío
+                </span>
+                <input
+                  type="date"
+                  value={supplierSentDate}
+                  onChange={(e) => setSupplierSentDate(e.target.value)}
+                  className="h-12 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[15px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                />
+              </label>
+              <div className="rounded-2xl border border-[#E3E7F0] bg-white px-4 py-3">
+                <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Resumen
+                </div>
+                <div className="mt-2 text-[15px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  {purchase?.poNumber || "-"}
+                </div>
+                <div className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Proveedor: {purchase?.supplier?.name || "-"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3 rounded-2xl border border-[#E3E7F0] bg-white p-4">
+              <label className="flex items-center gap-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                <input
+                  type="checkbox"
+                  checked={supplierPdfReady}
+                  onChange={(e) => setSupplierPdfReady(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#C8CEDD]"
+                />
+                PDF descargado o preparado para enviar
+              </label>
+              <label className="flex items-center gap-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                <input
+                  type="checkbox"
+                  checked={supplierExcelReady}
+                  onChange={(e) => setSupplierExcelReady(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#C8CEDD]"
+                />
+                Excel descargado o preparado para enviar
+              </label>
+              <label className="flex items-center gap-3 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                <input
+                  type="checkbox"
+                  checked={supplierOrderConfirmed}
+                  onChange={(e) => setSupplierOrderConfirmed(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#C8CEDD]"
+                />
+                Confirmo que el pedido ya está listo para salir al proveedor
+              </label>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-full border border-[#D4D9E4] bg-white px-5 py-2.5 text-[14px] text-[#25304F] hover:bg-[#F7F9FC]"
+                onClick={closeSendSupplierModal}
+                disabled={busyAction === "send_supplier"}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[#0B1230] px-5 py-2.5 text-[14px] text-white disabled:opacity-50"
+                onClick={sendPurchaseToSupplier}
+                disabled={busyAction === "send_supplier" || !supplierSentDate || !supplierOrderConfirmed}
+              >
+                {busyAction === "send_supplier" ? "Enviando..." : "Confirmar envío"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
