@@ -109,6 +109,17 @@ type ProductSuggestion = {
   name: string;
 };
 
+type PurchaseFlowMeta = {
+  supplierSentDate?: string;
+  supplierReplyDate?: string;
+  supplierFilesReady?: string[];
+  supplierQuoteCurrency?: string;
+  settlementCurrency?: string;
+  paymentMethod?: string;
+  supplierNotes?: string;
+  supplierMissingItems?: string;
+};
+
 function purchaseSuggestionLabel(product: ProductSuggestion) {
   const normalizedName = String(product.name || "").toLowerCase();
   if (normalizedName.startsWith("box ")) {
@@ -261,6 +272,14 @@ export default function PurchaseDetailPage() {
   const [supplierPdfReady, setSupplierPdfReady] = useState(false);
   const [supplierExcelReady, setSupplierExcelReady] = useState(false);
   const [supplierOrderConfirmed, setSupplierOrderConfirmed] = useState(false);
+  const [supplierReplyModalOpen, setSupplierReplyModalOpen] = useState(false);
+  const [supplierReplyDate, setSupplierReplyDate] = useState(new Date().toISOString().slice(0, 10));
+  const [supplierQuoteCurrency, setSupplierQuoteCurrency] = useState("CNY");
+  const [settlementCurrency, setSettlementCurrency] = useState("EUR");
+  const [plannedPaymentMethod, setPlannedPaymentMethod] = useState("Transferencia");
+  const [supplierNotes, setSupplierNotes] = useState("");
+  const [supplierMissingItems, setSupplierMissingItems] = useState("");
+  const [purchaseFlowMeta, setPurchaseFlowMeta] = useState<PurchaseFlowMeta>({});
   const lineSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const boxChoiceStorageKey = useMemo(() => {
@@ -395,6 +414,37 @@ export default function PurchaseDetailPage() {
     }
     return map;
   }, [purchase]);
+
+  const purchaseFlowStorageKey = useMemo(
+    () => (storeId && purchaseId ? `purchase-flow:${storeId}:${purchaseId}` : ""),
+    [storeId, purchaseId],
+  );
+
+  const savePurchaseFlowMeta = useCallback(
+    (nextMeta: PurchaseFlowMeta) => {
+      setPurchaseFlowMeta(nextMeta);
+      if (!purchaseFlowStorageKey || typeof window === "undefined") return;
+      window.localStorage.setItem(purchaseFlowStorageKey, JSON.stringify(nextMeta));
+    },
+    [purchaseFlowStorageKey],
+  );
+
+  useEffect(() => {
+    if (!purchaseFlowStorageKey || typeof window === "undefined") return;
+    try {
+      const stored = window.localStorage.getItem(purchaseFlowStorageKey);
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as PurchaseFlowMeta;
+      setPurchaseFlowMeta(parsed || {});
+      setSupplierQuoteCurrency(parsed?.supplierQuoteCurrency || "CNY");
+      setSettlementCurrency(parsed?.settlementCurrency || "EUR");
+      setPlannedPaymentMethod(parsed?.paymentMethod || "Transferencia");
+      setSupplierNotes(parsed?.supplierNotes || "");
+      setSupplierMissingItems(parsed?.supplierMissingItems || "");
+    } catch {
+      setPurchaseFlowMeta({});
+    }
+  }, [purchaseFlowStorageKey]);
 
   const purchaseItems = purchase?.items || [];
   const mainPurchaseItems = useMemo(() => purchaseItems.filter((item) => !isPurchaseBoxItem(item)), [purchaseItems]);
@@ -765,9 +815,9 @@ export default function PurchaseDetailPage() {
   }
 
   function openSendSupplierModal() {
-    setSupplierSentDate(new Date().toISOString().slice(0, 10));
-    setSupplierPdfReady(false);
-    setSupplierExcelReady(false);
+    setSupplierSentDate(purchaseFlowMeta.supplierSentDate || new Date().toISOString().slice(0, 10));
+    setSupplierPdfReady(Boolean(purchaseFlowMeta.supplierFilesReady?.includes("pdf")));
+    setSupplierExcelReady(Boolean(purchaseFlowMeta.supplierFilesReady?.includes("excel")));
     setSupplierOrderConfirmed(false);
     setSendSupplierModalOpen(true);
     setError("");
@@ -780,6 +830,15 @@ export default function PurchaseDetailPage() {
   }
 
   async function sendPurchaseToSupplier() {
+    const preparedFiles = [
+      ...(supplierPdfReady ? ["pdf"] : []),
+      ...(supplierExcelReady ? ["excel"] : []),
+    ];
+    savePurchaseFlowMeta({
+      ...purchaseFlowMeta,
+      supplierSentDate,
+      supplierFilesReady: preparedFiles,
+    });
     await updatePurchaseStatus(
       "sent",
       `Pedido marcado como enviado al proveedor el ${formatDate(supplierSentDate)}${supplierPdfReady || supplierExcelReady ? " con archivos preparados" : ""}`,
@@ -788,8 +847,41 @@ export default function PurchaseDetailPage() {
     setSendSupplierModalOpen(false);
   }
 
+  function openSupplierReplyModal() {
+    setSupplierReplyDate(purchaseFlowMeta.supplierReplyDate || new Date().toISOString().slice(0, 10));
+    setSupplierReplyModalOpen(true);
+    setError("");
+    setInfo("");
+  }
+
+  function closeSupplierReplyModal() {
+    if (busyAction === "priced") return;
+    setSupplierReplyModalOpen(false);
+  }
+
   async function markSupplierPricesReceived() {
+    savePurchaseFlowMeta({
+      ...purchaseFlowMeta,
+      supplierReplyDate,
+    });
     await updatePurchaseStatus("priced", "El proveedor ya respondió y ahora toca revisar precios.", "priced");
+    setSupplierReplyModalOpen(false);
+  }
+
+  function saveSupplierPricingReview() {
+    savePurchaseFlowMeta({
+      ...purchaseFlowMeta,
+      supplierSentDate: purchaseFlowMeta.supplierSentDate,
+      supplierReplyDate: purchaseFlowMeta.supplierReplyDate,
+      supplierFilesReady: purchaseFlowMeta.supplierFilesReady,
+      supplierQuoteCurrency,
+      settlementCurrency,
+      paymentMethod: plannedPaymentMethod,
+      supplierNotes,
+      supplierMissingItems,
+    });
+    setInfo("Revisión de precios guardada");
+    setError("");
   }
 
   async function markPurchasePaid() {
@@ -1099,10 +1191,28 @@ export default function PurchaseDetailPage() {
 
   const totalUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
   const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
-  const effectiveStatus = status || purchase?.status || "";
+  const rawEffectiveStatus = status || purchase?.status || "";
+  const effectiveStatus =
+    rawEffectiveStatus === "planned" || rawEffectiveStatus === "delivered" || rawEffectiveStatus === "delayed"
+      ? "review"
+      : rawEffectiveStatus;
+  const isDraftStage = effectiveStatus === "draft";
+  const isChecklistStage = effectiveStatus === "checklist";
   const isReviewStage = effectiveStatus === "review";
   const isSupplierStage = ["sent", "priced", "paid", "preparing", "tracking_received", "in_transit"].includes(effectiveStatus);
   const isArrivalStage = ["received", "verified", "closed", "incident"].includes(effectiveStatus);
+  const isSupplierPricingStage = ["priced", "paid", "preparing", "tracking_received", "in_transit", "received", "verified", "closed", "incident"].includes(
+    effectiveStatus,
+  );
+  const supplierResponseDays =
+    purchaseFlowMeta.supplierSentDate && purchaseFlowMeta.supplierReplyDate
+      ? Math.max(
+          0,
+          Math.round(
+            (new Date(purchaseFlowMeta.supplierReplyDate).getTime() - new Date(purchaseFlowMeta.supplierSentDate).getTime()) / 86400000,
+          ),
+        )
+      : null;
   const heroTrackingLabel =
     effectiveStatus === "review"
       ? "Pedido en revisión"
@@ -1116,9 +1226,11 @@ export default function PurchaseDetailPage() {
               ? "Tracking recibido"
               : effectiveStatus === "in_transit"
                 ? "Pedido en tránsito"
-      : "Pedido en seguimiento";
-  const canMarkListComplete = effectiveStatus === "draft";
-  const canSendToReview = effectiveStatus === "checklist";
+      : effectiveStatus === "received"
+        ? "Pedido recibido"
+        : "Pedido en seguimiento";
+  const canMarkListComplete = isDraftStage;
+  const canSendToReview = isChecklistStage;
   const isListComplete = [
     "checklist",
     "review",
@@ -1133,6 +1245,10 @@ export default function PurchaseDetailPage() {
     "closed",
     "incident",
   ].includes(effectiveStatus);
+  const supplierPreparedFilesLabel =
+    purchaseFlowMeta.supplierFilesReady && purchaseFlowMeta.supplierFilesReady.length > 0
+      ? purchaseFlowMeta.supplierFilesReady.map((file) => file.toUpperCase()).join(" + ")
+      : "Pendiente";
 
   useEffect(() => {
     if (!boxChoiceStorageKey || typeof window === "undefined") return;
@@ -1867,7 +1983,7 @@ export default function PurchaseDetailPage() {
                         Fecha sugerida
                       </div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                        {formatDate(supplierSentDate || new Date().toISOString().slice(0, 10))}
+                        {formatDate(purchaseFlowMeta.supplierSentDate || supplierSentDate || new Date().toISOString().slice(0, 10))}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         La confirmas al abrir el envío. Así dejamos claro cuándo salió realmente el pedido al proveedor.
@@ -1935,6 +2051,9 @@ export default function PurchaseDetailPage() {
                         {effectiveStatus === "sent" ? "Esperando respuesta" : "Completado"}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]">El pedido ya salió y ahora esperamos confirmación del proveedor.</p>
+                      <div className="mt-3 text-[12px] text-[#4F5568]">
+                        Fecha: {formatDate(purchaseFlowMeta.supplierSentDate)}
+                      </div>
                     </div>
                     <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "priced" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">2. Precios</div>
@@ -1942,6 +2061,9 @@ export default function PurchaseDetailPage() {
                         {effectiveStatus === "priced" ? "Pendiente de validar" : "Siguiente paso"}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]">Aquí registraremos la respuesta del proveedor con precios, faltantes o cambios.</p>
+                      <div className="mt-3 text-[12px] text-[#4F5568]">
+                        Respuesta: {formatDate(purchaseFlowMeta.supplierReplyDate)}
+                      </div>
                     </div>
                     <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "paid" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">3. Pago</div>
@@ -1963,6 +2085,27 @@ export default function PurchaseDetailPage() {
                 <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     Próxima acción sugerida
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Archivos preparados</div>
+                      <div className="mt-1 text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {supplierPreparedFilesLabel}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Tiempo de respuesta</div>
+                      <div className="mt-1 text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                        {purchaseFlowMeta.supplierSentDate && purchaseFlowMeta.supplierReplyDate
+                          ? `${Math.max(
+                              0,
+                              Math.round(
+                                (new Date(purchaseFlowMeta.supplierReplyDate).getTime() - new Date(purchaseFlowMeta.supplierSentDate).getTime()) / 86400000,
+                              ),
+                            )} días`
+                          : "Aún sin medir"}
+                      </div>
+                    </div>
                   </div>
                   <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     {effectiveStatus === "sent" ? (
@@ -2140,7 +2283,7 @@ export default function PurchaseDetailPage() {
                   <button
                     type="button"
                     className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
-                    onClick={markSupplierPricesReceived}
+                    onClick={openSupplierReplyModal}
                     disabled={busyAction === "priced"}
                   >
                     {busyAction === "priced" ? "..." : "Registrar respuesta del proveedor"}
@@ -2214,6 +2357,164 @@ export default function PurchaseDetailPage() {
           ) : null}
         </div>
 
+        {isSupplierStage || isArrivalStage ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    Respuesta y revisión de precios
+                  </h3>
+                  <p className="mt-1 max-w-[720px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Aquí dejamos trazado cuándo salió el pedido, cuándo respondió el proveedor y en qué moneda vamos a revisar y cerrar la compra antes del pago.
+                  </p>
+                </div>
+                <span
+                  className={`inline-flex rounded-full px-4 py-2 text-[12px] ${
+                    isSupplierPricingStage ? "bg-[#EEF2FF] text-[#3147D4]" : "bg-[#FFF4E5] text-[#B54708]"
+                  }`}
+                  style={{ fontFamily: "var(--font-purchase-detail-body)" }}
+                >
+                  {isSupplierPricingStage ? "Precios en revisión" : "Esperando respuesta"}
+                </span>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Enviado</div>
+                  <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatDate(purchaseFlowMeta.supplierSentDate)}
+                  </div>
+                  <p className="mt-2 text-[12px] leading-5 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Fecha real en la que el pedido salió del equipo al proveedor.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Respuesta</div>
+                  <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatDate(purchaseFlowMeta.supplierReplyDate)}
+                  </div>
+                  <p className="mt-2 text-[12px] leading-5 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    La usamos para medir tiempos y saber cuándo arrancó la revisión de precios.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Moneda proveedor</div>
+                  <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {supplierQuoteCurrency || "-"}
+                  </div>
+                  <p className="mt-2 text-[12px] leading-5 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    La moneda en la que realmente nos pasan la cotización.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Tiempo de respuesta</div>
+                  <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {supplierResponseDays != null ? `${supplierResponseDays} días` : "Pendiente"}
+                  </div>
+                  <p className="mt-2 text-[12px] leading-5 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Este dato nos ayuda a entender cuánto tarda cada proveedor en responder.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="mb-3">
+                <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Base para pago y validación
+                </h3>
+                <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Guardamos aquí la moneda recibida, la moneda final de pago y cualquier faltante o nota del proveedor antes de seguir.
+                </p>
+              </div>
+
+              <div className="grid gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Moneda de la cotización
+                    </span>
+                    <input
+                      value={supplierQuoteCurrency}
+                      onChange={(e) => setSupplierQuoteCurrency(e.target.value.toUpperCase())}
+                      placeholder="CNY / USD / EUR"
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Moneda final de pago
+                    </span>
+                    <input
+                      value={settlementCurrency}
+                      onChange={(e) => setSettlementCurrency(e.target.value.toUpperCase())}
+                      placeholder="EUR / USD"
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Tipo de pago previsto
+                  </span>
+                  <select
+                    value={plannedPaymentMethod}
+                    onChange={(e) => setPlannedPaymentMethod(e.target.value)}
+                    className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                  >
+                    <option value="Transferencia">Transferencia</option>
+                    <option value="Tarjeta">Tarjeta</option>
+                    <option value="PayPal">PayPal</option>
+                    <option value="Wise">Wise</option>
+                    <option value="Otro">Otro</option>
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Productos faltantes o cambios del proveedor
+                  </span>
+                  <textarea
+                    value={supplierMissingItems}
+                    onChange={(e) => setSupplierMissingItems(e.target.value)}
+                    rows={3}
+                    placeholder="Ejemplo: AR2460 sin stock / AR11360 cambia de color / box no disponible..."
+                    className="w-full rounded-2xl border border-[#D4D9E4] bg-white px-4 py-3 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Notas de revisión
+                  </span>
+                  <textarea
+                    value={supplierNotes}
+                    onChange={(e) => setSupplierNotes(e.target.value)}
+                    rows={4}
+                    placeholder="Aquí puedes guardar observaciones sobre precio, respuesta, tiempos o condiciones del proveedor."
+                    className="w-full rounded-2xl border border-[#D4D9E4] bg-white px-4 py-3 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                  />
+                </label>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
+                  <div className="text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Guarda aquí la base antes de pasar a pago. Así no perdemos moneda, método ni faltantes.
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white"
+                    onClick={saveSupplierPricingReview}
+                  >
+                    Guardar revisión
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
             <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Costo PO (EUR)</div>
@@ -2253,151 +2554,161 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
-          <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-            Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
-          </p>
+        {isArrivalStage ? (
+          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
+            <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
+            </p>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
-                <tr>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Moneda</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Costo unit.</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Total EUR</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Recibido</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pendiente</th>
-                  <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Acción</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(purchase?.items || []).map((item) => {
-                  const pending = pendingByItem[item.id] || 0;
-                  return (
-                    <tr key={item.id} className="border-b border-[#EEF1F6] last:border-b-0">
-                      <td className="px-3 py-3 text-[#25304F]">{item.title}</td>
-                      <td className="px-3 py-3 text-[#626A82]">{item.ean || "-"}</td>
-                      <td className="px-3 py-3 text-[#25304F]">{item.currencyCode}</td>
-                      <td className="px-3 py-3 text-[#25304F]">{item.unitCostOriginal}</td>
-                      <td className="px-3 py-3 text-[#25304F]">{formatMoney(item.totalCostEur)}</td>
-                      <td className="px-3 py-3 text-[#25304F]">{item.quantityOrdered}</td>
-                      <td className="px-3 py-3 text-[#25304F]">{item.quantityReceived}</td>
-                      <td className="px-3 py-3">
-                        <span className="inline-flex rounded-full bg-[#F4EFFF] px-3 py-1 text-[12px] text-[#5F42D7]">
-                          {pending}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <input
-                            className="h-10 w-20 rounded-full border border-[#D5DAE5] px-3 text-[14px] text-[#25304F] outline-none"
-                            value={qtyByItem[item.id] ?? ""}
-                            placeholder={String(pending)}
-                            onChange={(e) =>
-                              setQtyByItem((prev) => ({
-                                ...prev,
-                                [item.id]: e.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            className="h-10 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50"
-                            style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-                            disabled={!receiveWarehouseId || pending <= 0 || busyAction === `line_${item.id}` || !item.productId}
-                            onClick={() => receiveLine(item.id)}
-                          >
-                            {busyAction === `line_${item.id}` ? "..." : "Recibir línea"}
-                          </button>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
+                  <tr>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Moneda</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Costo unit.</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Total EUR</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Recibido</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pendiente</th>
+                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(purchase?.items || []).map((item) => {
+                    const pending = pendingByItem[item.id] || 0;
+                    return (
+                      <tr key={item.id} className="border-b border-[#EEF1F6] last:border-b-0">
+                        <td className="px-3 py-3 text-[#25304F]">{item.title}</td>
+                        <td className="px-3 py-3 text-[#626A82]">{item.ean || "-"}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{item.currencyCode}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{item.unitCostOriginal}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{formatMoney(item.totalCostEur)}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{item.quantityOrdered}</td>
+                        <td className="px-3 py-3 text-[#25304F]">{item.quantityReceived}</td>
+                        <td className="px-3 py-3">
+                          <span className="inline-flex rounded-full bg-[#F4EFFF] px-3 py-1 text-[12px] text-[#5F42D7]">
+                            {pending}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <input
+                              className="h-10 w-20 rounded-full border border-[#D5DAE5] px-3 text-[14px] text-[#25304F] outline-none"
+                              value={qtyByItem[item.id] ?? ""}
+                              placeholder={String(pending)}
+                              onChange={(e) =>
+                                setQtyByItem((prev) => ({
+                                  ...prev,
+                                  [item.id]: e.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              className="h-10 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50"
+                              style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                              disabled={!receiveWarehouseId || pending <= 0 || busyAction === `line_${item.id}` || !item.productId}
+                              onClick={() => receiveLine(item.id)}
+                            >
+                              {busyAction === `line_${item.id}` ? "..." : "Recibir línea"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
+        {isSupplierStage || isArrivalStage ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <h3 className="mb-1 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Pago de la compra</h3>
+              <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Aquí registramos cómo se pagó el pedido, en qué moneda y qué tipo de cambio usamos para llevarlo a EUR.
+              </p>
+              <form className="grid grid-cols-1 gap-2 md:grid-cols-5 mb-4" onSubmit={createPayment}>
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Moneda: EUR, USD, CNY..." value={paymentCurrency} onChange={(e) => setPaymentCurrency(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Importe original" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="FX a EUR" value={paymentFx} onChange={(e) => setPaymentFx(e.target.value)} />
+                <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "payment"}>
+                  {busyAction === "payment" ? "..." : "Agregar pago"}
+                </button>
+              </form>
+              <div className="space-y-2 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {(purchase?.payments || []).length === 0 ? (
+                  <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[#6E768E]">Aún no hay pagos registrados para esta compra.</div>
+                ) : (
+                  purchase?.payments.map((p) => (
+                    <div key={p.id} className="rounded-2xl bg-[#F7F8FB] p-4 text-[#25304F]">
+                      {formatDate(p.paidAt)} | {p.currencyCode} {p.amountOriginal} | EUR {p.amountEurFrozen}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <h3 className="mb-1 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Tracking y logística</h3>
+              <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Este bloque nos sirve para guardar el embarque, el proveedor logístico y los tramos hasta que la compra llegue al almacén.
+              </p>
+              <form className="grid grid-cols-1 gap-2 md:grid-cols-3 mb-3" onSubmit={createShipment}>
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Referencia 3PL / tracking base" value={shipmentRef} onChange={(e) => setShipmentRef(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Proveedor logístico" value={shipmentProvider} onChange={(e) => setShipmentProvider(e.target.value)} />
+                <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "shipment"}>
+                  {busyAction === "shipment" ? "..." : "Crear embarque"}
+                </button>
+              </form>
+              <form className="grid grid-cols-1 gap-2 md:grid-cols-4 xl:grid-cols-8 mb-3" onSubmit={createLeg}>
+                <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={selectedShipmentId} onChange={(e) => setSelectedShipmentId(e.target.value)}>
+                  <option value="">Embarque</option>
+                  {(purchase?.shipments3pl || []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.referenceCode}
+                    </option>
+                  ))}
+                </select>
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Origen" value={legOrigin} onChange={(e) => setLegOrigin(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Destino" value={legDestination} onChange={(e) => setLegDestination(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Coste" value={legCost} onChange={(e) => setLegCost(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Moneda" value={legCurrency} onChange={(e) => setLegCurrency(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="FX" value={legFx} onChange={(e) => setLegFx(e.target.value)} />
+                <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={legStatus} onChange={(e) => setLegStatus(e.target.value)}>
+                  <option value="planned">planned</option>
+                  <option value="in_transit">in_transit</option>
+                  <option value="delivered">delivered</option>
+                  <option value="delayed">delayed</option>
+                </select>
+                <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "leg" || !selectedShipmentId}>
+                  {busyAction === "leg" ? "..." : "Agregar tramo"}
+                </button>
+              </form>
+              <div className="space-y-2 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {(purchase?.shipments3pl || []).length === 0 ? (
+                  <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[#6E768E]">Aún no hay tracking ni embarques logísticos registrados.</div>
+                ) : (
+                  purchase?.shipments3pl.map((s) => (
+                    <div key={s.id} className="rounded-2xl bg-[#F7F8FB] p-4">
+                      <div className="font-medium text-[#141A39]">{s.referenceCode} ({s.providerName})</div>
+                      {s.legs.map((leg) => (
+                        <div key={leg.id} className="mt-2 text-[#4F5568]">
+                          Tramo {leg.legOrder}: {leg.originLabel} → {leg.destinationLabel} ({STATUS_LABELS[leg.status] || leg.status}) {leg.costEurFrozen ?? "-"} EUR
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-2">
-          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Pagos PO</h3>
-            <form className="grid grid-cols-5 gap-2 mb-4" onSubmit={createPayment}>
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={paymentCurrency} onChange={(e) => setPaymentCurrency(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={paymentFx} onChange={(e) => setPaymentFx(e.target.value)} />
-              <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "payment"}>
-                {busyAction === "payment" ? "..." : "Agregar pago"}
-              </button>
-            </form>
-            <div className="space-y-2 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {(purchase?.payments || []).length === 0 ? (
-                <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[#6E768E]">Sin pagos</div>
-              ) : (
-                purchase?.payments.map((p) => (
-                  <div key={p.id} className="rounded-2xl bg-[#F7F8FB] p-4 text-[#25304F]">
-                    {formatDate(p.paidAt)} | {p.currencyCode} {p.amountOriginal} | EUR {p.amountEurFrozen}
-                  </div>
-                ))
-              )}
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
-
-          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>3PL y tramos</h3>
-            <form className="grid grid-cols-3 gap-2 mb-3" onSubmit={createShipment}>
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Referencia 3PL" value={shipmentRef} onChange={(e) => setShipmentRef(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Proveedor 3PL" value={shipmentProvider} onChange={(e) => setShipmentProvider(e.target.value)} />
-              <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "shipment"}>
-                {busyAction === "shipment" ? "..." : "Crear embarque"}
-              </button>
-            </form>
-            <form className="grid grid-cols-8 gap-2 mb-3" onSubmit={createLeg}>
-              <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={selectedShipmentId} onChange={(e) => setSelectedShipmentId(e.target.value)}>
-                <option value="">Embarque</option>
-                {(purchase?.shipments3pl || []).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.referenceCode}
-                  </option>
-                ))}
-              </select>
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Origen" value={legOrigin} onChange={(e) => setLegOrigin(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Destino" value={legDestination} onChange={(e) => setLegDestination(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Coste" value={legCost} onChange={(e) => setLegCost(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Moneda" value={legCurrency} onChange={(e) => setLegCurrency(e.target.value)} />
-              <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="FX" value={legFx} onChange={(e) => setLegFx(e.target.value)} />
-              <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={legStatus} onChange={(e) => setLegStatus(e.target.value)}>
-                <option value="planned">planned</option>
-                <option value="in_transit">in_transit</option>
-                <option value="delivered">delivered</option>
-                <option value="delayed">delayed</option>
-              </select>
-              <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "leg" || !selectedShipmentId}>
-                {busyAction === "leg" ? "..." : "Agregar tramo"}
-              </button>
-            </form>
-            <div className="space-y-2 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {(purchase?.shipments3pl || []).length === 0 ? (
-                <div className="rounded-2xl bg-[#F7F8FB] p-4 text-[#6E768E]">Sin embarques 3PL</div>
-              ) : (
-                purchase?.shipments3pl.map((s) => (
-                  <div key={s.id} className="rounded-2xl bg-[#F7F8FB] p-4">
-                    <div className="font-medium text-[#141A39]">{s.referenceCode} ({s.providerName})</div>
-                    {s.legs.map((leg) => (
-                      <div key={leg.id} className="mt-2 text-[#4F5568]">
-                        Tramo {leg.legOrder}: {leg.originLabel} → {leg.destinationLabel} ({STATUS_LABELS[leg.status] || leg.status}) {leg.costEurFrozen ?? "-"} EUR
-                      </div>
-                    ))}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
+        ) : null}
       </div>
 
       {sendSupplierModalOpen ? (
@@ -2499,9 +2810,87 @@ export default function PurchaseDetailPage() {
                 type="button"
                 className="rounded-full bg-[#0B1230] px-5 py-2.5 text-[14px] text-white disabled:opacity-50"
                 onClick={sendPurchaseToSupplier}
-                disabled={busyAction === "send_supplier" || !supplierSentDate || !supplierOrderConfirmed}
+                disabled={busyAction === "send_supplier" || !supplierSentDate || !supplierOrderConfirmed || (!supplierPdfReady && !supplierExcelReady)}
               >
                 {busyAction === "send_supplier" ? "Enviando..." : "Confirmar envío"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {supplierReplyModalOpen ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-[rgba(11,18,48,0.45)] px-4">
+          <div className="w-full max-w-[560px] rounded-[28px] bg-white p-6 shadow-[0_24px_60px_rgba(11,18,48,0.28)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-[26px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Respuesta del proveedor
+                </h3>
+                <p className="mt-2 text-[14px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Registra la fecha en la que el proveedor respondió. Después de este paso, el pedido pasará a <strong>Precios recibidos</strong>.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#D4D9E4] text-[18px] text-[#616984] hover:bg-[#F7F9FC]"
+                onClick={closeSupplierReplyModal}
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-2 block text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Fecha de respuesta
+                </span>
+                <input
+                  type="date"
+                  value={supplierReplyDate}
+                  onChange={(e) => setSupplierReplyDate(e.target.value)}
+                  className="h-12 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[15px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                />
+              </label>
+              <div className="rounded-2xl border border-[#E3E7F0] bg-white px-4 py-3">
+                <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Referencia
+                </div>
+                <div className="mt-2 text-[15px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  {purchase?.poNumber || "-"}
+                </div>
+                <div className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Enviado: {formatDate(purchaseFlowMeta.supplierSentDate)}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-[#E3E7F0] bg-[#F8FAFD] p-4">
+              <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Siguiente tramo
+              </div>
+              <p className="mt-2 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Después de confirmar esta fecha, seguiremos con la revisión de precios, faltantes y moneda de compra antes de pasar al pago.
+              </p>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-full border border-[#D4D9E4] bg-white px-5 py-2.5 text-[14px] text-[#25304F] hover:bg-[#F7F9FC]"
+                onClick={closeSupplierReplyModal}
+                disabled={busyAction === "priced"}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[#0B1230] px-5 py-2.5 text-[14px] text-white disabled:opacity-50"
+                onClick={markSupplierPricesReceived}
+                disabled={busyAction === "priced" || !supplierReplyDate}
+              >
+                {busyAction === "priced" ? "Guardando..." : "Pasar a precios recibidos"}
               </button>
             </div>
           </div>
