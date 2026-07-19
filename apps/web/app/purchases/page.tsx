@@ -28,6 +28,15 @@ type Purchase = {
   supplier: Supplier;
 };
 
+type PurchaseFlowMetaPreview = {
+  listCompletedAt?: string;
+  reviewRequestedAt?: string;
+  reviewApprovedAt?: string;
+  supplierSentDate?: string;
+  supplierReplyDate?: string;
+  supplierFilesReady?: string[];
+};
+
 const PURCHASE_STATUS_LABELS: Record<string, string> = {
   draft: "Borrador",
   review: "Revisión",
@@ -49,6 +58,58 @@ const REVIEW_STAGE_STATUSES = new Set(["review"]);
 const SUPPLIER_SENT_STATUSES = new Set(["sent"]);
 const PRICING_STAGE_STATUSES = new Set(["priced", "paid"]);
 const LOGISTICS_STAGE_STATUSES = new Set(["tracking_received", "in_transit", "received", "verified", "closed", "incident"]);
+
+function normalizePurchaseStage(status: string, flowMeta?: PurchaseFlowMetaPreview) {
+  const raw = String(status || "").toLowerCase();
+  const hasListCompleted = Boolean(flowMeta?.listCompletedAt) || raw === "checklist";
+  const hasReviewRequested = Boolean(flowMeta?.reviewRequestedAt) || raw === "review";
+  const hasSupplierSent = Boolean(flowMeta?.supplierSentDate) || raw === "sent";
+  const hasSupplierReply = Boolean(flowMeta?.supplierReplyDate) || ["priced", "paid"].includes(raw);
+  const hasSupplierTrail = Boolean(flowMeta?.supplierSentDate || flowMeta?.supplierReplyDate);
+
+  if (flowMeta?.reviewRequestedAt && !flowMeta?.supplierSentDate && !flowMeta?.supplierReplyDate) {
+    return "review";
+  }
+
+  if (flowMeta?.listCompletedAt && !flowMeta?.reviewRequestedAt && !flowMeta?.supplierSentDate && !flowMeta?.supplierReplyDate) {
+    return "checklist";
+  }
+
+  if (flowMeta?.supplierReplyDate) {
+    return raw === "paid" ? "paid" : "priced";
+  }
+
+  if (flowMeta?.supplierSentDate) {
+    if (["tracking_received", "in_transit", "received", "verified", "closed", "incident"].includes(raw)) return raw;
+    return "sent";
+  }
+
+  if (["closed", "verified", "incident"].includes(raw)) return raw;
+
+  if (!hasSupplierTrail && hasReviewRequested) return "review";
+  if (!hasSupplierTrail && hasListCompleted) return "checklist";
+
+  if (["tracking_received", "in_transit", "received"].includes(raw) && hasSupplierTrail) return raw;
+
+  if (hasSupplierReply) {
+    if (["paid", "priced"].includes(raw)) return raw;
+    return "priced";
+  }
+
+  if (hasSupplierSent) {
+    return "sent";
+  }
+
+  if (hasReviewRequested || ["planned", "delivered", "delayed"].includes(raw)) {
+    return "review";
+  }
+
+  if (hasListCompleted) {
+    return "checklist";
+  }
+
+  return "draft";
+}
 
 function buildPurchaseNumber(dateValue: string, supplier?: Supplier | null) {
   const raw = String(dateValue || "").trim();
@@ -140,48 +201,75 @@ export default function PurchasesPage() {
     return PURCHASE_STATUS_LABELS[String(status || "").toLowerCase()] || status || "-";
   }
 
+  const purchasesWithStage = useMemo(() => {
+    return purchases.map((purchase) => {
+      let flowMeta: PurchaseFlowMetaPreview = {};
+      if (typeof window !== "undefined" && storeId) {
+        try {
+          const stored = window.localStorage.getItem(`purchase-flow:${storeId}:${purchase.id}`);
+          flowMeta = stored ? (JSON.parse(stored) as PurchaseFlowMetaPreview) : {};
+        } catch {
+          flowMeta = {};
+        }
+      }
+      return {
+        ...purchase,
+        flowMeta,
+        displayStatus: normalizePurchaseStage(purchase.status, flowMeta),
+      };
+    });
+  }, [purchases, storeId]);
+
   const reviewPurchases = useMemo(
     () =>
-      purchases.filter((purchase) => {
-        const status = String(purchase.status || "").toLowerCase();
+      purchasesWithStage.filter((purchase) => {
+        const status = String(purchase.displayStatus || "").toLowerCase();
         return REVIEW_STAGE_STATUSES.has(status);
       }),
-    [purchases],
+    [purchasesWithStage],
   );
   const buildPurchases = useMemo(
     () =>
-      purchases.filter((purchase) => {
-        const status = String(purchase.status || "").toLowerCase();
+      purchasesWithStage.filter((purchase) => {
+        const status = String(purchase.displayStatus || "").toLowerCase();
         return BUILD_STAGE_STATUSES.has(status);
       }),
-    [purchases],
+    [purchasesWithStage],
   );
   const supplierSentPurchases = useMemo(
     () =>
-      purchases.filter((purchase) => {
-        const status = String(purchase.status || "").toLowerCase();
+      purchasesWithStage.filter((purchase) => {
+        const status = String(purchase.displayStatus || "").toLowerCase();
         return SUPPLIER_SENT_STATUSES.has(status);
       }),
-    [purchases],
+    [purchasesWithStage],
   );
   const pricingPurchases = useMemo(
     () =>
-      purchases.filter((purchase) => {
-        const status = String(purchase.status || "").toLowerCase();
+      purchasesWithStage.filter((purchase) => {
+        const status = String(purchase.displayStatus || "").toLowerCase();
         return PRICING_STAGE_STATUSES.has(status);
       }),
-    [purchases],
+    [purchasesWithStage],
   );
   const logisticsPurchases = useMemo(
     () =>
-      purchases.filter((purchase) => {
-        const status = String(purchase.status || "").toLowerCase();
+      purchasesWithStage.filter((purchase) => {
+        const status = String(purchase.displayStatus || "").toLowerCase();
         return LOGISTICS_STAGE_STATUSES.has(status);
       }),
-    [purchases],
+    [purchasesWithStage],
   );
   const reviewSupplierCount = useMemo(
     () => new Set(reviewPurchases.map((purchase) => purchase.supplier?.id || purchase.supplier?.name || purchase.id)).size,
+    [reviewPurchases],
+  );
+  const reviewApprovedCount = useMemo(
+    () => reviewPurchases.filter((purchase) => Boolean(purchase.flowMeta?.reviewApprovedAt)).length,
+    [reviewPurchases],
+  );
+  const reviewPendingCount = useMemo(
+    () => reviewPurchases.filter((purchase) => !purchase.flowMeta?.reviewApprovedAt).length,
     [reviewPurchases],
   );
   const reviewTotalAmount = useMemo(
@@ -198,6 +286,39 @@ export default function PurchasesPage() {
     if (!latest) return "-";
     return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(latest));
   }, [reviewPurchases]);
+  const stageSummaryCards = useMemo(
+    () => [
+      {
+        key: "review",
+        label: "Pendientes de validar",
+        value: reviewPurchases.length,
+        helper: "Pedidos que todavía deben aprobarse o devolverse",
+        tone: "border-[#DCE5FF] bg-[#F6F8FF] text-[#3147D4]",
+      },
+      {
+        key: "sent",
+        label: "Enviados al proveedor",
+        value: supplierSentPurchases.length,
+        helper: "Ya salieron de revisión y esperan respuesta",
+        tone: "border-[#E8E1FF] bg-[#FAF8FF] text-[#6B46C1]",
+      },
+      {
+        key: "pricing",
+        label: "Precios y pago",
+        value: pricingPurchases.length,
+        helper: "Cotización recibida, moneda y cierre comercial",
+        tone: "border-[#FFE8CC] bg-[#FFF8F0] text-[#B54708]",
+      },
+      {
+        key: "logistics",
+        label: "Logística activa",
+        value: logisticsPurchases.length,
+        helper: "Tracking, llegada y recepción física",
+        tone: "border-[#D8F0E1] bg-[#F3FCF6] text-[#1F7A3E]",
+      },
+    ],
+    [reviewPurchases.length, supplierSentPurchases.length, pricingPurchases.length, logisticsPurchases.length],
+  );
 
   useEffect(() => {
     if (loading) return;
@@ -346,24 +467,24 @@ export default function PurchasesPage() {
 
                 <div className="mt-6 grid gap-3 sm:grid-cols-3">
                   <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
-                    <div className="text-[12px] uppercase tracking-[0.08em] text-white/60">Pedidos en revisión</div>
+                    <div className="text-[12px] uppercase tracking-[0.08em] text-white/60">Pendientes de validar</div>
                     <div className="mt-2 text-[30px] leading-none" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                      {reviewPurchases.length}
+                      {reviewPendingCount}
                     </div>
+                  </div>
+                  <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
+                    <div className="text-[12px] uppercase tracking-[0.08em] text-white/60">Aprobados para proveedor</div>
+                    <div className="mt-2 text-[30px] leading-none" style={{ fontFamily: "var(--font-purchases-heading)" }}>
+                      {reviewApprovedCount}
+                    </div>
+                    <div className="mt-1 text-[12px] text-white/60">Ya listos para salir</div>
                   </div>
                   <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
                     <div className="text-[12px] uppercase tracking-[0.08em] text-white/60">Total a validar</div>
-                    <div className="mt-2 text-[30px] leading-none" style={{ fontFamily: "var(--font-purchases-heading)" }}>
+                    <div className="mt-2 text-[24px] leading-none" style={{ fontFamily: "var(--font-purchases-heading)" }}>
                       {reviewTotalAmount.toFixed(2)}
                     </div>
-                    <div className="mt-1 text-[12px] text-white/60">EUR acumulado</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/12 bg-white/8 p-4 backdrop-blur-sm">
-                    <div className="text-[12px] uppercase tracking-[0.08em] text-white/60">Última entrada</div>
-                    <div className="mt-2 text-[24px] leading-none" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                      {latestReviewDate}
-                    </div>
-                    <div className="mt-1 text-[12px] text-white/60">{reviewSupplierCount} proveedor{reviewSupplierCount === 1 ? "" : "es"}</div>
+                    <div className="mt-1 text-[12px] text-white/60">{reviewSupplierCount} proveedor{reviewSupplierCount === 1 ? "" : "es"} · última entrada {latestReviewDate}</div>
                   </div>
                 </div>
               </section>
@@ -372,13 +493,13 @@ export default function PurchasesPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                      Qué revisamos aquí
+                      Decisión operativa
                     </h3>
                     <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-                      Este bloque deja claro si el pedido sale a proveedor o vuelve a Compras.
+                      Aquí decidimos con claridad si el pedido vuelve a Compras, si ya puede salir al proveedor o si entra a la fase de precios.
                     </p>
                   </div>
-                  <span className="inline-flex rounded-full bg-[#EEF2FF] px-3 py-1 text-[12px] text-[#3147D4]">Checklist</span>
+                  <span className="inline-flex rounded-full bg-[#EEF2FF] px-3 py-1 text-[12px] text-[#3147D4]">Punto de control</span>
                 </div>
 
                 <div className="mt-5 space-y-3">
@@ -402,10 +523,24 @@ export default function PurchasesPage() {
                 <div className="mt-5 rounded-2xl border border-dashed border-[#D6DCE8] bg-[#FBFCFE] p-4">
                   <div className="text-[12px] uppercase tracking-[0.08em] text-[#7A8196]">Resultado esperado</div>
                   <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                    Aprobar, devolver a Compras o preparar el envío al proveedor.
+                    Dejar la salida cerrada: aprobar, devolver a Compras o preparar el envío al proveedor.
                   </div>
                 </div>
               </section>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {stageSummaryCards.map((card) => (
+                <div key={card.key} className={`rounded-2xl border p-4 shadow-[0_10px_24px_rgba(0,0,0,0.06)] ${card.tone}`}>
+                  <div className="text-[12px] uppercase tracking-[0.08em] text-[#7A8196]">{card.label}</div>
+                  <div className="mt-3 text-[30px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
+                    {card.value}
+                  </div>
+                  <p className="mt-3 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
+                    {card.helper}
+                  </p>
+                </div>
+              ))}
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
@@ -430,10 +565,10 @@ export default function PurchasesPage() {
               <div className="rounded-2xl bg-white p-4 shadow-[0_10px_24px_rgba(0,0,0,0.06)]">
                 <div className="text-[12px] uppercase tracking-[0.08em] text-[#7A8196]">Paso 3</div>
                 <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                  Seguir proveedor
+                  Pasar a proveedor
                 </div>
                 <p className="mt-2 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-                  Después de la aprobación, pasamos a salida al proveedor, respuesta con precios y seguimiento del envío.
+                  Después de aprobarlo, el pedido sale del control interno y entra al flujo comercial con el proveedor.
                 </p>
               </div>
             </div>
@@ -472,8 +607,8 @@ export default function PurchasesPage() {
                       <td className="px-3 py-2 font-medium text-[#131936]">{p.poNumber}</td>
                       <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                          {statusLabel(p.status)}
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.displayStatus)}`}>
+                          {statusLabel(p.displayStatus)}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-[#212A45]">
@@ -499,10 +634,10 @@ export default function PurchasesPage() {
             <div id="revision-compras" className="overflow-hidden rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
               <div className="border-b border-[#EEF1F6] px-4 py-4">
                 <h2 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>
-                  Revisión de compras
+                  Pedidos en revisión
                 </h2>
                 <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchases-body)" }}>
-                  Aquí quedan los pedidos que ya salieron de Compras y deben aprobarse, devolverse para cambios o enviarse al proveedor.
+                  Aquí vive solamente la fase de revisión. Estos pedidos ya no se construyen aquí: se validan, se devuelven a Compras o se aprueban para proveedor.
                 </p>
               </div>
               <table className="min-w-full text-sm">
@@ -512,6 +647,7 @@ export default function PurchasesPage() {
                     <th className="text-left px-3 py-2">Proveedor</th>
                     <th className="text-left px-3 py-2">Concepto</th>
                     <th className="text-left px-3 py-2">Estado</th>
+                    <th className="text-left px-3 py-2">Decisión</th>
                     <th className="text-left px-3 py-2">Fecha</th>
                     <th className="text-left px-3 py-2">Total EUR</th>
                     <th className="text-left px-3 py-2">Acción</th>
@@ -519,9 +655,9 @@ export default function PurchasesPage() {
                 </thead>
                 <tbody>
                   {loadingRows ? (
-                    <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Cargando revisión...</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-4 text-[#6E768E]">Cargando revisión...</td></tr>
                   ) : reviewPurchases.length === 0 ? (
-                    <tr><td colSpan={7} className="px-3 py-4 text-[#6E768E]">Aún no hay pedidos en revisión.</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-4 text-[#6E768E]">Aún no hay pedidos en revisión.</td></tr>
                   ) : (
                     reviewPurchases.map((p) => (
                       <tr key={`review-${p.id}`} className="border-b border-[#EEF1F6]">
@@ -529,9 +665,26 @@ export default function PurchasesPage() {
                         <td className="px-3 py-2 text-[#212A45]">{p.supplier?.name || "-"}</td>
                         <td className="px-3 py-2 text-[#5F6780]">{p.note || "Sin concepto"}</td>
                         <td className="px-3 py-2">
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                            {statusLabel(p.status)}
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.displayStatus)}`}>
+                            {statusLabel(p.displayStatus)}
                           </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {p.flowMeta?.reviewApprovedAt ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex rounded-full bg-[#E9F8EE] px-2.5 py-1 text-[12px] font-medium text-[#1F7A3E]">
+                                Aprobado
+                              </span>
+                              <div className="text-[11px] text-[#6E768E]">Listo para enviar</div>
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <span className="inline-flex rounded-full bg-[#FFF4E8] px-2.5 py-1 text-[12px] font-medium text-[#B45C00]">
+                                Pendiente
+                              </span>
+                              <div className="text-[11px] text-[#6E768E]">Aprobar o devolver</div>
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-[#212A45]">
                           {new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(p.orderedAt))}
@@ -540,7 +693,7 @@ export default function PurchasesPage() {
                         <td className="px-3 py-2 font-semibold text-[#131936]">{Number(p.totalAmountEur || 0).toFixed(2)}</td>
                         <td className="px-3 py-2">
                           <Link className="rounded-xl border border-[#D4D9E4] px-2.5 py-1.5 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
-                            Abrir revisión
+                            {p.flowMeta?.reviewApprovedAt ? "Preparar envío" : "Validar revisión"}
                           </Link>
                         </td>
                       </tr>
@@ -573,11 +726,19 @@ export default function PurchasesPage() {
                             <div className="text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>{p.poNumber}</div>
                             <div className="mt-1 text-[13px] text-[#616984]">{p.supplier?.name || "-"}</div>
                           </div>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                            {statusLabel(p.status)}
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.displayStatus)}`}>
+                            {statusLabel(p.displayStatus)}
                           </span>
                         </div>
                         <div className="mt-3 text-[12px] text-[#7A8196]">{p.note || "Sin concepto"}</div>
+                        <div className="mt-3 rounded-2xl bg-[#F7F9FC] px-3 py-3 text-[12px] text-[#5F6782]">
+                          <div>
+                            Enviado: {p.flowMeta?.supplierSentDate ? new Date(p.flowMeta.supplierSentDate).toLocaleDateString("es-ES") : "Sin fecha registrada"}
+                          </div>
+                          <div className="mt-1">
+                            Archivo preparado: {p.flowMeta?.supplierFilesReady?.length ? p.flowMeta.supplierFilesReady.map((file) => file.toUpperCase()).join(" + ") : "Sin archivo marcado"}
+                          </div>
+                        </div>
                         <Link className="mt-4 inline-flex rounded-xl border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#1D2647] hover:bg-[#F7F9FC]" href={`/store/purchases/${p.id}`}>
                           Abrir seguimiento
                         </Link>
@@ -609,8 +770,8 @@ export default function PurchasesPage() {
                             <div className="text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>{p.poNumber}</div>
                             <div className="mt-1 text-[13px] text-[#616984]">{p.supplier?.name || "-"}</div>
                           </div>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                            {statusLabel(p.status)}
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.displayStatus)}`}>
+                            {statusLabel(p.displayStatus)}
                           </span>
                         </div>
                         <div className="mt-3 text-[12px] text-[#7A8196]">Total {Number(p.totalAmountEur || 0).toFixed(2)} EUR</div>
@@ -645,8 +806,8 @@ export default function PurchasesPage() {
                             <div className="text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchases-heading)" }}>{p.poNumber}</div>
                             <div className="mt-1 text-[13px] text-[#616984]">{p.supplier?.name || "-"}</div>
                           </div>
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.status)}`}>
-                            {statusLabel(p.status)}
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[12px] font-medium ${statusChip(p.displayStatus)}`}>
+                            {statusLabel(p.displayStatus)}
                           </span>
                         </div>
                         <div className="mt-3 text-[12px] text-[#7A8196]">{p.note || "Seguimiento activo"}</div>

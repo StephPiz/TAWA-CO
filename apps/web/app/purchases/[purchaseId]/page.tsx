@@ -110,6 +110,9 @@ type ProductSuggestion = {
 };
 
 type PurchaseFlowMeta = {
+  listCompletedAt?: string;
+  reviewRequestedAt?: string;
+  reviewApprovedAt?: string;
   supplierSentDate?: string;
   supplierReplyDate?: string;
   supplierFilesReady?: string[];
@@ -179,14 +182,14 @@ function formatMoney(value: number | null | undefined) {
   return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(Number(value));
 }
 
-function purchaseStatusDescription(status: string) {
+function purchaseStatusDescription(status: string, flowMeta?: PurchaseFlowMeta) {
   switch (String(status || "").toLowerCase()) {
     case "draft":
       return "El pedido sigue en construcción.";
     case "checklist":
       return "La lista quedó cerrada y ya puede pasar a revisión.";
     case "review":
-      return "Pendiente de validación interna.";
+      return flowMeta?.reviewApprovedAt ? "Aprobado internamente, listo para proveedor." : "Pendiente de validación interna.";
     case "sent":
       return "El pedido ya salió al proveedor.";
     case "priced":
@@ -216,6 +219,24 @@ function purchaseItemBrand(item: PurchaseDetail["items"][number]) {
 
 function purchaseItemPhoto(item: PurchaseDetail["items"][number]) {
   return item.product?.mainImageUrl || null;
+}
+
+function sanitizePurchaseFlowMeta(meta: PurchaseFlowMeta) {
+  const nextMeta: PurchaseFlowMeta = { ...meta };
+  for (const [key, value] of Object.entries(nextMeta)) {
+    if (value == null) {
+      delete nextMeta[key as keyof PurchaseFlowMeta];
+      continue;
+    }
+    if (typeof value === "string" && !value.trim()) {
+      delete nextMeta[key as keyof PurchaseFlowMeta];
+      continue;
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      delete nextMeta[key as keyof PurchaseFlowMeta];
+    }
+  }
+  return nextMeta;
 }
 
 function buildCreateProductHref(purchaseId: string, item: PurchaseDetail["items"][number]) {
@@ -422,9 +443,10 @@ export default function PurchaseDetailPage() {
 
   const savePurchaseFlowMeta = useCallback(
     (nextMeta: PurchaseFlowMeta) => {
-      setPurchaseFlowMeta(nextMeta);
+      const sanitizedMeta = sanitizePurchaseFlowMeta(nextMeta);
+      setPurchaseFlowMeta(sanitizedMeta);
       if (!purchaseFlowStorageKey || typeof window === "undefined") return;
-      window.localStorage.setItem(purchaseFlowStorageKey, JSON.stringify(nextMeta));
+      window.localStorage.setItem(purchaseFlowStorageKey, JSON.stringify(sanitizedMeta));
     },
     [purchaseFlowStorageKey],
   );
@@ -719,6 +741,15 @@ export default function PurchaseDetailPage() {
     setBusyAction("review_task");
     setError("");
     try {
+      savePurchaseFlowMeta({
+        ...purchaseFlowMeta,
+        listCompletedAt: purchaseFlowMeta.listCompletedAt || new Date().toISOString().slice(0, 10),
+        reviewRequestedAt: new Date().toISOString().slice(0, 10),
+        reviewApprovedAt: undefined,
+        supplierSentDate: undefined,
+        supplierReplyDate: undefined,
+        supplierFilesReady: undefined,
+      });
       const statusRes = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -731,6 +762,14 @@ export default function PurchaseDetailPage() {
       if (!statusRes.ok) return setError(statusData.error || "No se pudo mover el pedido a revisión");
       setStatus("review");
       setPurchase((prev) => (prev ? { ...prev, status: "review" } : prev));
+
+      if (!permissions.tasksWrite) {
+        setInfo("Pedido enviado a Revisión de compras");
+        await loadAll(storeId, String(purchaseId));
+        setStatus("review");
+        setPurchase((prev) => (prev ? { ...prev, status: "review" } : prev));
+        return;
+      }
 
       const res = await fetch(`${API_BASE}/tasks`, {
         method: "POST",
@@ -751,6 +790,8 @@ export default function PurchaseDetailPage() {
       }
       setInfo("Pedido enviado a Revisión de compras y tarea creada correctamente");
       await loadAll(storeId, String(purchaseId));
+      setStatus("review");
+      setPurchase((prev) => (prev ? { ...prev, status: "review" } : prev));
     } catch {
       setError("Connection error");
     } finally {
@@ -765,6 +806,15 @@ export default function PurchaseDetailPage() {
     setError("");
     setInfo("");
     try {
+      savePurchaseFlowMeta({
+        ...purchaseFlowMeta,
+        listCompletedAt: new Date().toISOString().slice(0, 10),
+        reviewRequestedAt: undefined,
+        reviewApprovedAt: undefined,
+        supplierSentDate: undefined,
+        supplierReplyDate: undefined,
+        supplierFilesReady: undefined,
+      });
       const res = await fetch(`${API_BASE}/purchases/${purchaseId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -779,6 +829,8 @@ export default function PurchaseDetailPage() {
       setPurchase((prev) => (prev ? { ...prev, status: "checklist" } : prev));
       setInfo("Pedido marcado como Lista completa");
       await loadAll(storeId, String(purchaseId));
+      setStatus("checklist");
+      setPurchase((prev) => (prev ? { ...prev, status: "checklist" } : prev));
     } catch {
       setError("Connection error");
     } finally {
@@ -814,7 +866,32 @@ export default function PurchaseDetailPage() {
     }
   }
 
+  function approvePurchaseReview() {
+    setBusyAction("approve_review");
+    setError("");
+    setInfo("");
+    try {
+      savePurchaseFlowMeta({
+        ...purchaseFlowMeta,
+        listCompletedAt: purchaseFlowMeta.listCompletedAt || new Date().toISOString().slice(0, 10),
+        reviewRequestedAt: purchaseFlowMeta.reviewRequestedAt || new Date().toISOString().slice(0, 10),
+        reviewApprovedAt: new Date().toISOString().slice(0, 10),
+      });
+      setStatus("review");
+      setPurchase((prev) => (prev ? { ...prev, status: "review" } : prev));
+      setInfo("Revisión aprobada para proveedor");
+    } catch {
+      setError("No se pudo guardar la aprobación interna");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   function openSendSupplierModal() {
+    if (!purchaseFlowMeta.reviewApprovedAt) {
+      setError("Primero aprueba el pedido en Revisión antes de enviarlo al proveedor.");
+      return;
+    }
     setSupplierSentDate(purchaseFlowMeta.supplierSentDate || new Date().toISOString().slice(0, 10));
     setSupplierPdfReady(Boolean(purchaseFlowMeta.supplierFilesReady?.includes("pdf")));
     setSupplierExcelReady(Boolean(purchaseFlowMeta.supplierFilesReady?.includes("excel")));
@@ -836,6 +913,9 @@ export default function PurchaseDetailPage() {
     ];
     savePurchaseFlowMeta({
       ...purchaseFlowMeta,
+      listCompletedAt: purchaseFlowMeta.listCompletedAt || new Date().toISOString().slice(0, 10),
+      reviewRequestedAt: purchaseFlowMeta.reviewRequestedAt || new Date().toISOString().slice(0, 10),
+      reviewApprovedAt: purchaseFlowMeta.reviewApprovedAt || new Date().toISOString().slice(0, 10),
       supplierSentDate,
       supplierFilesReady: preparedFiles,
     });
@@ -862,6 +942,9 @@ export default function PurchaseDetailPage() {
   async function markSupplierPricesReceived() {
     savePurchaseFlowMeta({
       ...purchaseFlowMeta,
+      listCompletedAt: purchaseFlowMeta.listCompletedAt || new Date().toISOString().slice(0, 10),
+      reviewRequestedAt: purchaseFlowMeta.reviewRequestedAt || new Date().toISOString().slice(0, 10),
+      reviewApprovedAt: purchaseFlowMeta.reviewApprovedAt,
       supplierReplyDate,
     });
     await updatePurchaseStatus("priced", "El proveedor ya respondió y ahora toca revisar precios.", "priced");
@@ -871,6 +954,9 @@ export default function PurchaseDetailPage() {
   function saveSupplierPricingReview() {
     savePurchaseFlowMeta({
       ...purchaseFlowMeta,
+      listCompletedAt: purchaseFlowMeta.listCompletedAt,
+      reviewRequestedAt: purchaseFlowMeta.reviewRequestedAt,
+      reviewApprovedAt: purchaseFlowMeta.reviewApprovedAt,
       supplierSentDate: purchaseFlowMeta.supplierSentDate,
       supplierReplyDate: purchaseFlowMeta.supplierReplyDate,
       supplierFilesReady: purchaseFlowMeta.supplierFilesReady,
@@ -917,8 +1003,13 @@ export default function PurchaseDetailPage() {
         setError(data.error || "No se pudo devolver el pedido a Compras");
         return;
       }
+      savePurchaseFlowMeta({});
+      setStatus("draft");
+      setPurchase((prev) => (prev ? { ...prev, status: "draft" } : prev));
       setInfo("Pedido devuelto a Compras para ajustes");
       await loadAll(storeId, String(purchaseId));
+      setStatus("draft");
+      setPurchase((prev) => (prev ? { ...prev, status: "draft" } : prev));
     } catch {
       setError("Connection error");
     } finally {
@@ -1191,19 +1282,117 @@ export default function PurchaseDetailPage() {
 
   const totalUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
   const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
-  const rawEffectiveStatus = status || purchase?.status || "";
-  const effectiveStatus =
-    rawEffectiveStatus === "planned" || rawEffectiveStatus === "delivered" || rawEffectiveStatus === "delayed"
-      ? "review"
-      : rawEffectiveStatus;
+  const isReviewApproved = Boolean(purchaseFlowMeta.reviewApprovedAt);
+  const rawEffectiveStatus = String(status || purchase?.status || "").toLowerCase();
+  const hasChecklistEvidence = Boolean(purchaseFlowMeta.listCompletedAt) || rawEffectiveStatus === "checklist";
+  const hasReviewEvidence = Boolean(purchaseFlowMeta.reviewRequestedAt) || rawEffectiveStatus === "review";
+  const hasSupplierSentEvidence = Boolean(purchaseFlowMeta.supplierSentDate) || rawEffectiveStatus === "sent";
+  const hasSupplierReplyEvidence = Boolean(purchaseFlowMeta.supplierReplyDate) || rawEffectiveStatus === "priced";
+  const hasSupplierTrail = Boolean(purchaseFlowMeta.supplierSentDate || purchaseFlowMeta.supplierReplyDate);
+  const hasTrackingEvidence = Boolean(purchase?.trackingCode || (purchase?.shipments3pl?.length || 0) > 0);
+  const hasArrivalEvidence = Boolean((purchase?.items || []).some((item) => Number(item.quantityReceived || 0) > 0));
+  const isRawArrivalStatus = ["received", "verified", "closed", "incident"].includes(rawEffectiveStatus);
+  const isRawTrackingStatus = ["tracking_received", "in_transit"].includes(rawEffectiveStatus);
+  const flowStageFromMeta = purchaseFlowMeta.supplierReplyDate
+    ? "priced"
+    : purchaseFlowMeta.supplierSentDate
+      ? "sent"
+      : purchaseFlowMeta.reviewRequestedAt
+        ? "review"
+        : purchaseFlowMeta.listCompletedAt
+          ? "checklist"
+          : "";
+  const rawStatusNeedsSupplierTrail =
+    (rawEffectiveStatus === "sent" && Boolean(purchaseFlowMeta.supplierSentDate)) ||
+    (rawEffectiveStatus === "priced" && Boolean(purchaseFlowMeta.supplierReplyDate)) ||
+    (rawEffectiveStatus === "paid" && Boolean(purchaseFlowMeta.supplierReplyDate || purchaseFlowMeta.supplierSentDate)) ||
+    (isRawTrackingStatus && hasSupplierTrail) ||
+    (isRawArrivalStatus && hasSupplierTrail);
+  const effectiveStatus = (() => {
+    if (purchaseFlowMeta.reviewRequestedAt && !purchaseFlowMeta.supplierSentDate && !purchaseFlowMeta.supplierReplyDate) {
+      return "review";
+    }
+
+    if (purchaseFlowMeta.listCompletedAt && !purchaseFlowMeta.reviewRequestedAt && !purchaseFlowMeta.supplierSentDate && !purchaseFlowMeta.supplierReplyDate) {
+      return "checklist";
+    }
+
+    if (purchaseFlowMeta.supplierReplyDate) {
+      return rawEffectiveStatus === "paid" ? "paid" : "priced";
+    }
+
+    if (purchaseFlowMeta.supplierSentDate) {
+      if (["closed", "verified", "incident", "received", "tracking_received", "in_transit"].includes(rawEffectiveStatus)) {
+        return rawEffectiveStatus;
+      }
+      return "sent";
+    }
+
+    if (["closed", "verified", "incident"].includes(rawEffectiveStatus) && hasSupplierTrail) {
+      return rawEffectiveStatus;
+    }
+
+    if (!hasSupplierTrail && hasReviewEvidence) {
+      return "review";
+    }
+
+    if (!hasSupplierTrail && hasChecklistEvidence) {
+      return "checklist";
+    }
+
+    if (flowStageFromMeta && !rawStatusNeedsSupplierTrail) {
+      return flowStageFromMeta;
+    }
+
+    if (["sent", "priced", "paid"].includes(rawEffectiveStatus) && hasSupplierTrail) {
+      return rawEffectiveStatus;
+    }
+
+    if (isRawTrackingStatus && hasSupplierTrail) {
+      return rawEffectiveStatus;
+    }
+
+    if (rawEffectiveStatus === "received" && hasSupplierTrail) {
+      return "received";
+    }
+
+    if (hasSupplierReplyEvidence) {
+      return "priced";
+    }
+
+    if (hasSupplierSentEvidence) {
+      return "sent";
+    }
+
+    if (hasReviewEvidence) {
+      return "review";
+    }
+
+    if (hasChecklistEvidence) {
+      return "checklist";
+    }
+
+    if (hasArrivalEvidence && hasSupplierTrail) {
+      return "received";
+    }
+
+    if (hasTrackingEvidence && hasSupplierTrail) {
+      return "tracking_received";
+    }
+
+    return "draft";
+  })();
   const isDraftStage = effectiveStatus === "draft";
   const isChecklistStage = effectiveStatus === "checklist";
+  const isBuildStage = isDraftStage || isChecklistStage;
   const isReviewStage = effectiveStatus === "review";
   const isSupplierStage = ["sent", "priced", "paid", "preparing", "tracking_received", "in_transit"].includes(effectiveStatus);
   const isArrivalStage = ["received", "verified", "closed", "incident"].includes(effectiveStatus);
   const isSupplierPricingStage = ["priced", "paid", "preparing", "tracking_received", "in_transit", "received", "verified", "closed", "incident"].includes(
     effectiveStatus,
   );
+  const canEditSupplierReplyList = ["sent", "priced"].includes(effectiveStatus);
+  const canEditPurchaseList = isBuildStage || canEditSupplierReplyList;
   const supplierResponseDays =
     purchaseFlowMeta.supplierSentDate && purchaseFlowMeta.supplierReplyDate
       ? Math.max(
@@ -1214,23 +1403,34 @@ export default function PurchaseDetailPage() {
         )
       : null;
   const heroTrackingLabel =
-    effectiveStatus === "review"
-      ? "Pedido en revisión"
-      : effectiveStatus === "sent"
-        ? "Pedido enviado"
-        : effectiveStatus === "priced"
-          ? "Precios recibidos"
-          : effectiveStatus === "paid"
-            ? "Compra pagada"
-            : effectiveStatus === "tracking_received"
-              ? "Tracking recibido"
-              : effectiveStatus === "in_transit"
-                ? "Pedido en tránsito"
-      : effectiveStatus === "received"
-        ? "Pedido recibido"
-        : "Pedido en seguimiento";
+    effectiveStatus === "draft"
+      ? "Construyendo pedido"
+      : effectiveStatus === "checklist"
+        ? "Lista completa"
+      : effectiveStatus === "review"
+        ? "Pedido en revisión"
+        : effectiveStatus === "sent"
+          ? "Pedido enviado"
+          : effectiveStatus === "priced"
+            ? "Precios recibidos"
+            : effectiveStatus === "paid"
+              ? "Compra pagada"
+              : effectiveStatus === "tracking_received"
+                ? "Tracking recibido"
+                : effectiveStatus === "in_transit"
+                  ? "Pedido en tránsito"
+                  : effectiveStatus === "received"
+                    ? "Pedido recibido"
+                    : "Pedido en seguimiento";
   const canMarkListComplete = isDraftStage;
-  const canSendToReview = isChecklistStage;
+  const canSendToReview = Boolean(
+    (effectiveStatus === "checklist" ||
+      (Boolean(purchaseFlowMeta.listCompletedAt) &&
+        !purchaseFlowMeta.reviewRequestedAt &&
+        !purchaseFlowMeta.supplierSentDate &&
+        !purchaseFlowMeta.supplierReplyDate)) &&
+      !busyAction,
+  );
   const isListComplete = [
     "checklist",
     "review",
@@ -1272,6 +1472,12 @@ export default function PurchaseDetailPage() {
       lineSearchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }, [addBoxChoice]);
+
+  useEffect(() => {
+    if (!canEditPurchaseList && listEditMode) {
+      setListEditMode(false);
+    }
+  }, [canEditPurchaseList, listEditMode]);
 
   if (loading) return <div className="min-h-screen bg-[#E8EAEC] p-6">Cargando permisos...</div>;
   if (permissionsError) return <div className="min-h-screen bg-[#E8EAEC] p-6 text-red-700">{permissionsError}</div>;
@@ -1360,7 +1566,7 @@ export default function PurchaseDetailPage() {
                         {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
                       </div>
                       <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                        {purchaseStatusDescription(effectiveStatus)}
+                        {purchaseStatusDescription(effectiveStatus, purchaseFlowMeta)}
                       </div>
                     </div>
                   </div>
@@ -1378,98 +1584,119 @@ export default function PurchaseDetailPage() {
         {error ? <div className="bg-red-100 text-red-700 p-3 rounded">{error}</div> : null}
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="relative">
-              <div className="flex items-center gap-2">
-                <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                  Agregar línea al PO
-                </h3>
-                <button
-                  type="button"
-                  aria-label="Información de agregar línea al PO"
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-[#D4D9E4] bg-white text-[14px] font-semibold text-[#616984] hover:bg-[#F7F9FC]"
-                  onClick={() => setLineInfoOpen((value) => !value)}
-                >
-                  i
-                </button>
-              </div>
-              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Busca una referencia existente o escribe una nueva para ir construyendo este pedido.
-              </p>
-              {lineInfoOpen ? (
-                <div className="absolute left-0 top-[calc(100%+10px)] z-20 w-[340px] rounded-2xl border border-[#D4D9E4] bg-white p-4 text-[13px] text-[#4F5568] shadow-[0_14px_32px_rgba(0,0,0,0.12)]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                  <div>Si existe en el catálogo, lo enlazamos aquí.</div>
-                  <div className="mt-2">La cantidad inicial la puedes cambiar luego en la lista de compra.</div>
-                  <div className="mt-2">Si pones 0 en cantidad, la línea se elimina del pedido.</div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <form className="rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
-            <div className="grid gap-3 md:grid-cols-[minmax(0,2.8fr)_0.9fr_auto]">
+        {canEditPurchaseList ? (
+          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div className="relative">
-                <input
-                  ref={lineSearchInputRef}
-                  className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
-                  placeholder="Buscar o escribir producto: AR1925, AR2434, Reloj Maserati..."
-                  value={lineSearch}
-                  onChange={(e) => {
-                    setLineSearch(e.target.value);
-                    setLineProductId("");
-                    setLineTitle(e.target.value);
-                  }}
-                />
-                {productSuggestions.length > 0 ? (
-                  <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-2xl border border-[#D4D9E4] bg-white shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
-                    {productSuggestions.map((product) => (
-                      <button
-                        key={product.id}
-                        type="button"
-                        className="flex w-full items-start justify-between gap-3 border-b border-[#EEF1F6] px-3 py-2 text-left last:border-b-0 hover:bg-[#F7F9FC]"
-                        onClick={() => selectSuggestion(product)}
-                      >
-                        <span>
-                          <span className="block text-[14px] text-[#141A39]">
-                            {purchaseSuggestionLabel(product)}
-                          </span>
-                          <span className="mt-0.5 block text-[12px] text-[#6E768E]">
-                            {[product.brand, product.ean].filter(Boolean).join(" · ")}
-                          </span>
-                        </span>
-                        <span className="rounded-full bg-[#E9F8EE] px-2 py-1 text-[11px] text-[#1F7A3E]">
-                          Existe
-                        </span>
-                      </button>
-                    ))}
+                <div className="flex items-center gap-2">
+                  <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {canEditSupplierReplyList ? "Ajustar lista según proveedor" : "Agregar línea al PO"}
+                  </h3>
+                  <button
+                    type="button"
+                    aria-label="Información de agregar línea al PO"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-[#D4D9E4] bg-white text-[14px] font-semibold text-[#616984] hover:bg-[#F7F9FC]"
+                    onClick={() => setLineInfoOpen((value) => !value)}
+                  >
+                    i
+                  </button>
+                </div>
+                <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  {canEditSupplierReplyList
+                    ? "Aquí ajustas faltantes, cambios de cantidad o sustituciones después de la respuesta del proveedor."
+                    : "Busca una referencia existente o escribe una nueva para ir construyendo este pedido."}
+                </p>
+                {lineInfoOpen ? (
+                  <div className="absolute left-0 top-[calc(100%+10px)] z-20 w-[340px] rounded-2xl border border-[#D4D9E4] bg-white p-4 text-[13px] text-[#4F5568] shadow-[0_14px_32px_rgba(0,0,0,0.12)]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div>Si existe en el catálogo, lo enlazamos aquí.</div>
+                    <div className="mt-2">La cantidad inicial la puedes cambiar luego en la lista de compra.</div>
+                    <div className="mt-2">Si pones 0 en cantidad, la línea se elimina del pedido.</div>
+                    {canEditSupplierReplyList ? <div className="mt-2">Si el proveedor responde con faltantes o cambios, ajusta aquí la lista antes de cerrar precios.</div> : null}
                   </div>
                 ) : null}
               </div>
-
-              <input
-                className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
-                type="number"
-                min="1"
-                placeholder="Cantidad"
-                value={lineQty}
-                onChange={(e) => setLineQty(e.target.value)}
-              />
-
-              <button className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" type="submit" disabled={busyAction === "add_line"}>
-                {busyAction === "add_line" ? "..." : "Agregar"}
-              </button>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
-                <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
-                  Nuevo: esta referencia no existe todavía en catálogo.
-                </span>
-              ) : null}
+            <form className="rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
+              <div className="grid gap-3 md:grid-cols-[minmax(0,2.8fr)_0.9fr_auto]">
+                <div className="relative">
+                  <input
+                    ref={lineSearchInputRef}
+                    className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                    placeholder={canEditSupplierReplyList ? "Buscar producto para sumar, sustituir o corregir la respuesta del proveedor..." : "Buscar o escribir producto: AR1925, AR2434, Reloj Maserati..."}
+                    value={lineSearch}
+                    onChange={(e) => {
+                      setLineSearch(e.target.value);
+                      setLineProductId("");
+                      setLineTitle(e.target.value);
+                    }}
+                  />
+                  {productSuggestions.length > 0 ? (
+                    <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-2xl border border-[#D4D9E4] bg-white shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                      {productSuggestions.map((product) => (
+                        <button
+                          key={product.id}
+                          type="button"
+                          className="flex w-full items-start justify-between gap-3 border-b border-[#EEF1F6] px-3 py-2 text-left last:border-b-0 hover:bg-[#F7F9FC]"
+                          onClick={() => selectSuggestion(product)}
+                        >
+                          <span>
+                            <span className="block text-[14px] text-[#141A39]">
+                              {purchaseSuggestionLabel(product)}
+                            </span>
+                            <span className="mt-0.5 block text-[12px] text-[#6E768E]">
+                              {[product.brand, product.ean].filter(Boolean).join(" · ")}
+                            </span>
+                          </span>
+                          <span className="rounded-full bg-[#E9F8EE] px-2 py-1 text-[11px] text-[#1F7A3E]">
+                            Existe
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <input
+                  className="h-11 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[14px] text-[#25304F] outline-none"
+                  type="number"
+                  min="1"
+                  placeholder="Cantidad"
+                  value={lineQty}
+                  onChange={(e) => setLineQty(e.target.value)}
+                />
+
+                <button className="h-11 rounded-xl bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50" type="submit" disabled={busyAction === "add_line"}>
+                  {busyAction === "add_line" ? "..." : "Agregar"}
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[#6E768E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {lineSearch.trim() && !lineProductId && productSuggestions.length === 0 ? (
+                  <span className="rounded-full border border-[#FFD8A8] bg-[#FFF8EC] px-3 py-1 text-[#B54708]">
+                    Nuevo: esta referencia no existe todavía en catálogo.
+                  </span>
+                ) : null}
+              </div>
+            </form>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-[#DDE4F0] bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.06)]">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Construcción cerrada
+                </h3>
+                <p className="mt-1 max-w-[760px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Esta fase ya no edita líneas ni cantidades. La lista quedó cerrada para revisión interna y desde aquí solo decidimos si se aprueba, se devuelve a Compras o se prepara el envío al proveedor.
+                </p>
+              </div>
+              <span className="inline-flex items-center rounded-full border border-[#D4D9E4] bg-[#F7F9FC] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {isReviewStage ? "Modo revisión" : "Construcción finalizada"}
+              </span>
             </div>
-          </form>
-        </div>
+          </div>
+        )}
 
         <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -1478,27 +1705,39 @@ export default function PurchaseDetailPage() {
                 Lista de compra
               </h3>
               <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Aquí revisas el pedido, ajustas cantidades y dejas lista la base para exportarla al proveedor.
+                {effectiveStatus === "sent"
+                  ? "Aquí ajustas la lista según la respuesta inicial del proveedor: faltantes, sustituciones o cantidades corregidas."
+                  : effectiveStatus === "priced"
+                    ? "Aquí dejas cerrada la lista final con la respuesta del proveedor antes de pasar al pago."
+                    : "Aquí revisas el pedido, ajustas cantidades y dejas lista la base para exportarla al proveedor."}
               </p>
             </div>
             <div className="flex items-center gap-2">
               <div className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 {totalUnits} ítems
               </div>
-              <button
-                type="button"
-                className={`rounded-full px-4 py-2 text-[12px] ${listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
-                onClick={() => setListEditMode(true)}
-              >
-                Editar
-              </button>
-              <button
-                type="button"
-                className={`rounded-full px-4 py-2 text-[12px] ${!listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
-                onClick={() => setListEditMode(false)}
-              >
-                Guardar
-              </button>
+              {canEditPurchaseList ? (
+                <>
+                  <button
+                    type="button"
+                    className={`rounded-full px-4 py-2 text-[12px] ${listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
+                    onClick={() => setListEditMode(true)}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-full px-4 py-2 text-[12px] ${!listEditMode ? "border border-[#0B1230] bg-[#0B1230] text-white" : "border border-[#D4D9E4] bg-white text-[#25304F]"}`}
+                    onClick={() => setListEditMode(false)}
+                  >
+                    Guardar
+                  </button>
+                </>
+              ) : (
+                <span className="inline-flex items-center rounded-full border border-[#D4D9E4] bg-[#F7F9FC] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Lista bloqueada para revisión
+                </span>
+              )}
             </div>
           </div>
 
@@ -1870,7 +2109,7 @@ export default function PurchaseDetailPage() {
               </p>
             </div>
             <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {isListComplete ? "Estado: Lista completa" : "Paso previo a revisión"}
+              {isReviewStage ? "Estado: En revisión" : isListComplete ? "Estado: Lista completa" : "Paso previo a revisión"}
             </div>
           </div>
 
@@ -1934,7 +2173,7 @@ export default function PurchaseDetailPage() {
                     ? "El pedido ya salió de la revisión interna. Ahora seguimos la respuesta del proveedor, la validación de precios, el pago y luego el tracking hasta que llegue la mercancía."
                     : isArrivalStage
                       ? "Aquí dejamos preparado el almacén que recibirá el pedido y el siguiente paso operativo. Según esta recepción, el flujo cambia de revisión a entrada real de stock."
-                      : "Aunque aún estamos armando el pedido, aquí ya podemos dejar previsto el almacén de entrada para que el flujo quede ordenado desde el inicio."}
+                      : "Mientras cierras la lista, aquí solo dejamos preparado el almacén de entrada. Todavía no estamos recibiendo ni moviendo stock: solo ordenamos el siguiente paso."}
               </p>
             </div>
             <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -1942,9 +2181,13 @@ export default function PurchaseDetailPage() {
                 ? "Pendiente de salida"
                 : isSupplierStage
                   ? "Proveedor en curso"
-                  : receiveWarehouseId
-                  ? "Recepción preparada"
-                  : "Pendiente de definir"}
+                  : isBuildStage
+                    ? receiveWarehouseId
+                      ? "Paso siguiente preparado"
+                      : "Pendiente de definir"
+                    : receiveWarehouseId
+                      ? "Recepción preparada"
+                      : "Pendiente de definir"}
             </div>
           </div>
 
@@ -1962,7 +2205,7 @@ export default function PurchaseDetailPage() {
                       </div>
                     </div>
                     <div className="inline-flex rounded-full bg-[#FFF4E5] px-3 py-1 text-[12px] text-[#B54708]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                      Preparar salida
+                      {isReviewApproved ? "Listo para enviar" : "Pendiente de aprobar"}
                     </div>
                   </div>
 
@@ -1983,26 +2226,32 @@ export default function PurchaseDetailPage() {
                         Fecha sugerida
                       </div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                        {formatDate(purchaseFlowMeta.supplierSentDate || supplierSentDate || new Date().toISOString().slice(0, 10))}
+                        {isReviewApproved
+                          ? formatDate(purchaseFlowMeta.reviewApprovedAt)
+                          : "Aún sin aprobación"}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                        La confirmas al abrir el envío. Así dejamos claro cuándo salió realmente el pedido al proveedor.
+                        {isReviewApproved
+                          ? "La aprobación interna ya quedó hecha. El siguiente paso es registrar la salida real al proveedor."
+                          : "Primero aprobamos internamente el pedido. Después ya registramos la fecha real de salida al proveedor."}
                       </p>
                     </div>
                   </div>
 
                   <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      className="h-11 rounded-full bg-[#0B1230] px-5 text-[14px] text-white disabled:opacity-50"
-                      style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-                      onClick={openSendSupplierModal}
-                      disabled={busyAction === "send_supplier"}
-                    >
-                      {busyAction === "send_supplier" ? "..." : "Preparar envío al proveedor"}
-                    </button>
+                    {isReviewApproved ? (
+                      <span className="inline-flex items-center rounded-full bg-[#E9F8EE] px-4 py-2 text-[12px] text-[#1F7A3E]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Aprobado el {formatDate(purchaseFlowMeta.reviewApprovedAt)}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-[#FFF4E8] px-4 py-2 text-[12px] text-[#B45C00]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        Pendiente de aprobación interna
+                      </span>
+                    )}
                     <span className="inline-flex items-center rounded-full bg-[#EEF2FF] px-4 py-2 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                      Después de este paso, el estado cambia a Enviado al proveedor
+                      {isReviewApproved
+                        ? "El envío al proveedor ya puede hacerse desde Acciones de revisión"
+                        : "El envío al proveedor se habilita justo después de aprobar la revisión"}
                     </span>
                   </div>
                 </div>
@@ -2014,15 +2263,15 @@ export default function PurchaseDetailPage() {
                   <div className="mt-3 space-y-3 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     <div className="flex items-start gap-3">
                       <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#E9F8EE] text-[12px] text-[#1F7A3E]">1</span>
-                      <span>El pedido deja la fase interna de revisión y ya sale del equipo hacia el proveedor.</span>
+                      <span>Primero validamos la lista y dejamos constancia de que ya quedó aprobada internamente.</span>
                     </div>
                     <div className="flex items-start gap-3">
                       <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#FFF4E5] text-[12px] text-[#B54708]">2</span>
-                      <span>Luego esperaremos la respuesta del proveedor con precios, faltantes o confirmación del pedido.</span>
+                      <span>Después registramos la salida real al proveedor con fecha y con el PDF o Excel ya descargado.</span>
                     </div>
                     <div className="flex items-start gap-3">
                       <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#EEF4FF] text-[12px] text-[#3147D4]">3</span>
-                      <span>Más adelante, ese mismo pedido seguirá con pago, tracking y recepción real en almacén.</span>
+                      <span>Más adelante, este mismo pedido seguirá con respuesta del proveedor, precios, pago, tracking y recepción real en almacén.</span>
                     </div>
                   </div>
                 </div>
@@ -2233,14 +2482,14 @@ export default function PurchaseDetailPage() {
             </h3>
             <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               {isReviewStage
-                ? "En esta fase el pedido ya no se está construyendo. Aquí decidimos si vuelve a Compras para corregirse o si ya puede salir al proveedor."
+                ? "En esta fase el pedido ya no se construye. Aquí se valida, se puede devolver a Compras, aprobar o dejar listo para enviar al proveedor."
                 : canSendToReview
-                  ? "La lista ya quedó completa. Ahora sí puedes descargarla y mandarla a revisión interna."
+                  ? "La lista ya quedó cerrada. Aquí termina la fase de creación del PO y ya puedes moverlo a Revisión de compras."
                   : isSupplierStage
                     ? "Aquí seguimos el avance real con el proveedor: respuesta, precios, pago, tracking y llegada al almacén."
-                    : isArrivalStage
+                  : isArrivalStage
                       ? "El pedido ya entró en la fase de llegada y cierre. Aquí ya no hace falta volver a la revisión inicial."
-                      : "Primero deja cerrada la lista y márcala como Lista completa. Después se habilita el paso a Revisión."}
+                      : "Todavía estamos construyendo el PO. Primero cierra cantidades, confirma Lista completa y recién después se habilita Revisión."}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -2270,9 +2519,21 @@ export default function PurchaseDetailPage() {
                 </button>
                 <button
                   type="button"
+                  className={`rounded-full px-4 py-2 text-[13px] disabled:opacity-50 ${
+                    isReviewApproved
+                      ? "border border-[#BEE5CB] bg-[#E9F8EE] text-[#1F7A3E]"
+                      : "border border-[#D4D9E4] bg-white text-[#25304F] hover:bg-[#F7F9FC]"
+                  }`}
+                  onClick={approvePurchaseReview}
+                  disabled={busyAction === "approve_review"}
+                >
+                  {busyAction === "approve_review" ? "..." : isReviewApproved ? "Revisión aprobada" : "Aprobar revisión"}
+                </button>
+                <button
+                  type="button"
                   className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
                   onClick={openSendSupplierModal}
-                  disabled={busyAction === "send_supplier"}
+                  disabled={busyAction === "send_supplier" || !isReviewApproved}
                 >
                   {busyAction === "send_supplier" ? "..." : "Enviar al proveedor"}
                 </button>
@@ -2338,23 +2599,20 @@ export default function PurchaseDetailPage() {
                 type="button"
                 className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
                 onClick={sendPurchaseReviewTask}
-                disabled={busyAction === "review_task" || !permissions.tasksWrite || !canSendToReview}
+                disabled={busyAction === "review_task" || !canSendToReview}
               >
                 {busyAction === "review_task"
                   ? "..."
                   : canSendToReview
-                    ? "Enviar a revisión"
+                    ? "Enviar a Revisión de compras"
                     : effectiveStatus === "draft"
                       ? "Primero: Lista completa"
-                      : `Estado: ${STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}`}
+                      : effectiveStatus === "review"
+                        ? "Ya está en Revisión"
+                        : `Estado: ${STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}`}
               </button>
             )}
           </div>
-          {!permissions.tasksWrite && !isReviewStage ? (
-            <div className="mt-3 text-[12px] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              Tu usuario no tiene permiso para crear tareas de revisión.
-            </div>
-          ) : null}
         </div>
 
         {isSupplierStage || isArrivalStage ? (
@@ -2740,6 +2998,28 @@ export default function PurchaseDetailPage() {
               <p className="mt-2 text-[14px] text-[#25304F]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 No te olvides de descargar el pedido en PDF o Excel antes de enviarlo. Este paso mueve el pedido desde <strong>Revisión</strong> a <strong>Enviado al proveedor</strong>.
               </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F2F5FB]"
+                  onClick={() => {
+                    downloadPurchasePdf();
+                    setSupplierPdfReady(true);
+                  }}
+                >
+                  Descargar PDF ahora
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F2F5FB]"
+                  onClick={() => {
+                    downloadPurchaseCsv();
+                    setSupplierExcelReady(true);
+                  }}
+                >
+                  Descargar Excel ahora
+                </button>
+              </div>
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -2753,6 +3033,9 @@ export default function PurchaseDetailPage() {
                   onChange={(e) => setSupplierSentDate(e.target.value)}
                   className="h-12 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[15px] text-[#141A39] outline-none focus:border-[#3147D4]"
                 />
+                <span className="mt-2 block text-[12px] leading-5 text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Esta fecha quedará guardada como salida al proveedor y marcará desde cuándo esperamos su respuesta.
+                </span>
               </label>
               <div className="rounded-2xl border border-[#E3E7F0] bg-white px-4 py-3">
                 <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -2795,6 +3078,9 @@ export default function PurchaseDetailPage() {
                 />
                 Confirmo que el pedido ya está listo para salir al proveedor
               </label>
+              <p className="pt-1 text-[12px] leading-5 text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Puedes dejar marcado PDF, Excel o ambos, según el archivo que realmente vayas a compartir con el proveedor.
+              </p>
             </div>
 
             <div className="mt-6 flex flex-wrap justify-end gap-3">
@@ -2862,6 +3148,16 @@ export default function PurchaseDetailPage() {
                 </div>
                 <div className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                   Enviado: {formatDate(purchaseFlowMeta.supplierSentDate)}
+                </div>
+                <div className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Tiempo estimado: {purchaseFlowMeta.supplierSentDate && supplierReplyDate
+                    ? `${Math.max(
+                        0,
+                        Math.round(
+                          (new Date(supplierReplyDate).getTime() - new Date(purchaseFlowMeta.supplierSentDate).getTime()) / 86400000,
+                        ),
+                      )} días`
+                    : "Pendiente"}
                 </div>
               </div>
             </div>
