@@ -1940,6 +1940,62 @@ export default function PurchaseDetailPage() {
                   : effectiveStatus === "received"
                     ? "Pedido recibido"
                     : "Pedido en seguimiento";
+  const phaseVisual = isReviewStage
+    ? {
+        phaseTitle: "Fase de revisión",
+        phaseSummary: "Aquí validamos internamente la lista antes de mandarla al proveedor.",
+        heroGradient: "bg-[linear-gradient(135deg,#202743_0%,#2C355E_52%,#46559A_100%)]",
+        pillClass: "border-[#DCE2FF] bg-[#F2F4FF] text-[#4152A6]",
+        cardClass: "border-[#DCE2FF] bg-[#F7F8FF]",
+        helperLabel: "Revisión interna activa",
+      }
+    : isSupplierStage
+      ? {
+          phaseTitle: "Fase con proveedor",
+          phaseSummary: "Aquí seguimos respuesta, precios, pago y tracking hasta que la compra llegue.",
+          heroGradient: "bg-[linear-gradient(135deg,#382516_0%,#5A3922_52%,#8C6036_100%)]",
+          pillClass: "border-[#F5D8B4] bg-[#FFF5E8] text-[#A95C09]",
+          cardClass: "border-[#F5D8B4] bg-[#FFFBF5]",
+          helperLabel: "Seguimiento comercial",
+        }
+      : isArrivalStage
+        ? {
+            phaseTitle: "Fase de recepción",
+            phaseSummary: "La compra ya está en llegada real: toca revisar, registrar incidencias y cerrar.",
+            heroGradient: "bg-[linear-gradient(135deg,#12303B_0%,#1C4C5C_52%,#2F6F83_100%)]",
+            pillClass: "border-[#CFE7E7] bg-[#EEF9F9] text-[#1D6971]",
+            cardClass: "border-[#CFE7E7] bg-[#F8FEFE]",
+            helperLabel: "Recepción y cierre",
+          }
+        : {
+            phaseTitle: "Fase de compras",
+            phaseSummary: "Todavía estamos construyendo el pedido y cerrando cantidades antes de revisión.",
+            heroGradient: "bg-[linear-gradient(135deg,#101935_0%,#182451_52%,#22347A_100%)]",
+            pillClass: "border-[#DCE5FF] bg-[#EEF2FF] text-[#3147D4]",
+            cardClass: "border-[#DCE5FF] bg-[#F7F9FF]",
+            helperLabel: "Construcción del pedido",
+          };
+  const phaseSectionClass = isReviewStage
+    ? "border-[#DCE2FF] bg-[#F8F9FF]"
+    : isSupplierStage
+      ? "border-[#F3D8BA] bg-[#FFF9F2]"
+      : isArrivalStage
+        ? "border-[#D5EBE9] bg-[#F7FDFC]"
+        : "border-[#DCE5FF] bg-[#F8FAFF]";
+  const phaseInnerCardClass = isReviewStage
+    ? "border-[#E3E8FF] bg-white"
+    : isSupplierStage
+      ? "border-[#F2DEC5] bg-[#FFFCF8]"
+      : isArrivalStage
+        ? "border-[#D9ECEB] bg-[#FBFEFE]"
+        : "border-[#E4E9F5] bg-white";
+  const phaseChipClass = isReviewStage
+    ? "bg-[#EEF2FF] text-[#3147D4]"
+    : isSupplierStage
+      ? "bg-[#FFF1E2] text-[#A95C09]"
+      : isArrivalStage
+        ? "bg-[#E9F7F6] text-[#1F6E6E]"
+        : "bg-[#EEF2FF] text-[#3147D4]";
   const canMarkListComplete = isDraftStage;
   const canSendToReview = Boolean(
     (effectiveStatus === "checklist" ||
@@ -2030,12 +2086,17 @@ export default function PurchaseDetailPage() {
 
         <div id="lista-compra" className="overflow-hidden rounded-[32px] bg-white shadow-[0_16px_38px_rgba(0,0,0,0.08)]">
           <div className="grid gap-0 xl:grid-cols-[1.35fr_0.95fr]">
-            <section className="bg-[linear-gradient(135deg,#101935_0%,#182451_52%,#22347A_100%)] px-8 py-8 text-white">
+            <section className={`${phaseVisual.heroGradient} px-8 py-8 text-white`}>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="max-w-[620px]">
-                  <span className="inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[12px] tracking-[0.08em] text-white/85">
-                    {heroTrackingLabel}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[12px] tracking-[0.08em] text-white/85">
+                      {phaseVisual.phaseTitle}
+                    </span>
+                    <span className="inline-flex rounded-full border border-white/14 bg-white/6 px-3 py-1 text-[12px] tracking-[0.08em] text-white/72">
+                      {heroTrackingLabel}
+                    </span>
+                  </div>
                   <h2 className="mt-4 text-[46px] leading-[0.95] text-white" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {purchase?.poNumber || "-"}
                   </h2>
@@ -2054,7 +2115,7 @@ export default function PurchaseDetailPage() {
                     </div>
                   </div>
                   <p className="mt-5 max-w-[580px] text-[14px] leading-6 text-white/74" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                    Esta ficha resume el estado actual del PO, su contexto y las señales rápidas que necesitamos para seguir con compras, revisión, precios o envío.
+                    {phaseVisual.phaseSummary}
                   </p>
                 </div>
               </div>
@@ -2077,7 +2138,7 @@ export default function PurchaseDetailPage() {
 
             <section className="bg-[#FBFCFE] px-7 py-7">
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.9fr)]">
-                <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
+                <div className={`rounded-2xl border p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)] ${phaseVisual.cardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.08em] text-[#8B92A8]">Estado actual</div>
                     <div className="mt-2 flex flex-wrap items-end gap-3">
                       <div className="text-[26px] leading-none text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
@@ -2086,6 +2147,11 @@ export default function PurchaseDetailPage() {
                       <div className="pb-1 text-[13px] text-[#6B738C]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         {purchaseStatusDescription(effectiveStatus, purchaseFlowMeta)}
                       </div>
+                    </div>
+                    <div className="mt-3">
+                      <span className={`inline-flex rounded-full border px-3 py-1 text-[12px] ${phaseVisual.pillClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                        {phaseVisual.helperLabel}
+                      </span>
                     </div>
                   </div>
                 <div className="rounded-2xl border border-[#E7EBF3] bg-white p-5 shadow-[0_8px_24px_rgba(12,20,52,0.04)]">
@@ -2103,9 +2169,14 @@ export default function PurchaseDetailPage() {
         {info ? <div className="bg-emerald-100 text-emerald-700 p-3 rounded">{info}</div> : null}
 
         {canEditPurchaseList ? (
-          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseVisual.cardClass}`}>
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="relative">
+                <div className="flex items-center gap-2">
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    {canEditSupplierReplyList ? "Ajuste tras proveedor" : "Construcción del pedido"}
+                  </div>
+                </div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {canEditSupplierReplyList ? "Ajustar lista según proveedor" : "Agregar línea al PO"}
@@ -2135,7 +2206,7 @@ export default function PurchaseDetailPage() {
               </div>
             </div>
 
-            <form className="rounded-2xl border border-[#E3E7F0] bg-[#F7F8FB] p-4" onSubmit={addPurchaseLine}>
+            <form className={`rounded-2xl border p-4 ${phaseInnerCardClass}`} onSubmit={addPurchaseLine}>
               <div className="grid gap-3 md:grid-cols-[minmax(0,2.8fr)_0.9fr_auto]">
                 <div className="relative">
                   <input
@@ -2216,9 +2287,18 @@ export default function PurchaseDetailPage() {
           </div>
         )}
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+        <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${isArrivalStage ? phaseSectionClass : phaseVisual.cardClass}`}>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {isArrivalStage
+                  ? "Control de recepción"
+                  : isSupplierStage
+                    ? "Lista validada con proveedor"
+                    : isReviewStage
+                      ? "Base validada"
+                      : "Base del pedido"}
+              </div>
               <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 Lista de compra
               </h3>
@@ -2616,7 +2696,7 @@ export default function PurchaseDetailPage() {
           ) : null}
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+        <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseVisual.cardClass}`}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
@@ -2626,12 +2706,12 @@ export default function PurchaseDetailPage() {
                 Este es el paso intermedio entre construir la lista y mandarla a revisión. Cuando ya no quieras seguir agregando o corrigiendo líneas, marcas el pedido como Lista completa y recién después pasa a revisión.
               </p>
             </div>
-            <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+            <div className={`inline-flex rounded-full border px-4 py-2 text-[12px] ${phaseVisual.pillClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               {isReviewStage ? "Estado: En revisión" : isListComplete ? "Estado: Lista completa" : "Paso previo a revisión"}
             </div>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+          <div className="mt-4 rounded-2xl border border-[#E3E7F0] bg-white/80 p-4">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="grid gap-2 text-[13px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 <div className="inline-flex items-center gap-2">
@@ -2672,9 +2752,18 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+        <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseVisual.cardClass}`}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {isReviewStage
+                  ? "Revisión interna"
+                  : isSupplierStage
+                    ? "Proveedor y seguimiento"
+                    : isArrivalStage
+                      ? "Recepción operativa"
+                      : "Paso siguiente"}
+              </div>
               <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 {isReviewStage
                   ? "Salida al proveedor"
@@ -2694,7 +2783,7 @@ export default function PurchaseDetailPage() {
                       : "Mientras cierras la lista, aquí solo dejamos preparado el almacén de entrada. Todavía no estamos recibiendo ni moviendo stock: solo ordenamos el siguiente paso."}
               </p>
             </div>
-            <div className="inline-flex rounded-full border border-[#D4D9E4] bg-[#F7F8FB] px-4 py-2 text-[12px] text-[#4F5568]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+            <div className={`inline-flex rounded-full border px-4 py-2 text-[12px] ${phaseVisual.pillClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
               {isReviewStage
                 ? "Pendiente de salida"
                 : isSupplierStage
@@ -2712,7 +2801,7 @@ export default function PurchaseDetailPage() {
           <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             {isReviewStage ? (
               <>
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseSectionClass}`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -2722,13 +2811,13 @@ export default function PurchaseDetailPage() {
                         {purchase?.supplier?.name || "Proveedor sin definir"}
                       </div>
                     </div>
-                    <div className="inline-flex rounded-full bg-[#FFF4E5] px-3 py-1 text-[12px] text-[#B54708]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div className={`inline-flex rounded-full px-3 py-1 text-[12px] ${phaseChipClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                       {isReviewApproved ? "Listo para enviar" : "Pendiente de aprobar"}
                     </div>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                    <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         Archivo sugerido
                       </div>
@@ -2739,7 +2828,7 @@ export default function PurchaseDetailPage() {
                         Antes de enviarlo, conviene descargar al menos uno de los dos formatos para compartirlo con el proveedor.
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                    <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                         Fecha sugerida
                       </div>
@@ -2774,7 +2863,7 @@ export default function PurchaseDetailPage() {
                   </div>
                 </div>
 
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     Qué cambia después
                   </div>
@@ -2796,7 +2885,7 @@ export default function PurchaseDetailPage() {
               </>
             ) : isSupplierStage ? (
               <>
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseSectionClass}`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -2806,13 +2895,13 @@ export default function PurchaseDetailPage() {
                         {STATUS_LABELS[effectiveStatus] || effectiveStatus || "Seguimiento activo"}
                       </div>
                     </div>
-                    <div className="inline-flex rounded-full bg-[#EEF2FF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div className={`inline-flex rounded-full px-3 py-1 text-[12px] ${phaseChipClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                       Flujo comercial
                     </div>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "sent" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "sent" ? "border-[#C98035] bg-[#FFF1E3]" : phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">1. Envío hecho</div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {effectiveStatus === "sent" ? "Esperando respuesta" : "Completado"}
@@ -2822,7 +2911,7 @@ export default function PurchaseDetailPage() {
                         Fecha: {formatDate(purchaseFlowMeta.supplierSentDate)}
                       </div>
                     </div>
-                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "priced" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "priced" ? "border-[#C98035] bg-[#FFF1E3]" : phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">2. Precios</div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {effectiveStatus === "priced" ? "Pendiente de validar" : "Siguiente paso"}
@@ -2832,14 +2921,14 @@ export default function PurchaseDetailPage() {
                         Respuesta: {formatDate(purchaseFlowMeta.supplierReplyDate)}
                       </div>
                     </div>
-                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "paid" ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                    <div className={`rounded-2xl border px-4 py-4 ${effectiveStatus === "paid" ? "border-[#C98035] bg-[#FFF1E3]" : phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">3. Pago</div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {effectiveStatus === "paid" ? "Pago confirmado" : "Pendiente"}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]">Una vez aprobados los precios, este pedido pasa al momento real de compra.</p>
                     </div>
-                    <div className={`rounded-2xl border px-4 py-4 ${["tracking_received", "in_transit"].includes(effectiveStatus) ? "border-[#3147D4] bg-[#EEF2FF]" : "border-[#E3E7F0] bg-white"}`}>
+                    <div className={`rounded-2xl border px-4 py-4 ${["tracking_received", "in_transit"].includes(effectiveStatus) ? "border-[#C98035] bg-[#FFF1E3]" : phaseInnerCardClass}`}>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">4. Tracking</div>
                       <div className="mt-2 text-[16px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {effectiveStatus === "tracking_received" ? "Tracking recibido" : effectiveStatus === "in_transit" ? "En tránsito" : "Pendiente"}
@@ -2855,18 +2944,18 @@ export default function PurchaseDetailPage() {
                   </div>
                 </div>
 
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     Próxima acción sugerida
                   </div>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
+                    <div className={`rounded-2xl border px-4 py-3 ${phaseSectionClass}`}>
                       <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Archivos preparados</div>
                       <div className="mt-1 text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {supplierPreparedFilesLabel}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
+                    <div className={`rounded-2xl border px-4 py-3 ${phaseSectionClass}`}>
                       <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Llega aprox.</div>
                       <div className="mt-1 text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                         {estimatedArrivalDate ? formatDate(estimatedArrivalDate) : "Aún sin estimar"}
@@ -2924,7 +3013,7 @@ export default function PurchaseDetailPage() {
               </>
             ) : (
               <>
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseSectionClass}`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
@@ -2938,7 +3027,7 @@ export default function PurchaseDetailPage() {
                           : "Selecciona dónde se recibirá la compra"}
                       </div>
                     </div>
-                    <div className="inline-flex rounded-full bg-[#E9EEFF] px-3 py-1 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    <div className={`inline-flex rounded-full px-3 py-1 text-[12px] ${phaseChipClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                       Paso logístico
                     </div>
                   </div>
@@ -2968,7 +3057,7 @@ export default function PurchaseDetailPage() {
                   </div>
                 </div>
 
-                <div className="rounded-[24px] border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-[24px] border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     Qué cambia después
                   </div>
@@ -2992,22 +3081,44 @@ export default function PurchaseDetailPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-          <div className="mb-3">
-            <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {isReviewStage ? "Acciones de revisión" : "Acciones del pedido"}
-            </h3>
-            <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              {isReviewStage
-                ? "En esta fase el pedido ya no se construye. Aquí se valida, se puede devolver a Compras, aprobar o dejar listo para enviar al proveedor."
-                : canSendToReview
-                  ? "La lista ya quedó cerrada. Aquí termina la fase de creación del PO y ya puedes moverlo a Revisión de compras."
+        <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseVisual.cardClass}`}>
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {isReviewStage
+                  ? "Decisión interna"
                   : isSupplierStage
-                    ? "Aquí seguimos el avance real con el proveedor: respuesta, precios, pago, tracking y llegada al almacén."
+                    ? "Gestión comercial"
+                    : isArrivalStage
+                      ? "Cierre operativo"
+                      : "Paso de avance"}
+              </div>
+              <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {isReviewStage ? "Acciones de revisión" : "Acciones del pedido"}
+              </h3>
+              <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                {isReviewStage
+                  ? "En esta fase el pedido ya no se construye. Aquí se valida, se puede devolver a Compras, aprobar o dejar listo para enviar al proveedor."
+                  : canSendToReview
+                    ? "La lista ya quedó cerrada. Aquí termina la fase de creación del PO y ya puedes moverlo a Revisión de compras."
+                    : isSupplierStage
+                      ? "Aquí seguimos el avance real con el proveedor: respuesta, precios, pago, tracking y llegada al almacén."
+                      : isArrivalStage
+                        ? "El pedido ya entró en la fase de llegada y cierre. Aquí ya no hace falta volver a la revisión inicial."
+                        : "Todavía estamos construyendo el PO. Primero cierra cantidades, confirma Lista completa y recién después se habilita Revisión."}
+              </p>
+            </div>
+            <span className={`inline-flex rounded-full px-4 py-2 text-[12px] ${phaseChipClass}`} style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+              {isReviewStage
+                ? "Validación activa"
+                : isSupplierStage
+                  ? "Proveedor activo"
                   : isArrivalStage
-                      ? "El pedido ya entró en la fase de llegada y cierre. Aquí ya no hace falta volver a la revisión inicial."
-                      : "Todavía estamos construyendo el PO. Primero cierra cantidades, confirma Lista completa y recién después se habilita Revisión."}
-            </p>
+                    ? "Recepción activa"
+                    : canSendToReview
+                      ? "Lista cerrada"
+                      : "Construcción abierta"}
+            </span>
           </div>
           <div className="flex flex-wrap gap-3">
             <button
@@ -3162,9 +3273,12 @@ export default function PurchaseDetailPage() {
         {isSupplierStage || isArrivalStage ? (
           <div className="space-y-4">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseSectionClass}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Respuesta del proveedor
+                  </div>
                   <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     Respuesta y revisión de precios
                   </h3>
@@ -3183,7 +3297,7 @@ export default function PurchaseDetailPage() {
               </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Enviado</div>
                   <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatDate(purchaseFlowMeta.supplierSentDate)}
@@ -3192,7 +3306,7 @@ export default function PurchaseDetailPage() {
                     Fecha real en la que el pedido salió del equipo al proveedor.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Respuesta</div>
                   <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatDate(purchaseFlowMeta.supplierReplyDate)}
@@ -3201,7 +3315,7 @@ export default function PurchaseDetailPage() {
                     La usamos para medir tiempos y saber cuándo arrancó la revisión de precios.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Moneda proveedor</div>
                   <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {supplierQuoteCurrency || "-"}
@@ -3210,7 +3324,7 @@ export default function PurchaseDetailPage() {
                     La moneda en la que realmente nos pasan la cotización.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Tiempo de respuesta</div>
                   <div className="mt-2 text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {supplierResponseDays != null ? `${supplierResponseDays} días` : "Pendiente"}
@@ -3222,8 +3336,11 @@ export default function PurchaseDetailPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
               <div className="mb-3">
+                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Preparación de pago
+                </div>
                 <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                   Base para pago y validación
                 </h3>
@@ -3317,9 +3434,12 @@ export default function PurchaseDetailPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+          <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
+                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Validación por línea
+                </div>
                 <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                   Revisión de precios por línea
                 </h3>
@@ -3458,7 +3578,7 @@ export default function PurchaseDetailPage() {
             ) : null}
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)]">
-              <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+              <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h4 className="text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
@@ -3520,7 +3640,7 @@ export default function PurchaseDetailPage() {
                 </div>
 
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className={`rounded-2xl border p-4 ${phaseSectionClass}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="text-[14px] font-semibold text-[#141A39]">Envío del proveedor</div>
                       <button
@@ -3555,7 +3675,7 @@ export default function PurchaseDetailPage() {
                     <div className="mt-3 text-[12px] text-[#616984]">Se contabiliza aparte del producto y del box.</div>
                   </div>
 
-                  <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className={`rounded-2xl border p-4 ${phaseSectionClass}`}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="text-[14px] font-semibold text-[#141A39]">Comisiones y extras</div>
                       <button
@@ -3616,25 +3736,25 @@ export default function PurchaseDetailPage() {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Producto</div>
                   <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatMoney(productSubtotalEur)}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Box / SB</div>
                   <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatMoney(boxSubtotalEur)}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Envío</div>
                   <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatMoney(shippingSubtotalEur)}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                <div className={`rounded-2xl border p-4 ${phaseInnerCardClass}`}>
                   <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Comisiones</div>
                   <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                     {formatMoney(commissionSubtotalEur)}
@@ -3655,28 +3775,28 @@ export default function PurchaseDetailPage() {
 
         {isSupplierStage || isArrivalStage ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
               <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Producto (EUR)</div>
               <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 {formatMoney(productSubtotalEur)}
               </div>
               <div className="mt-1 text-[12px] text-[#8A91A8]">{formatMoneyWithCurrency(productSubtotalEur, "EUR")}</div>
             </div>
-            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
               <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Box + envío + comisión</div>
               <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 {formatMoney(boxSubtotalEur + shippingSubtotalEur + commissionSubtotalEur)}
               </div>
               <div className="mt-1 text-[12px] text-[#8A91A8]">Box {formatMoney(boxSubtotalEur)} · Envío {formatMoney(shippingSubtotalEur)} · Comisión {formatMoney(commissionSubtotalEur)}</div>
             </div>
-            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
               <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Moneda proveedor</div>
               <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 {supplierQuoteCurrency}
               </div>
               <div className="mt-1 text-[12px] text-[#8A91A8]">FX sugerido: {supplierQuoteFxToEur || "-"}</div>
             </div>
-            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseSectionClass}`}>
               <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Coste final (EUR)</div>
               <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
                 {formatMoney(finalCostEur)}
@@ -3727,7 +3847,10 @@ export default function PurchaseDetailPage() {
 
         {isArrivalStage ? (
           <>
-            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseSectionClass}`}>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Control de entrada
+              </div>
               <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
               <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
@@ -3735,7 +3858,7 @@ export default function PurchaseDetailPage() {
 
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
-                  <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
+                  <thead className="border-b border-[#D9DDE7] bg-[#F7FCFC]">
                     <tr>
                       <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
                       <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
@@ -3796,9 +3919,12 @@ export default function PurchaseDetailPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseInnerCardClass}`}>
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Control de diferencias
+                  </div>
                   <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Incidencias</h3>
                   <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                     Marca faltantes, rotos, dañados o diferencias y déjalos ligados a esta compra antes de cerrar como Completado.
@@ -3868,12 +3994,12 @@ export default function PurchaseDetailPage() {
 
               <div className="space-y-3">
                 {purchaseIncidents.length === 0 ? (
-                  <div className="rounded-2xl bg-[#F7F8FB] px-4 py-4 text-[14px] text-[#6E768E]">
-                    Aún no hay incidencias registradas en esta compra.
-                  </div>
-                ) : (
-                  purchaseIncidents.map((incident) => (
-                    <div key={incident.id} className="rounded-2xl border border-[#E7EAF1] bg-[#FBFCFE] px-4 py-4">
+                <div className={`rounded-2xl border px-4 py-4 text-[14px] text-[#6E768E] ${phaseInnerCardClass}`}>
+                  Aún no hay incidencias registradas en esta compra.
+                </div>
+              ) : (
+                purchaseIncidents.map((incident) => (
+                    <div key={incident.id} className={`rounded-2xl border px-4 py-4 ${phaseSectionClass}`}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -3924,7 +4050,10 @@ export default function PurchaseDetailPage() {
 
         {isSupplierStage || isArrivalStage ? (
           <div className="grid gap-4 xl:grid-cols-2">
-            <div id="purchase-payment-section" className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div id="purchase-payment-section" className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${phaseSectionClass}`}>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Confirmación financiera
+              </div>
               <h3 className="mb-1 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Pago de la compra</h3>
               <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 Aquí registramos cómo se pagó el pedido, en qué moneda real salió el dinero y qué tipo de cambio usamos para llevarlo a EUR.
@@ -3971,7 +4100,10 @@ export default function PurchaseDetailPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+            <div className={`rounded-2xl border p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${isArrivalStage ? phaseSectionClass : phaseInnerCardClass}`}>
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Trayecto y llegada
+              </div>
               <h3 className="mb-1 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Tracking y logística</h3>
               <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 Este bloque nos sirve para guardar el embarque, el proveedor logístico y los tramos hasta que la compra llegue al almacén.
