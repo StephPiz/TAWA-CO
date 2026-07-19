@@ -565,6 +565,49 @@ function normalizeMoney(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function parsePurchasePaymentNote(noteValue) {
+  if (!noteValue) {
+    return {
+      paymentMethod: null,
+      settlementCurrency: null,
+      note: null,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(String(noteValue));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return {
+        paymentMethod: parsed.paymentMethod ? String(parsed.paymentMethod) : null,
+        settlementCurrency: parsed.settlementCurrency ? String(parsed.settlementCurrency) : null,
+        note: parsed.note ? String(parsed.note) : null,
+      };
+    }
+  } catch {
+    // Legacy plain-text notes are still valid.
+  }
+
+  return {
+    paymentMethod: null,
+    settlementCurrency: null,
+    note: String(noteValue),
+  };
+}
+
+function buildPurchasePaymentNote({ paymentMethod, settlementCurrency, note }) {
+  const payload = {
+    paymentMethod: paymentMethod ? String(paymentMethod).trim() : null,
+    settlementCurrency: settlementCurrency ? String(settlementCurrency).trim().toUpperCase() : null,
+    note: note ? String(note).trim() : null,
+  };
+
+  if (!payload.paymentMethod && !payload.settlementCurrency && !payload.note) {
+    return null;
+  }
+
+  return JSON.stringify(payload);
+}
+
 function numberOrZero(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -1751,6 +1794,8 @@ const PURCHASE_ORDER_STATUSES = new Set([
   "closed",
   "incident",
 ]);
+const PURCHASE_INCIDENT_TYPES = new Set(["missing", "broken", "damaged", "difference"]);
+const PURCHASE_INCIDENT_STATUSES = new Set(["open", "resolved"]);
 const THREE_PL_LEG_STATUSES = new Set(["planned", "in_transit", "delivered", "delayed"]);
 const PRESENCE_STATUSES = new Set(["online", "away", "offline"]);
 const SUPPORT_TICKET_STATUSES = new Set(["open", "in_progress", "waiting_customer", "resolved", "closed"]);
@@ -1767,6 +1812,11 @@ function getSupportSlaHours(priority) {
   if (p === "high") return { firstResponse: 4, resolution: 48 };
   if (p === "low") return { firstResponse: 24, resolution: 168 };
   return { firstResponse: 12, resolution: 96 };
+}
+
+function computePurchaseArrivalStatus({ allReceived, hasOpenIncidents }) {
+  if (hasOpenIncidents) return "incident";
+  return allReceived ? "received" : "in_transit";
 }
 
 function computeSupportSlaDates(priority, baseDate) {
@@ -4074,13 +4124,24 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
   try {
     const userId = req.user.sub;
     const { purchaseId, itemId } = req.params;
-    const { storeId, quantityOrdered } = req.body || {};
+    const { storeId, quantityOrdered, unitCostOriginal, currencyCode, fxToEur } = req.body || {};
 
     if (!storeId) {
       return res.status(400).json({ error: "Missing storeId" });
     }
     if (!Number.isInteger(Number(quantityOrdered)) || Number(quantityOrdered) < 0) {
       return res.status(400).json({ error: "Cantidad inválida" });
+    }
+
+    const hasPricingUpdate = unitCostOriginal !== undefined || currencyCode !== undefined || fxToEur !== undefined;
+    if (hasPricingUpdate) {
+      const parsedCurrency = parseCurrencyCode(currencyCode || "");
+      if (!parsedCurrency) {
+        return res.status(400).json({ error: "Moneda inválida" });
+      }
+      if (numberOrZero(unitCostOriginal) < 0 || numberOrZero(fxToEur) < 0) {
+        return res.status(400).json({ error: "Costo unitario o FX inválido" });
+      }
     }
 
     const membership = await getStoreMembership(userId, storeId);
@@ -4099,6 +4160,9 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
       select: {
         id: true,
         quantityReceived: true,
+        unitCostOriginal: true,
+        currencyCode: true,
+        fxToEur: true,
         unitCostEurFrozen: true,
       },
     });
@@ -4134,7 +4198,13 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
       return res.status(400).json({ error: "La cantidad no puede ser menor que lo ya recibido" });
     }
 
-    const unitEur = Number(existingItem.unitCostEurFrozen || 0);
+    const normalizedCurrency = parseCurrencyCode(hasPricingUpdate ? currencyCode : existingItem.currencyCode || "EUR") || "EUR";
+    const unitOriginal = hasPricingUpdate ? numberOrZero(unitCostOriginal) : numberOrZero(existingItem.unitCostOriginal);
+    let fx = hasPricingUpdate ? numberOrZero(fxToEur) : numberOrZero(existingItem.fxToEur);
+    if (normalizedCurrency === "EUR" && fx === 0) {
+      fx = 1;
+    }
+    const unitEur = Number((unitOriginal * fx).toFixed(4));
     const totalCostEur = Number((unitEur * qty).toFixed(2));
 
     const item = await prisma.$transaction(async (tx) => {
@@ -4142,6 +4212,10 @@ app.patch("/purchases/:purchaseId/items/:itemId", requireAuth, async (req, res) 
         where: { id: itemId },
         data: {
           quantityOrdered: qty,
+          unitCostOriginal: String(unitOriginal),
+          currencyCode: normalizedCurrency,
+          fxToEur: String(fx),
+          unitCostEurFrozen: String(unitEur),
           totalCostEur: String(totalCostEur),
         },
       });
@@ -4323,6 +4397,21 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
             },
           },
         },
+        incidents: {
+          orderBy: [{ createdAt: "desc" }],
+          include: {
+            purchaseOrderItem: {
+              select: {
+                id: true,
+                productId: true,
+                title: true,
+                ean: true,
+                quantityOrdered: true,
+                quantityReceived: true,
+              },
+            },
+          },
+        },
         payments: true,
         shipments3pl: { include: { legs: { orderBy: { legOrder: "asc" } } } },
       },
@@ -4376,11 +4465,19 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
           totalCostEur: normalizeMoney(it.totalCostEur),
           product: it.product,
         })),
+        incidents: purchase.incidents.map((incident) => ({
+          ...incident,
+          quantity: incident.quantity == null ? null : Number(incident.quantity),
+          purchaseOrderItem: incident.purchaseOrderItem || null,
+        })),
         payments: purchase.payments.map((p) => ({
           ...p,
           amountOriginal: normalizeMoney(p.amountOriginal),
           fxToEur: normalizeMoney(p.fxToEur),
           amountEurFrozen: normalizeMoney(p.amountEurFrozen),
+          paymentMethod: parsePurchasePaymentNote(p.note).paymentMethod,
+          settlementCurrency: parsePurchasePaymentNote(p.note).settlementCurrency || p.currencyCode,
+          note: parsePurchasePaymentNote(p.note).note,
         })),
         shipments3pl: purchase.shipments3pl.map((shipment) => ({
           ...shipment,
@@ -4407,6 +4504,414 @@ app.get("/purchases/:purchaseId", requireAuth, async (req, res) => {
   }
 });
 
+app.post("/purchases/:purchaseId/incidents", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const { storeId, purchaseOrderItemId, type, title, note, quantity } = req.body || {};
+    if (!storeId || !type || !title) return res.status(400).json({ error: "Missing incident fields" });
+    if (!PURCHASE_INCIDENT_TYPES.has(String(type))) return res.status(400).json({ error: "Invalid incident type" });
+    if (quantity !== undefined && quantity !== null && (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0)) {
+      return res.status(400).json({ error: "Incident quantity must be a positive integer" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const purchase = await tx.purchaseOrder.findFirst({
+        where: { id: purchaseId, storeId },
+        include: { items: true },
+      });
+      if (!purchase) return { error: { code: "NOT_FOUND" } };
+      if (purchase.status === "closed") return { error: { code: "PO_CLOSED" } };
+
+      let purchaseItem = null;
+      if (purchaseOrderItemId) {
+        purchaseItem = purchase.items.find((item) => item.id === String(purchaseOrderItemId));
+        if (!purchaseItem) return { error: { code: "ITEM_NOT_FOUND" } };
+      }
+
+      const incident = await tx.purchaseOrderIncident.create({
+        data: {
+          storeId,
+          purchaseOrderId: purchase.id,
+          purchaseOrderItemId: purchaseItem?.id || null,
+          type: String(type),
+          status: "open",
+          title: String(title).trim(),
+          note: String(note || "").trim() || null,
+          quantity: quantity == null || quantity === "" ? null : Number(quantity),
+          createdByUserId: userId,
+        },
+        include: {
+          purchaseOrderItem: {
+            select: {
+              id: true,
+              productId: true,
+              title: true,
+              ean: true,
+              quantityOrdered: true,
+              quantityReceived: true,
+            },
+          },
+        },
+      });
+
+      const updatedPurchase = await tx.purchaseOrder.update({
+        where: { id: purchase.id },
+        data: { status: "incident" },
+      });
+
+      return { incident, purchase: updatedPurchase };
+    });
+
+    if (result.error) {
+      if (result.error.code === "NOT_FOUND") return res.status(404).json({ error: "Purchase not found" });
+      if (result.error.code === "PO_CLOSED") return res.status(409).json({ error: "Purchase order is closed" });
+      if (result.error.code === "ITEM_NOT_FOUND") return res.status(400).json({ error: "Purchase item not found in this PO" });
+    }
+
+    return res.json({
+      incident: {
+        ...result.incident,
+        quantity: result.incident.quantity == null ? null : Number(result.incident.quantity),
+      },
+      purchase: {
+        ...result.purchase,
+        totalAmountEur: normalizeMoney(result.purchase.totalAmountEur),
+      },
+    });
+  } catch (err) {
+    console.error("POST /purchases/:purchaseId/incidents error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.patch("/purchases/:purchaseId/incidents/:incidentId", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId, incidentId } = req.params;
+    const { storeId, status, note, quantity } = req.body || {};
+    if (!storeId || !status) return res.status(400).json({ error: "Missing storeId/status" });
+    if (!PURCHASE_INCIDENT_STATUSES.has(String(status))) return res.status(400).json({ error: "Invalid incident status" });
+    if (quantity !== undefined && quantity !== null && (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0)) {
+      return res.status(400).json({ error: "Incident quantity must be a positive integer" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const purchase = await tx.purchaseOrder.findFirst({
+        where: { id: purchaseId, storeId },
+        include: {
+          items: {
+            select: { quantityOrdered: true, quantityReceived: true },
+          },
+        },
+      });
+      if (!purchase) return { error: { code: "NOT_FOUND" } };
+
+      const incident = await tx.purchaseOrderIncident.findFirst({
+        where: { id: incidentId, purchaseOrderId: purchase.id, storeId },
+      });
+      if (!incident) return { error: { code: "INCIDENT_NOT_FOUND" } };
+
+      const updatedIncident = await tx.purchaseOrderIncident.update({
+        where: { id: incident.id },
+        data: {
+          status: String(status),
+          note: note === undefined ? incident.note : String(note || "").trim() || null,
+          quantity:
+            quantity === undefined
+              ? incident.quantity
+              : quantity == null || quantity === ""
+                ? null
+                : Number(quantity),
+          resolvedAt: String(status) === "resolved" ? new Date() : null,
+        },
+        include: {
+          purchaseOrderItem: {
+            select: {
+              id: true,
+              productId: true,
+              title: true,
+              ean: true,
+              quantityOrdered: true,
+              quantityReceived: true,
+            },
+          },
+        },
+      });
+
+      const openIncidentCount = await tx.purchaseOrderIncident.count({
+        where: { purchaseOrderId: purchase.id, storeId, status: "open" },
+      });
+      const allReceived = purchase.items.every((item) => Number(item.quantityReceived) >= Number(item.quantityOrdered));
+      const updatedPurchase = await tx.purchaseOrder.update({
+        where: { id: purchase.id },
+        data: {
+          status: computePurchaseArrivalStatus({
+            allReceived,
+            hasOpenIncidents: openIncidentCount > 0,
+          }),
+        },
+      });
+
+      return { incident: updatedIncident, purchase: updatedPurchase };
+    });
+
+    if (result.error) {
+      if (result.error.code === "NOT_FOUND") return res.status(404).json({ error: "Purchase not found" });
+      if (result.error.code === "INCIDENT_NOT_FOUND") return res.status(404).json({ error: "Incident not found" });
+    }
+
+    return res.json({
+      incident: {
+        ...result.incident,
+        quantity: result.incident.quantity == null ? null : Number(result.incident.quantity),
+      },
+      purchase: {
+        ...result.purchase,
+        totalAmountEur: normalizeMoney(result.purchase.totalAmountEur),
+      },
+    });
+  } catch (err) {
+    console.error("PATCH /purchases/:purchaseId/incidents/:incidentId error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/purchases/:purchaseId/complete", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { purchaseId } = req.params;
+    const { storeId } = req.body || {};
+    if (!storeId) return res.status(400).json({ error: "Missing storeId" });
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
+    if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const purchase = await tx.purchaseOrder.findFirst({
+        where: { id: purchaseId, storeId },
+        include: {
+          items: {
+            select: { quantityOrdered: true, quantityReceived: true },
+          },
+        },
+      });
+      if (!purchase) return { error: { code: "NOT_FOUND" } };
+
+      const openIncidentCount = await tx.purchaseOrderIncident.count({
+        where: { purchaseOrderId: purchase.id, storeId, status: "open" },
+      });
+      if (openIncidentCount > 0) return { error: { code: "OPEN_INCIDENTS" } };
+
+      const allReceived = purchase.items.length > 0 && purchase.items.every((item) => Number(item.quantityReceived) >= Number(item.quantityOrdered));
+      if (!allReceived) return { error: { code: "NOT_FULLY_RECEIVED" } };
+
+      const updatedPurchase = await tx.purchaseOrder.update({
+        where: { id: purchase.id },
+        data: {
+          status: "closed",
+          receivedAt: purchase.receivedAt || new Date(),
+        },
+      });
+      return { purchase: updatedPurchase };
+    });
+
+    if (result.error) {
+      if (result.error.code === "NOT_FOUND") return res.status(404).json({ error: "Purchase not found" });
+      if (result.error.code === "OPEN_INCIDENTS") return res.status(409).json({ error: "Resolve open incidents before closing this purchase" });
+      if (result.error.code === "NOT_FULLY_RECEIVED") return res.status(409).json({ error: "All lines must be fully received before closing this purchase" });
+    }
+
+    return res.json({
+      purchase: {
+        ...result.purchase,
+        totalAmountEur: normalizeMoney(result.purchase.totalAmountEur),
+      },
+    });
+  } catch (err) {
+    console.error("POST /purchases/:purchaseId/complete error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/purchases/receiving-lookup", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.sub;
+    const { storeId, code } = req.body || {};
+    const lookupCode = String(code || "").trim();
+
+    if (!storeId || !lookupCode) {
+      return res.status(400).json({ error: "Missing storeId/code" });
+    }
+
+    const membership = await getStoreMembership(userId, storeId);
+    if (!membership) return res.status(403).json({ error: "No access to store" });
+    const canSensitive = await canReadSensitive(userId, storeId, membership.roleKey);
+    if (!canSensitive) return res.status(403).json({ error: "No permission to read purchases" });
+
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: {
+        storeId,
+        status: { not: "closed" },
+        OR: [
+          { poNumber: { contains: lookupCode, mode: "insensitive" } },
+          { trackingCode: { contains: lookupCode, mode: "insensitive" } },
+          {
+            shipments3pl: {
+              some: {
+                referenceCode: { contains: lookupCode, mode: "insensitive" },
+              },
+            },
+          },
+          {
+            shipments3pl: {
+              some: {
+                legs: {
+                  some: {
+                    trackingCode: { contains: lookupCode, mode: "insensitive" },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      orderBy: [{ orderedAt: "desc" }, { createdAt: "desc" }],
+      include: {
+        supplier: { select: { id: true, name: true } },
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                brand: true,
+                model: true,
+                modelRef: true,
+                name: true,
+                ean: true,
+                mainImageUrl: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
+        },
+        shipments3pl: {
+          include: {
+            legs: {
+              orderBy: { legOrder: "asc" },
+              select: {
+                id: true,
+                trackingCode: true,
+                trackingUrl: true,
+                departedAt: true,
+                deliveredAt: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    if (!purchase) {
+      return res.status(404).json({ error: "Purchase not found for receiving lookup" });
+    }
+
+    const lowerLookup = lookupCode.toLowerCase();
+    let matchedBy = "reference";
+    if (String(purchase.poNumber || "").toLowerCase().includes(lowerLookup)) {
+      matchedBy = "po";
+    } else if (String(purchase.trackingCode || "").toLowerCase().includes(lowerLookup)) {
+      matchedBy = "tracking";
+    } else if (
+      purchase.shipments3pl.some((shipment) =>
+        String(shipment.referenceCode || "").toLowerCase().includes(lowerLookup)
+      )
+    ) {
+      matchedBy = "shipment_reference";
+    } else if (
+      purchase.shipments3pl.some((shipment) =>
+        shipment.legs.some((leg) => String(leg.trackingCode || "").toLowerCase().includes(lowerLookup))
+      )
+    ) {
+      matchedBy = "leg_tracking";
+    }
+
+    const items = purchase.items.map((item) => {
+      const quantityOrdered = Number(item.quantityOrdered || 0);
+      const quantityReceived = Number(item.quantityReceived || 0);
+      return {
+        id: item.id,
+        title: item.title,
+        ean: item.ean || item.product?.ean || null,
+        quantityOrdered,
+        quantityReceived,
+        pendingQty: Math.max(quantityOrdered - quantityReceived, 0),
+        productId: item.productId || null,
+        product: item.product
+          ? {
+              id: item.product.id,
+              brand: item.product.brand,
+              model: item.product.model,
+              modelRef: item.product.modelRef,
+              name: item.product.name,
+              ean: item.product.ean || null,
+              mainImageUrl: item.product.mainImageUrl || null,
+            }
+          : null,
+      };
+    });
+
+    const totalOrderedUnits = items.reduce((sum, item) => sum + item.quantityOrdered, 0);
+    const totalReceivedUnits = items.reduce((sum, item) => sum + item.quantityReceived, 0);
+    const totalPendingUnits = items.reduce((sum, item) => sum + item.pendingQty, 0);
+
+    return res.json({
+      matchedBy,
+      purchase: {
+        id: purchase.id,
+        poNumber: purchase.poNumber,
+        status: purchase.status,
+        orderedAt: purchase.orderedAt,
+        expectedAt: purchase.expectedAt,
+        receivedAt: purchase.receivedAt,
+        trackingCode: purchase.trackingCode || null,
+        trackingUrl: purchase.trackingUrl || null,
+        supplier: purchase.supplier,
+        shipments3pl: purchase.shipments3pl.map((shipment) => ({
+          id: shipment.id,
+          providerName: shipment.providerName,
+          referenceCode: shipment.referenceCode,
+          legs: shipment.legs,
+        })),
+        items,
+        summary: {
+          totalOrderedUnits,
+          totalReceivedUnits,
+          totalPendingUnits,
+          lineCount: items.length,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("POST /purchases/receiving-lookup error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.patch("/purchases/:purchaseId/status", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
@@ -4419,6 +4924,31 @@ app.patch("/purchases/:purchaseId/status", requireAuth, async (req, res) => {
     if (!membership) return res.status(403).json({ error: "No access to store" });
     const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
     if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
+
+    if (String(status) === "closed") {
+      const purchase = await prisma.purchaseOrder.findFirst({
+        where: { id: purchaseId, storeId },
+        include: {
+          items: {
+            select: { quantityOrdered: true, quantityReceived: true },
+          },
+        },
+      });
+      if (!purchase) return res.status(404).json({ error: "Purchase not found" });
+
+      const openIncidentCount = await prisma.purchaseOrderIncident.count({
+        where: { purchaseOrderId: purchase.id, storeId, status: "open" },
+      });
+      if (openIncidentCount > 0) {
+        return res.status(409).json({ error: "Resolve open incidents before closing this purchase" });
+      }
+
+      const allReceived =
+        purchase.items.length > 0 && purchase.items.every((item) => Number(item.quantityReceived) >= Number(item.quantityOrdered));
+      if (!allReceived) {
+        return res.status(409).json({ error: "All lines must be fully received before closing this purchase" });
+      }
+    }
 
     const updated = await prisma.purchaseOrder.updateMany({
       where: { id: purchaseId, storeId },
@@ -4438,15 +4968,21 @@ app.post("/purchases/:purchaseId/payments", requireAuth, async (req, res) => {
   try {
     const userId = req.user.sub;
     const { purchaseId } = req.params;
-    const { storeId, paidAt, currencyCode, amountOriginal, fxToEur, note } = req.body || {};
+    const { storeId, paidAt, currencyCode, amountOriginal, fxToEur, paymentMethod, settlementCurrency, note } =
+      req.body || {};
     if (!storeId || !currencyCode || !amountOriginal || !fxToEur) {
       return res.status(400).json({ error: "Missing payment fields" });
     }
     if (!isPositiveNumber(amountOriginal) || !isPositiveNumber(fxToEur)) {
       return res.status(400).json({ error: "amountOriginal/fxToEur must be positive" });
     }
+    if (!String(paymentMethod || "").trim()) {
+      return res.status(400).json({ error: "Missing paymentMethod" });
+    }
     const parsedCurrency = parseCurrencyCode(currencyCode);
     if (!parsedCurrency) return res.status(400).json({ error: "Invalid currencyCode" });
+    const parsedSettlementCurrency = settlementCurrency ? parseCurrencyCode(settlementCurrency) : parsedCurrency;
+    if (!parsedSettlementCurrency) return res.status(400).json({ error: "Invalid settlementCurrency" });
     const parsedPaidAt = paidAt ? parseDateInput(paidAt) : new Date();
     if (!parsedPaidAt) return res.status(400).json({ error: "Invalid paidAt" });
 
@@ -4455,31 +4991,61 @@ app.post("/purchases/:purchaseId/payments", requireAuth, async (req, res) => {
     const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
     if (!canWrite) return res.status(403).json({ error: "No permission to manage purchases" });
 
-    const purchase = await prisma.purchaseOrder.findFirst({ where: { id: purchaseId, storeId }, select: { id: true } });
+    const purchase = await prisma.purchaseOrder.findFirst({
+      where: { id: purchaseId, storeId },
+      select: { id: true, status: true, totalAmountEur: true },
+    });
     if (!purchase) return res.status(404).json({ error: "Purchase not found" });
 
     const amountEurFrozen = Number((Number(amountOriginal) * Number(fxToEur)).toFixed(2));
-    const payment = await prisma.purchaseOrderPayment.create({
-      data: {
-        storeId,
-        purchaseOrderId: purchaseId,
-        paidAt: parsedPaidAt,
-        currencyCode: parsedCurrency,
-        amountOriginal: String(amountOriginal),
-        fxToEur: String(fxToEur),
-        amountEurFrozen: String(amountEurFrozen),
-        note: note || null,
-        createdByUserId: userId,
-      },
+    const notePayload = buildPurchasePaymentNote({
+      paymentMethod,
+      settlementCurrency: parsedSettlementCurrency,
+      note,
     });
+    const canPromoteToPaid = ["draft", "checklist", "review", "sent", "priced"].includes(String(purchase.status || "").toLowerCase());
+
+    const result = await prisma.$transaction(async (tx) => {
+      const payment = await tx.purchaseOrderPayment.create({
+        data: {
+          storeId,
+          purchaseOrderId: purchaseId,
+          paidAt: parsedPaidAt,
+          currencyCode: parsedCurrency,
+          amountOriginal: String(amountOriginal),
+          fxToEur: String(fxToEur),
+          amountEurFrozen: String(amountEurFrozen),
+          note: notePayload,
+          createdByUserId: userId,
+        },
+      });
+
+      const updatedPurchase =
+        canPromoteToPaid
+          ? await tx.purchaseOrder.update({
+              where: { id: purchaseId },
+              data: { status: "paid" },
+            })
+          : await tx.purchaseOrder.findUnique({
+              where: { id: purchaseId },
+            });
+
+      return { payment, purchase: updatedPurchase };
+    });
+
+    const parsedPaymentNote = parsePurchasePaymentNote(result.payment.note);
 
     return res.status(201).json({
       payment: {
-        ...payment,
-        amountOriginal: normalizeMoney(payment.amountOriginal),
-        fxToEur: normalizeMoney(payment.fxToEur),
-        amountEurFrozen: normalizeMoney(payment.amountEurFrozen),
+        ...result.payment,
+        amountOriginal: normalizeMoney(result.payment.amountOriginal),
+        fxToEur: normalizeMoney(result.payment.fxToEur),
+        amountEurFrozen: normalizeMoney(result.payment.amountEurFrozen),
+        paymentMethod: parsedPaymentNote.paymentMethod,
+        settlementCurrency: parsedPaymentNote.settlementCurrency || result.payment.currencyCode,
+        note: parsedPaymentNote.note,
       },
+      purchase: result.purchase ? { ...result.purchase, totalAmountEur: normalizeMoney(result.purchase.totalAmountEur) } : null,
     });
   } catch (err) {
     console.error("POST /purchases/:purchaseId/payments error:", err);
@@ -4646,11 +5212,17 @@ app.post("/purchases/:purchaseId/receive", requireAuth, async (req, res) => {
         select: { quantityOrdered: true, quantityReceived: true },
       });
       const allReceived = itemsAfter.every((it) => Number(it.quantityReceived) >= Number(it.quantityOrdered));
+      const openIncidentCount = await tx.purchaseOrderIncident.count({
+        where: { purchaseOrderId: purchase.id, storeId, status: "open" },
+      });
 
       const updatedPurchase = await tx.purchaseOrder.update({
         where: { id: purchase.id },
         data: {
-          status: allReceived ? "received" : "in_transit",
+          status: computePurchaseArrivalStatus({
+            allReceived,
+            hasOpenIncidents: openIncidentCount > 0,
+          }),
           receivedAt: allReceived ? new Date() : purchase.receivedAt,
         },
       });
@@ -4763,9 +5335,11 @@ app.post("/three-pl", requireAuth, async (req, res) => {
     const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
     if (!canWrite) return res.status(403).json({ error: "No permission to manage 3PL" });
 
+    let purchaseOrder = null;
     if (purchaseOrderId) {
       const po = await prisma.purchaseOrder.findFirst({ where: { id: purchaseOrderId, storeId }, select: { id: true } });
       if (!po) return res.status(400).json({ error: "Invalid purchaseOrderId for store" });
+      purchaseOrder = po;
     }
 
     const shipment = await prisma.threePlShipment.create({
@@ -4778,6 +5352,15 @@ app.post("/three-pl", requireAuth, async (req, res) => {
         createdByUserId: userId,
       },
     });
+
+    if (purchaseOrder?.id && referenceCode) {
+      await prisma.purchaseOrder.update({
+        where: { id: purchaseOrder.id },
+        data: {
+          trackingCode: String(referenceCode).trim(),
+        },
+      });
+    }
 
     return res.status(201).json({ shipment });
   } catch (err) {
@@ -4815,7 +5398,10 @@ app.post("/three-pl/:shipmentId/legs", requireAuth, async (req, res) => {
     const canWrite = await canManagePurchases(userId, storeId, membership.roleKey);
     if (!canWrite) return res.status(403).json({ error: "No permission to manage 3PL" });
 
-    const shipment = await prisma.threePlShipment.findFirst({ where: { id: shipmentId, storeId }, select: { id: true } });
+    const shipment = await prisma.threePlShipment.findFirst({
+      where: { id: shipmentId, storeId },
+      select: { id: true, purchaseOrderId: true, referenceCode: true },
+    });
     if (!shipment) return res.status(404).json({ error: "Shipment not found" });
     if (status && !THREE_PL_LEG_STATUSES.has(String(status))) return res.status(400).json({ error: "Invalid 3PL leg status" });
 
@@ -4844,6 +5430,17 @@ app.post("/three-pl/:shipmentId/legs", requireAuth, async (req, res) => {
         deliveredAt: deliveredAt ? parseDateInput(deliveredAt) : null,
       },
     });
+
+    if (shipment.purchaseOrderId && (trackingCode || trackingUrl || deliveredAt)) {
+      await prisma.purchaseOrder.update({
+        where: { id: shipment.purchaseOrderId },
+        data: {
+          trackingCode: trackingCode ? String(trackingCode).trim() : shipment.referenceCode || null,
+          trackingUrl: trackingUrl ? String(trackingUrl).trim() : undefined,
+          expectedAt: deliveredAt ? parseDateInput(deliveredAt) : undefined,
+        },
+      });
+    }
 
     return res.status(201).json({
       leg: {

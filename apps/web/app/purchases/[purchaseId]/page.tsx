@@ -70,12 +70,35 @@ type PurchaseDetail = {
       mainImageUrl: string | null;
     } | null;
   }[];
+  incidents: {
+    id: string;
+    purchaseOrderItemId: string | null;
+    type: string;
+    status: string;
+    title: string;
+    note: string | null;
+    quantity: number | null;
+    createdAt?: string;
+    resolvedAt?: string | null;
+    purchaseOrderItem?: {
+      id: string;
+      productId: string | null;
+      title: string;
+      ean: string | null;
+      quantityOrdered: number;
+      quantityReceived: number;
+    } | null;
+  }[];
   payments: {
     id: string;
     paidAt: string;
     currencyCode: string;
     amountOriginal: number;
+    fxToEur: number;
     amountEurFrozen: number;
+    paymentMethod?: string | null;
+    settlementCurrency?: string | null;
+    note?: string | null;
   }[];
   shipments3pl: {
     id: string;
@@ -86,6 +109,12 @@ type PurchaseDetail = {
       legOrder: number;
       originLabel: string;
       destinationLabel: string;
+      trackingCode?: string | null;
+      trackingUrl?: string | null;
+      departedAt?: string | null;
+      deliveredAt?: string | null;
+      costOriginal?: number | null;
+      fxToEur?: number | null;
       status: string;
       costEurFrozen: number | null;
     }[];
@@ -109,18 +138,35 @@ type ProductSuggestion = {
   name: string;
 };
 
+type PurchaseLinePricingDraft = {
+  unitCostOriginal?: string;
+  currencyCode?: string;
+  fxToEur?: string;
+};
+
 type PurchaseFlowMeta = {
   listCompletedAt?: string;
   reviewRequestedAt?: string;
   reviewApprovedAt?: string;
   supplierSentDate?: string;
   supplierReplyDate?: string;
+  trackingReceivedDate?: string;
+  inTransitDate?: string;
+  etaDate?: string;
   supplierFilesReady?: string[];
   supplierQuoteCurrency?: string;
+  supplierQuoteFxToEur?: string;
   settlementCurrency?: string;
   paymentMethod?: string;
   supplierNotes?: string;
   supplierMissingItems?: string;
+  shippingCostOriginal?: string;
+  shippingCurrency?: string;
+  shippingFxToEur?: string;
+  commissionCostOriginal?: string;
+  commissionCurrency?: string;
+  commissionFxToEur?: string;
+  linePricing?: Record<string, PurchaseLinePricingDraft>;
 };
 
 function purchaseSuggestionLabel(product: ProductSuggestion) {
@@ -140,6 +186,14 @@ function isPurchaseBoxItem(item: PurchaseDetail["items"][number]) {
     .join(" ")
     .toLowerCase();
   return source.includes("box") || source.includes("shopping bag") || source.includes("shopping-bag");
+}
+
+function incidentTypeLabel(type: string) {
+  if (type === "missing") return "Faltante";
+  if (type === "broken") return "Roto";
+  if (type === "damaged") return "Dañado";
+  if (type === "difference") return "Diferencia";
+  return "Incidencia";
 }
 
 function normalizeCatalogText(value: string | null | undefined) {
@@ -182,6 +236,30 @@ function formatMoney(value: number | null | undefined) {
   return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(Number(value));
 }
 
+function formatMoneyWithCurrency(value: number | null | undefined, currencyCode: string | null | undefined) {
+  if (value == null || Number.isNaN(Number(value))) return "-";
+  const currency = String(currencyCode || "EUR").toUpperCase();
+  return new Intl.NumberFormat("es-ES", {
+    style: "currency",
+    currency: currency || "EUR",
+    maximumFractionDigits: currency === "JPY" || currency === "CNY" ? 2 : 2,
+  }).format(Number(value));
+}
+
+function normalizeNumericInput(value: string | number | null | undefined) {
+  return String(value ?? "").replaceAll(",", ".").trim();
+}
+
+function numberFromInput(value: string | number | null | undefined, fallback = 0) {
+  const parsed = Number(normalizeNumericInput(value));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatEditableNumber(value: number, digits = 6) {
+  if (!Number.isFinite(Number(value))) return "0";
+  return String(Number(Number(value).toFixed(digits)));
+}
+
 function purchaseStatusDescription(status: string, flowMeta?: PurchaseFlowMeta) {
   switch (String(status || "").toLowerCase()) {
     case "draft":
@@ -197,9 +275,11 @@ function purchaseStatusDescription(status: string, flowMeta?: PurchaseFlowMeta) 
     case "paid":
       return "La compra quedó pagada y esperamos salida.";
     case "tracking_received":
-      return "El proveedor ya compartió tracking.";
+      return flowMeta?.trackingReceivedDate ? `Tracking recibido el ${formatDate(flowMeta.trackingReceivedDate)}.` : "El proveedor ya compartió tracking.";
     case "in_transit":
-      return "La mercancía está en tránsito.";
+      return flowMeta?.etaDate
+        ? `La mercancía está en tránsito y estimamos llegada para ${formatDate(flowMeta.etaDate)}.`
+        : "La mercancía está en tránsito.";
     case "received":
       return "La compra ya llegó al almacén.";
     case "closed":
@@ -270,11 +350,19 @@ export default function PurchaseDetailPage() {
   const [paymentCurrency, setPaymentCurrency] = useState("EUR");
   const [paymentAmount, setPaymentAmount] = useState("0");
   const [paymentFx, setPaymentFx] = useState("1");
+  const [paymentMethod, setPaymentMethod] = useState("Transferencia");
+  const [paymentNote, setPaymentNote] = useState("");
   const [shipmentRef, setShipmentRef] = useState("");
   const [shipmentProvider, setShipmentProvider] = useState("GlobalTransit 3PL");
+  const [shipmentLoggedDate, setShipmentLoggedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [shipmentEtaDate, setShipmentEtaDate] = useState("");
   const [selectedShipmentId, setSelectedShipmentId] = useState("");
   const [legOrigin, setLegOrigin] = useState("Origen");
   const [legDestination, setLegDestination] = useState("Destino");
+  const [legTrackingCode, setLegTrackingCode] = useState("");
+  const [legTrackingUrl, setLegTrackingUrl] = useState("");
+  const [legDepartedAt, setLegDepartedAt] = useState("");
+  const [legDeliveredAt, setLegDeliveredAt] = useState("");
   const [legCost, setLegCost] = useState("0");
   const [legCurrency, setLegCurrency] = useState("EUR");
   const [legFx, setLegFx] = useState("1");
@@ -286,6 +374,10 @@ export default function PurchaseDetailPage() {
   const [lineQty, setLineQty] = useState("1");
   const [qtyDraftByItem, setQtyDraftByItem] = useState<Record<string, string>>({});
   const [lineInfoOpen, setLineInfoOpen] = useState(false);
+  const [incidentItemId, setIncidentItemId] = useState("");
+  const [incidentType, setIncidentType] = useState("missing");
+  const [incidentQuantity, setIncidentQuantity] = useState("1");
+  const [incidentNote, setIncidentNote] = useState("");
   const [listEditMode, setListEditMode] = useState(false);
   const [addBoxChoice, setAddBoxChoice] = useState<"yes" | "no">("no");
   const [sendSupplierModalOpen, setSendSupplierModalOpen] = useState(false);
@@ -296,10 +388,19 @@ export default function PurchaseDetailPage() {
   const [supplierReplyModalOpen, setSupplierReplyModalOpen] = useState(false);
   const [supplierReplyDate, setSupplierReplyDate] = useState(new Date().toISOString().slice(0, 10));
   const [supplierQuoteCurrency, setSupplierQuoteCurrency] = useState("CNY");
+  const [supplierQuoteFxToEur, setSupplierQuoteFxToEur] = useState("1");
   const [settlementCurrency, setSettlementCurrency] = useState("EUR");
   const [plannedPaymentMethod, setPlannedPaymentMethod] = useState("Transferencia");
   const [supplierNotes, setSupplierNotes] = useState("");
   const [supplierMissingItems, setSupplierMissingItems] = useState("");
+  const [shippingCostOriginal, setShippingCostOriginal] = useState("0");
+  const [shippingCurrency, setShippingCurrency] = useState("EUR");
+  const [shippingFxToEur, setShippingFxToEur] = useState("1");
+  const [commissionCostOriginal, setCommissionCostOriginal] = useState("0");
+  const [commissionCurrency, setCommissionCurrency] = useState("EUR");
+  const [commissionFxToEur, setCommissionFxToEur] = useState("1");
+  const [linePricingDrafts, setLinePricingDrafts] = useState<Record<string, PurchaseLinePricingDraft>>({});
+  const [fxBusyAction, setFxBusyAction] = useState("");
   const [purchaseFlowMeta, setPurchaseFlowMeta] = useState<PurchaseFlowMeta>({});
   const lineSearchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -390,13 +491,27 @@ export default function PurchaseDetailPage() {
 
       setPurchase(nextPurchase);
       setStatus(nextPurchase.status);
+      const latestPayment = [...(nextPurchase.payments || [])]
+        .sort((a, b) => new Date(a.paidAt).getTime() - new Date(b.paidAt).getTime())
+        .at(-1);
+      if (latestPayment) {
+        setPaymentDate(String(latestPayment.paidAt || "").slice(0, 10) || new Date().toISOString().slice(0, 10));
+        setPaymentCurrency(latestPayment.settlementCurrency || latestPayment.currencyCode || "EUR");
+        setPaymentAmount(String(latestPayment.amountOriginal ?? "0"));
+        setPaymentFx(String(latestPayment.fxToEur ?? "1"));
+        setPaymentMethod(latestPayment.paymentMethod || plannedPaymentMethod || "Transferencia");
+        setPaymentNote(latestPayment.note || "");
+      } else {
+        setPaymentCurrency((current) => current || settlementCurrency || "EUR");
+        setPaymentMethod((current) => current || plannedPaymentMethod || "Transferencia");
+      }
       setSelectedShipmentId((current) =>
         current || (nextPurchase.shipments3pl && nextPurchase.shipments3pl.length > 0 ? nextPurchase.shipments3pl[0].id : "")
       );
     } catch {
       setError("Connection error");
     }
-  }, [receiveWarehouseId]);
+  }, [plannedPaymentMethod, receiveWarehouseId, settlementCurrency]);
 
   useEffect(() => {
     if (loading) return;
@@ -459,18 +574,33 @@ export default function PurchaseDetailPage() {
       const parsed = JSON.parse(stored) as PurchaseFlowMeta;
       setPurchaseFlowMeta(parsed || {});
       setSupplierQuoteCurrency(parsed?.supplierQuoteCurrency || "CNY");
+      setSupplierQuoteFxToEur(parsed?.supplierQuoteFxToEur || "1");
       setSettlementCurrency(parsed?.settlementCurrency || "EUR");
       setPlannedPaymentMethod(parsed?.paymentMethod || "Transferencia");
       setSupplierNotes(parsed?.supplierNotes || "");
       setSupplierMissingItems(parsed?.supplierMissingItems || "");
+      setShippingCostOriginal(parsed?.shippingCostOriginal || "0");
+      setShippingCurrency(parsed?.shippingCurrency || "EUR");
+      setShippingFxToEur(parsed?.shippingFxToEur || "1");
+      setCommissionCostOriginal(parsed?.commissionCostOriginal || "0");
+      setCommissionCurrency(parsed?.commissionCurrency || "EUR");
+      setCommissionFxToEur(parsed?.commissionFxToEur || "1");
+      setLinePricingDrafts(parsed?.linePricing || {});
     } catch {
       setPurchaseFlowMeta({});
     }
   }, [purchaseFlowStorageKey]);
 
   const purchaseItems = purchase?.items || [];
+  const purchaseIncidents = purchase?.incidents || [];
   const mainPurchaseItems = useMemo(() => purchaseItems.filter((item) => !isPurchaseBoxItem(item)), [purchaseItems]);
   const boxPurchaseItems = useMemo(() => purchaseItems.filter((item) => isPurchaseBoxItem(item)), [purchaseItems]);
+  const openIncidents = useMemo(() => purchaseIncidents.filter((incident) => incident.status !== "resolved"), [purchaseIncidents]);
+  const resolvedIncidents = useMemo(() => purchaseIncidents.filter((incident) => incident.status === "resolved"), [purchaseIncidents]);
+  const allItemsReceived = useMemo(
+    () => purchaseItems.length > 0 && purchaseItems.every((item) => Number(item.quantityReceived || 0) >= Number(item.quantityOrdered || 0)),
+    [purchaseItems],
+  );
 
   useEffect(() => {
     const nextDrafts: Record<string, string> = {};
@@ -479,6 +609,35 @@ export default function PurchaseDetailPage() {
     }
     setQtyDraftByItem(nextDrafts);
   }, [purchase]);
+
+  useEffect(() => {
+    if (!purchaseItems.length) {
+      setIncidentItemId("");
+      return;
+    }
+    if (!incidentItemId || !purchaseItems.some((item) => item.id === incidentItemId)) {
+      setIncidentItemId(purchaseItems[0].id);
+    }
+  }, [purchaseItems, incidentItemId]);
+
+  useEffect(() => {
+    if (!purchase?.items?.length) return;
+    setLinePricingDrafts((prev) => {
+      const stored = purchaseFlowMeta.linePricing || {};
+      const next: Record<string, PurchaseLinePricingDraft> = {};
+      for (const item of purchase.items || []) {
+        const current = prev[item.id];
+        const persisted = stored[item.id];
+        next[item.id] = {
+          unitCostOriginal:
+            current?.unitCostOriginal ?? persisted?.unitCostOriginal ?? formatEditableNumber(Number(item.unitCostOriginal || 0), 4),
+          currencyCode: current?.currencyCode ?? persisted?.currencyCode ?? (item.currencyCode || supplierQuoteCurrency || "EUR"),
+          fxToEur: current?.fxToEur ?? persisted?.fxToEur ?? formatEditableNumber(Number(item.fxToEur || 1), 6),
+        };
+      }
+      return next;
+    });
+  }, [purchase?.id, purchase?.items, purchaseFlowMeta.linePricing, supplierQuoteCurrency]);
 
   const productSuggestions = useMemo(() => {
     const query = lineSearch.trim().toLowerCase();
@@ -560,6 +719,11 @@ export default function PurchaseDetailPage() {
     const token = requireTokenOrRedirect();
     if (!token || !storeId || !purchaseId) return;
 
+    if (!paymentMethod.trim()) {
+      setError("Selecciona cómo se pagó la compra");
+      return;
+    }
+
     setBusyAction("payment");
     setError("");
     try {
@@ -572,11 +736,17 @@ export default function PurchaseDetailPage() {
           currencyCode: paymentCurrency,
           amountOriginal: Number(paymentAmount),
           fxToEur: Number(paymentFx),
+          paymentMethod,
+          settlementCurrency: paymentCurrency,
+          note: paymentNote,
         }),
       });
       const data = await res.json();
       if (!res.ok) return setError(data.error || "Cannot create payment");
-      setInfo("Pago registrado");
+      const nextStatus = String(data.purchase?.status || purchase?.status || status || "paid").toLowerCase();
+      setStatus(nextStatus);
+      setPurchase((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+      setInfo(nextStatus === "paid" ? "Pago registrado. La compra quedó marcada como pagada." : "Pago registrado.");
       await loadAll(storeId, purchaseId);
     } catch {
       setError("Connection error");
@@ -601,13 +771,31 @@ export default function PurchaseDetailPage() {
           purchaseOrderId: purchaseId,
           providerName: shipmentProvider,
           referenceCode: shipmentRef,
+          note: shipmentLoggedDate || shipmentEtaDate ? `Tracking registrado: ${shipmentLoggedDate || "-"} | ETA: ${shipmentEtaDate || "-"}` : undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) return setError(data.error || "Cannot create 3PL shipment");
+      const nextMeta: PurchaseFlowMeta = {
+        ...purchaseFlowMeta,
+        trackingReceivedDate: shipmentLoggedDate || purchaseFlowMeta.trackingReceivedDate || new Date().toISOString().slice(0, 10),
+        etaDate: shipmentEtaDate || purchaseFlowMeta.etaDate,
+      };
+      savePurchaseFlowMeta(nextMeta);
+      if (data?.shipment?.id) {
+        setSelectedShipmentId(String(data.shipment.id));
+      }
       setShipmentRef("");
-      setInfo("Embarque 3PL creado");
-      await loadAll(storeId, purchaseId);
+      if (!["tracking_received", "in_transit", "received", "verified", "closed", "incident"].includes(String(status || purchase?.status || "").toLowerCase())) {
+        await updatePurchaseStatus(
+          "tracking_received",
+          `Tracking registrado el ${formatDate(nextMeta.trackingReceivedDate)}.`,
+          "shipment",
+        );
+      } else {
+        setInfo("Embarque 3PL creado");
+        await loadAll(storeId, purchaseId);
+      }
     } catch {
       setError("Connection error");
     } finally {
@@ -634,16 +822,40 @@ export default function PurchaseDetailPage() {
           legOrder: nextOrder,
           originLabel: legOrigin,
           destinationLabel: legDestination,
+          trackingCode: legTrackingCode || shipmentRef || undefined,
+          trackingUrl: legTrackingUrl || undefined,
           costCurrencyCode: legCurrency,
           costOriginal: Number(legCost),
           fxToEur: Number(legFx),
           status: legStatus,
+          departedAt: legDepartedAt || undefined,
+          deliveredAt: legDeliveredAt || undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) return setError(data.error || "Cannot create 3PL leg");
+      const nextMeta: PurchaseFlowMeta = {
+        ...purchaseFlowMeta,
+        trackingReceivedDate: purchaseFlowMeta.trackingReceivedDate || shipmentLoggedDate || new Date().toISOString().slice(0, 10),
+        inTransitDate:
+          legStatus === "in_transit" ? legDepartedAt || purchaseFlowMeta.inTransitDate || new Date().toISOString().slice(0, 10) : purchaseFlowMeta.inTransitDate,
+        etaDate: legDeliveredAt || shipmentEtaDate || purchaseFlowMeta.etaDate,
+      };
+      savePurchaseFlowMeta(nextMeta);
+      setLegTrackingCode("");
+      setLegTrackingUrl("");
+      setLegDepartedAt("");
+      setLegDeliveredAt("");
       setInfo("Tramo 3PL agregado");
-      await loadAll(storeId, purchaseId);
+      if (legStatus === "in_transit") {
+        await updatePurchaseStatus(
+          "in_transit",
+          `La compra salió y quedó en tránsito desde ${formatDate(nextMeta.inTransitDate)}.`,
+          "leg",
+        );
+      } else {
+        await loadAll(storeId, purchaseId);
+      }
     } catch {
       setError("Connection error");
     } finally {
@@ -939,6 +1151,86 @@ export default function PurchaseDetailPage() {
     setSupplierReplyModalOpen(false);
   }
 
+  function updateLinePricingDraft(itemId: string, field: keyof PurchaseLinePricingDraft, value: string) {
+    setLinePricingDrafts((prev) => ({
+      ...prev,
+      [itemId]: {
+        ...prev[itemId],
+        [field]: field === "currencyCode" ? value.toUpperCase() : value,
+      },
+    }));
+  }
+
+  async function fetchFxToEurSuggestion(currencyCode: string) {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId) return null;
+    const normalizedCurrency = String(currencyCode || "EUR").toUpperCase();
+    if (!normalizedCurrency || normalizedCurrency === "EUR") return 1;
+
+    const res = await fetch(
+      `${API_BASE}/stores/${storeId}/fx-rate?from=${encodeURIComponent(normalizedCurrency)}&to=EUR`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `No se pudo sugerir el cambio ${normalizedCurrency} → EUR`);
+    }
+    return Number(data.rate || 0);
+  }
+
+  async function suggestSupplierQuoteFx() {
+    setFxBusyAction("quote_fx");
+    setError("");
+    try {
+      const nextFx = await fetchFxToEurSuggestion(supplierQuoteCurrency);
+      if (nextFx == null) return;
+      setSupplierQuoteFxToEur(formatEditableNumber(nextFx, 6));
+      setInfo(`Tipo sugerido actualizado: 1 ${supplierQuoteCurrency.toUpperCase()} = ${formatEditableNumber(nextFx, 6)} EUR`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo sugerir el tipo de cambio");
+    } finally {
+      setFxBusyAction("");
+    }
+  }
+
+  async function suggestLineFx(itemId: string) {
+    const draft = linePricingDrafts[itemId];
+    const currencyCode = String(draft?.currencyCode || supplierQuoteCurrency || "EUR").toUpperCase();
+    setFxBusyAction(`line_fx:${itemId}`);
+    setError("");
+    try {
+      const nextFx = await fetchFxToEurSuggestion(currencyCode);
+      if (nextFx == null) return;
+      updateLinePricingDraft(itemId, "fxToEur", formatEditableNumber(nextFx, 6));
+      setInfo(`Tipo sugerido actualizado para ${currencyCode}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo sugerir el tipo de cambio de la línea");
+    } finally {
+      setFxBusyAction("");
+    }
+  }
+
+  async function suggestExtraCostFx(target: "shipping" | "commission") {
+    const currencyCode = String(target === "shipping" ? shippingCurrency : commissionCurrency).toUpperCase();
+    setFxBusyAction(`${target}_fx`);
+    setError("");
+    try {
+      const nextFx = await fetchFxToEurSuggestion(currencyCode);
+      if (nextFx == null) return;
+      const nextValue = formatEditableNumber(nextFx, 6);
+      if (target === "shipping") {
+        setShippingFxToEur(nextValue);
+      } else {
+        setCommissionFxToEur(nextValue);
+      }
+      setInfo(`Tipo sugerido actualizado para ${target === "shipping" ? "envío" : "comisiones"}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo sugerir el tipo de cambio");
+    } finally {
+      setFxBusyAction("");
+    }
+  }
+
   async function markSupplierPricesReceived() {
     savePurchaseFlowMeta({
       ...purchaseFlowMeta,
@@ -951,8 +1243,11 @@ export default function PurchaseDetailPage() {
     setSupplierReplyModalOpen(false);
   }
 
-  function saveSupplierPricingReview() {
-    savePurchaseFlowMeta({
+  async function saveSupplierPricingReview() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId || !purchase) return;
+
+    const nextMeta: PurchaseFlowMeta = {
       ...purchaseFlowMeta,
       listCompletedAt: purchaseFlowMeta.listCompletedAt,
       reviewRequestedAt: purchaseFlowMeta.reviewRequestedAt,
@@ -961,24 +1256,84 @@ export default function PurchaseDetailPage() {
       supplierReplyDate: purchaseFlowMeta.supplierReplyDate,
       supplierFilesReady: purchaseFlowMeta.supplierFilesReady,
       supplierQuoteCurrency,
+      supplierQuoteFxToEur,
       settlementCurrency,
       paymentMethod: plannedPaymentMethod,
       supplierNotes,
       supplierMissingItems,
-    });
-    setInfo("Revisión de precios guardada");
+      shippingCostOriginal,
+      shippingCurrency,
+      shippingFxToEur,
+      commissionCostOriginal,
+      commissionCurrency,
+      commissionFxToEur,
+      linePricing: linePricingDrafts,
+    };
+
+    savePurchaseFlowMeta(nextMeta);
+    setBusyAction("save_pricing");
     setError("");
+    setInfo("");
+    try {
+      const pricingResponses = await Promise.all(
+        (purchase.items || []).map(async (item) => {
+          const draft = linePricingDrafts[item.id] || {};
+          const currencyCode = String(draft.currencyCode || item.currencyCode || supplierQuoteCurrency || "EUR").toUpperCase();
+          const fallbackFx = currencyCode === "EUR" ? 1 : numberFromInput(supplierQuoteFxToEur, Number(item.fxToEur || 1) || 1);
+          const unitCostOriginal = Number(numberFromInput(draft.unitCostOriginal, Number(item.unitCostOriginal || 0)).toFixed(4));
+          const fxToEur = Number(numberFromInput(draft.fxToEur, fallbackFx).toFixed(6));
+          const res = await fetch(`${API_BASE}/purchases/${purchaseId}/items/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              storeId,
+              quantityOrdered: Number(item.quantityOrdered || 0),
+              unitCostOriginal,
+              currencyCode,
+              fxToEur,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          return { ok: res.ok, data, item };
+        }),
+      );
+
+      const failed = pricingResponses.find((entry) => !entry.ok);
+      if (failed) {
+        setError(failed.data?.error || `No se pudo guardar el precio de ${purchaseItemModel(failed.item)}`);
+        return;
+      }
+
+      setInfo("Revisión de precios guardada");
+      await loadAll(storeId, purchaseId);
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
   }
 
-  async function markPurchasePaid() {
-    await updatePurchaseStatus("paid", "La compra quedó marcada como pagada.", "paid");
+  function focusPaymentSection() {
+    if (typeof document === "undefined") return;
+    document.getElementById("purchase-payment-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function markTrackingReceived() {
+    savePurchaseFlowMeta({
+      ...purchaseFlowMeta,
+      trackingReceivedDate: purchaseFlowMeta.trackingReceivedDate || shipmentLoggedDate || new Date().toISOString().slice(0, 10),
+      etaDate: purchaseFlowMeta.etaDate || shipmentEtaDate || "",
+    });
     await updatePurchaseStatus("tracking_received", "Tracking recibido. Ahora seguimos la llegada del pedido.", "tracking");
   }
 
   async function markPurchaseInTransit() {
+    savePurchaseFlowMeta({
+      ...purchaseFlowMeta,
+      trackingReceivedDate: purchaseFlowMeta.trackingReceivedDate || shipmentLoggedDate || new Date().toISOString().slice(0, 10),
+      inTransitDate: purchaseFlowMeta.inTransitDate || legDepartedAt || new Date().toISOString().slice(0, 10),
+      etaDate: purchaseFlowMeta.etaDate || legDeliveredAt || shipmentEtaDate || "",
+    });
     await updatePurchaseStatus("in_transit", "La compra quedó marcada en tránsito.", "in_transit");
   }
 
@@ -1010,6 +1365,114 @@ export default function PurchaseDetailPage() {
       await loadAll(storeId, String(purchaseId));
       setStatus("draft");
       setPurchase((prev) => (prev ? { ...prev, status: "draft" } : prev));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function createPurchaseIncident(e: React.FormEvent) {
+    e.preventDefault();
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    if (!incidentItemId) {
+      setError("Selecciona una línea para registrar la incidencia");
+      return;
+    }
+    const selectedItem = purchaseItems.find((item) => item.id === incidentItemId);
+    if (!selectedItem) {
+      setError("La línea seleccionada ya no existe");
+      return;
+    }
+    const parsedQty = Number(incidentQuantity || "0");
+    if (!Number.isInteger(parsedQty) || parsedQty <= 0) {
+      setError("La cantidad de la incidencia debe ser mayor que cero");
+      return;
+    }
+
+    setBusyAction("incident_create");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/incidents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          storeId,
+          purchaseOrderItemId: selectedItem.id,
+          type: incidentType,
+          title: `${incidentTypeLabel(incidentType)} - ${selectedItem.title}`,
+          note: incidentNote,
+          quantity: parsedQty,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo registrar la incidencia");
+        return;
+      }
+      setIncidentType("missing");
+      setIncidentQuantity("1");
+      setIncidentNote("");
+      setStatus("incident");
+      setPurchase((prev) => (prev ? { ...prev, status: "incident" } : prev));
+      setInfo("Incidencia registrada y ligada a esta compra");
+      await loadAll(storeId, String(purchaseId));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function resolvePurchaseIncident(incidentId: string) {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    setBusyAction(`incident_${incidentId}`);
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/incidents/${incidentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ storeId, status: "resolved" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo resolver la incidencia");
+        return;
+      }
+      setInfo("Incidencia marcada como resuelta");
+      await loadAll(storeId, String(purchaseId));
+    } catch {
+      setError("Connection error");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function completePurchaseOrder() {
+    const token = requireTokenOrRedirect();
+    if (!token || !storeId || !purchaseId) return;
+    setBusyAction("complete_purchase");
+    setError("");
+    setInfo("");
+    try {
+      const res = await fetch(`${API_BASE}/purchases/${purchaseId}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo cerrar la compra");
+        return;
+      }
+      setStatus("closed");
+      setPurchase((prev) => (prev ? { ...prev, status: "closed" } : prev));
+      setInfo("Compra cerrada como Completado");
+      await loadAll(storeId, String(purchaseId));
     } catch {
       setError("Connection error");
     } finally {
@@ -1282,6 +1745,40 @@ export default function PurchaseDetailPage() {
 
   const totalUnits = mainPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
   const totalBoxUnits = boxPurchaseItems.reduce((sum, item) => sum + Number(item.quantityOrdered || 0), 0);
+  const pricedPurchaseItems = useMemo(
+    () =>
+      purchaseItems.map((item) => {
+        const draft = linePricingDrafts[item.id] || {};
+        const currencyCode = String(draft.currencyCode || item.currencyCode || supplierQuoteCurrency || "EUR").toUpperCase();
+        const fallbackFx = currencyCode === "EUR" ? 1 : numberFromInput(supplierQuoteFxToEur, Number(item.fxToEur || 1) || 1);
+        const unitCostOriginalNumber = numberFromInput(draft.unitCostOriginal, Number(item.unitCostOriginal || 0));
+        const fxToEurNumber = numberFromInput(draft.fxToEur, fallbackFx);
+        const unitCostEurNumber = Number((unitCostOriginalNumber * fxToEurNumber).toFixed(4));
+        const totalCostEurNumber = Number((unitCostEurNumber * Number(item.quantityOrdered || 0)).toFixed(2));
+        return {
+          ...item,
+          currencyCodeDraft: currencyCode,
+          unitCostOriginalDraft: draft.unitCostOriginal ?? formatEditableNumber(unitCostOriginalNumber, 4),
+          fxToEurDraft: draft.fxToEur ?? formatEditableNumber(fxToEurNumber, 6),
+          unitCostOriginalNumber,
+          fxToEurNumber,
+          unitCostEurNumber,
+          totalCostEurNumber,
+        };
+      }),
+    [purchaseItems, linePricingDrafts, supplierQuoteCurrency, supplierQuoteFxToEur],
+  );
+  const pricedMainItems = useMemo(() => pricedPurchaseItems.filter((item) => !isPurchaseBoxItem(item)), [pricedPurchaseItems]);
+  const pricedBoxItems = useMemo(() => pricedPurchaseItems.filter((item) => isPurchaseBoxItem(item)), [pricedPurchaseItems]);
+  const productSubtotalEur = pricedMainItems.reduce((sum, item) => sum + item.totalCostEurNumber, 0);
+  const boxSubtotalEur = pricedBoxItems.reduce((sum, item) => sum + item.totalCostEurNumber, 0);
+  const shippingSubtotalEur = Number(
+    (numberFromInput(shippingCostOriginal, 0) * numberFromInput(shippingFxToEur, shippingCurrency === "EUR" ? 1 : 0)).toFixed(2),
+  );
+  const commissionSubtotalEur = Number(
+    (numberFromInput(commissionCostOriginal, 0) * numberFromInput(commissionFxToEur, commissionCurrency === "EUR" ? 1 : 0)).toFixed(2),
+  );
+  const finalCostEur = Number((productSubtotalEur + boxSubtotalEur + shippingSubtotalEur + commissionSubtotalEur).toFixed(2));
   const isReviewApproved = Boolean(purchaseFlowMeta.reviewApprovedAt);
   const rawEffectiveStatus = String(status || purchase?.status || "").toLowerCase();
   const hasChecklistEvidence = Boolean(purchaseFlowMeta.listCompletedAt) || rawEffectiveStatus === "checklist";
@@ -1388,6 +1885,7 @@ export default function PurchaseDetailPage() {
   const isReviewStage = effectiveStatus === "review";
   const isSupplierStage = ["sent", "priced", "paid", "preparing", "tracking_received", "in_transit"].includes(effectiveStatus);
   const isArrivalStage = ["received", "verified", "closed", "incident"].includes(effectiveStatus);
+  const canClosePurchase = isArrivalStage && allItemsReceived && openIncidents.length === 0;
   const isSupplierPricingStage = ["priced", "paid", "preparing", "tracking_received", "in_transit", "received", "verified", "closed", "incident"].includes(
     effectiveStatus,
   );
@@ -1402,6 +1900,26 @@ export default function PurchaseDetailPage() {
           ),
         )
       : null;
+  const shipmentLegs = useMemo(
+    () => (purchase?.shipments3pl || []).flatMap((shipment) => shipment.legs.map((leg) => ({ ...leg, shipmentRef: shipment.referenceCode, shipmentProvider: shipment.providerName }))),
+    [purchase?.shipments3pl],
+  );
+  const trackingRegisteredDate = purchaseFlowMeta.trackingReceivedDate || "";
+  const transitStartedDate =
+    purchaseFlowMeta.inTransitDate ||
+    shipmentLegs.find((leg) => leg.departedAt)?.departedAt ||
+    "";
+  const estimatedArrivalDate =
+    purchaseFlowMeta.etaDate ||
+    purchase?.expectedAt ||
+    [...shipmentLegs].reverse().find((leg) => leg.deliveredAt)?.deliveredAt ||
+    "";
+  const primaryTrackingCode =
+    purchase?.trackingCode ||
+    shipmentLegs.find((leg) => leg.trackingCode)?.trackingCode ||
+    purchase?.shipments3pl?.[0]?.referenceCode ||
+    "";
+  const primaryTrackingUrl = purchase?.trackingUrl || shipmentLegs.find((leg) => leg.trackingUrl)?.trackingUrl || "";
   const heroTrackingLabel =
     effectiveStatus === "draft"
       ? "Construyendo pedido"
@@ -2327,6 +2845,12 @@ export default function PurchaseDetailPage() {
                         {effectiveStatus === "tracking_received" ? "Tracking recibido" : effectiveStatus === "in_transit" ? "En tránsito" : "Pendiente"}
                       </div>
                       <p className="mt-2 text-[13px] leading-6 text-[#616984]">Después del pago, aquí seguimos el código de envío hasta la llegada al almacén.</p>
+                      <div className="mt-3 space-y-1 text-[12px] text-[#4F5568]">
+                        <div>Tracking: {primaryTrackingCode || "-"}</div>
+                        <div>Registrado: {formatDate(trackingRegisteredDate)}</div>
+                        <div>Salió: {formatDate(transitStartedDate)}</div>
+                        <div>Llega aprox.: {formatDate(estimatedArrivalDate)}</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2343,16 +2867,9 @@ export default function PurchaseDetailPage() {
                       </div>
                     </div>
                     <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] px-4 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Tiempo de respuesta</div>
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[#8A91A8]">Llega aprox.</div>
                       <div className="mt-1 text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-                        {purchaseFlowMeta.supplierSentDate && purchaseFlowMeta.supplierReplyDate
-                          ? `${Math.max(
-                              0,
-                              Math.round(
-                                (new Date(purchaseFlowMeta.supplierReplyDate).getTime() - new Date(purchaseFlowMeta.supplierSentDate).getTime()) / 86400000,
-                              ),
-                            )} días`
-                          : "Aún sin medir"}
+                        {estimatedArrivalDate ? formatDate(estimatedArrivalDate) : "Aún sin estimar"}
                       </div>
                     </div>
                   </div>
@@ -2554,10 +3071,9 @@ export default function PurchaseDetailPage() {
                   <button
                     type="button"
                     className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
-                    onClick={markPurchasePaid}
-                    disabled={busyAction === "paid"}
+                    onClick={focusPaymentSection}
                   >
-                    {busyAction === "paid" ? "..." : "Marcar como pagado"}
+                    Registrar pago
                   </button>
                 ) : null}
                 {effectiveStatus === "paid" ? (
@@ -2594,6 +3110,34 @@ export default function PurchaseDetailPage() {
                   Estado actual: {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
                 </span>
               </>
+            ) : isArrivalStage ? (
+              <>
+                {openIncidents.length > 0 ? (
+                  <span
+                    className="inline-flex items-center rounded-full bg-[#FFF1EC] px-4 py-2 text-[12px] text-[#B4552D]"
+                    style={{ fontFamily: "var(--font-purchase-detail-body)" }}
+                  >
+                    {openIncidents.length} incidencia{openIncidents.length === 1 ? "" : "s"} abierta{openIncidents.length === 1 ? "" : "s"}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                  onClick={completePurchaseOrder}
+                  disabled={!canClosePurchase || busyAction === "complete_purchase"}
+                >
+                  {busyAction === "complete_purchase"
+                    ? "..."
+                    : canClosePurchase
+                      ? "Cerrar como Completado"
+                      : openIncidents.length > 0
+                        ? "Resolver incidencias"
+                        : "Recibir pendientes"}
+                </button>
+                <span className="inline-flex items-center rounded-full bg-[#EEF2FF] px-4 py-2 text-[12px] text-[#3147D4]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Estado actual: {STATUS_LABELS[effectiveStatus || ""] || effectiveStatus || "-"}
+                </span>
+              </>
             ) : (
               <button
                 type="button"
@@ -2616,7 +3160,8 @@ export default function PurchaseDetailPage() {
         </div>
 
         {isSupplierStage || isArrivalStage ? (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+          <div className="space-y-4">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
             <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -2771,133 +3316,641 @@ export default function PurchaseDetailPage() {
               </div>
             </div>
           </div>
-        ) : null}
 
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Costo PO (EUR)</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.poCostEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Logística 3PL</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.logistics3plEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Landed cost</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.landedCostEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Ingreso estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.estimatedRevenueEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Profit estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {formatMoney(purchase?.summary?.estimatedGrossProfitEur)}
-            </div>
-          </div>
-          <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Margen estimado</div>
-            <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
-              {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
-            </div>
-          </div>
-        </div>
-
-        {isArrivalStage ? (
           <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-            <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
-            <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-              Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                  Revisión de precios por línea
+                </h3>
+                <p className="mt-1 max-w-[860px] text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                  Aquí ya trabajamos con la respuesta del proveedor: moneda original, sugerencia a EUR y desglose claro de producto, box, envío y comisiones.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-full bg-[#0B1230] px-4 py-2 text-[13px] text-white disabled:opacity-50"
+                onClick={saveSupplierPricingReview}
+                disabled={busyAction === "save_pricing"}
+              >
+                {busyAction === "save_pricing" ? "Guardando..." : "Guardar revisión de precios"}
+              </button>
+            </div>
 
-            <div className="overflow-x-auto">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-[#E3E7F0]">
               <table className="min-w-full text-sm">
                 <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
-                  <tr>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Moneda</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Costo unit.</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Total EUR</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Recibido</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pendiente</th>
-                    <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Acción</th>
+                  <tr className="text-left text-[#616984]">
+                    <th className="px-4 py-3">Modelo</th>
+                    <th className="px-4 py-3">Marca</th>
+                    <th className="px-4 py-3">Cant.</th>
+                    <th className="px-4 py-3">Moneda</th>
+                    <th className="px-4 py-3">Unit. original</th>
+                    <th className="px-4 py-3">FX → EUR</th>
+                    <th className="px-4 py-3">Unit. EUR</th>
+                    <th className="px-4 py-3">Total EUR</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(purchase?.items || []).map((item) => {
-                    const pending = pendingByItem[item.id] || 0;
-                    return (
-                      <tr key={item.id} className="border-b border-[#EEF1F6] last:border-b-0">
-                        <td className="px-3 py-3 text-[#25304F]">{item.title}</td>
-                        <td className="px-3 py-3 text-[#626A82]">{item.ean || "-"}</td>
-                        <td className="px-3 py-3 text-[#25304F]">{item.currencyCode}</td>
-                        <td className="px-3 py-3 text-[#25304F]">{item.unitCostOriginal}</td>
-                        <td className="px-3 py-3 text-[#25304F]">{formatMoney(item.totalCostEur)}</td>
-                        <td className="px-3 py-3 text-[#25304F]">{item.quantityOrdered}</td>
-                        <td className="px-3 py-3 text-[#25304F]">{item.quantityReceived}</td>
-                        <td className="px-3 py-3">
-                          <span className="inline-flex rounded-full bg-[#F4EFFF] px-3 py-1 text-[12px] text-[#5F42D7]">
-                            {pending}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-2">
-                            <input
-                              className="h-10 w-20 rounded-full border border-[#D5DAE5] px-3 text-[14px] text-[#25304F] outline-none"
-                              value={qtyByItem[item.id] ?? ""}
-                              placeholder={String(pending)}
-                              onChange={(e) =>
-                                setQtyByItem((prev) => ({
-                                  ...prev,
-                                  [item.id]: e.target.value,
-                                }))
-                              }
-                            />
-                            <button
-                              className="h-10 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50"
-                              style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
-                              disabled={!receiveWarehouseId || pending <= 0 || busyAction === `line_${item.id}` || !item.productId}
-                              onClick={() => receiveLine(item.id)}
-                            >
-                              {busyAction === `line_${item.id}` ? "..." : "Recibir línea"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {pricedMainItems.map((item) => (
+                    <tr key={item.id} className="border-b border-[#EEF1F6] align-top text-[#141A39] last:border-b-0">
+                      <td className="px-4 py-3 font-semibold">{purchaseItemModel(item)}</td>
+                      <td className="px-4 py-3">{purchaseItemBrand(item)}</td>
+                      <td className="px-4 py-3">{item.quantityOrdered}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={item.currencyCodeDraft}
+                          onChange={(e) => updateLinePricingDraft(item.id, "currencyCode", e.target.value)}
+                          className="h-10 w-[88px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] uppercase outline-none focus:border-[#3147D4]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={item.unitCostOriginalDraft}
+                          onChange={(e) => updateLinePricingDraft(item.id, "unitCostOriginal", e.target.value)}
+                          className="h-10 w-[120px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={item.fxToEurDraft}
+                            onChange={(e) => updateLinePricingDraft(item.id, "fxToEur", e.target.value)}
+                            className="h-10 w-[112px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                          />
+                          <button
+                            type="button"
+                            className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#3147D4] disabled:opacity-50"
+                            onClick={() => void suggestLineFx(item.id)}
+                            disabled={fxBusyAction === `line_fx:${item.id}`}
+                          >
+                            {fxBusyAction === `line_fx:${item.id}` ? "..." : "Sugerir"}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{formatMoney(item.unitCostEurNumber)}</td>
+                      <td className="px-4 py-3 font-semibold">{formatMoney(item.totalCostEurNumber)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
+
+            {pricedBoxItems.length > 0 ? (
+              <div className="mt-5 overflow-x-auto rounded-2xl border border-[#E3E7F0]">
+                <table className="min-w-full text-sm">
+                  <thead className="border-b border-[#D9DDE7] bg-[#FBFCFE]">
+                    <tr className="text-left text-[#616984]">
+                      <th className="px-4 py-3">Box / SB</th>
+                      <th className="px-4 py-3">Marca</th>
+                      <th className="px-4 py-3">Cant.</th>
+                      <th className="px-4 py-3">Moneda</th>
+                      <th className="px-4 py-3">Unit. original</th>
+                      <th className="px-4 py-3">FX → EUR</th>
+                      <th className="px-4 py-3">Unit. EUR</th>
+                      <th className="px-4 py-3">Total EUR</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pricedBoxItems.map((item) => (
+                      <tr key={item.id} className="border-b border-[#EEF1F6] align-top text-[#141A39] last:border-b-0">
+                        <td className="px-4 py-3 font-semibold">{purchaseItemModel(item)}</td>
+                        <td className="px-4 py-3">{purchaseItemBrand(item)}</td>
+                        <td className="px-4 py-3">{item.quantityOrdered}</td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={item.currencyCodeDraft}
+                            onChange={(e) => updateLinePricingDraft(item.id, "currencyCode", e.target.value)}
+                            className="h-10 w-[88px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] uppercase outline-none focus:border-[#3147D4]"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            value={item.unitCostOriginalDraft}
+                            onChange={(e) => updateLinePricingDraft(item.id, "unitCostOriginal", e.target.value)}
+                            className="h-10 w-[120px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={item.fxToEurDraft}
+                              onChange={(e) => updateLinePricingDraft(item.id, "fxToEur", e.target.value)}
+                              className="h-10 w-[112px] rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                            />
+                            <button
+                              type="button"
+                              className="rounded-full border border-[#D4D9E4] px-3 py-2 text-[12px] text-[#3147D4] disabled:opacity-50"
+                              onClick={() => void suggestLineFx(item.id)}
+                              disabled={fxBusyAction === `line_fx:${item.id}`}
+                            >
+                              {fxBusyAction === `line_fx:${item.id}` ? "..." : "Sugerir"}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">{formatMoney(item.unitCostEurNumber)}</td>
+                        <td className="px-4 py-3 font-semibold">{formatMoney(item.totalCostEurNumber)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)]">
+              <div className="rounded-2xl border border-[#E3E7F0] bg-[#FBFCFE] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-[18px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                      Configuración de moneda y costes extra
+                    </h4>
+                    <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                      Aquí definimos la moneda original del proveedor, la salida a EUR y los costes que no van pegados a una línea concreta.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-full border border-[#D4D9E4] px-4 py-2 text-[12px] text-[#3147D4] disabled:opacity-50"
+                    onClick={() => void suggestSupplierQuoteFx()}
+                    disabled={fxBusyAction === "quote_fx"}
+                  >
+                    {fxBusyAction === "quote_fx" ? "..." : "Sugerir EUR proveedor"}
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">Moneda proveedor</span>
+                    <input
+                      value={supplierQuoteCurrency}
+                      onChange={(e) => setSupplierQuoteCurrency(e.target.value.toUpperCase())}
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">FX sugerido a EUR</span>
+                    <input
+                      value={supplierQuoteFxToEur}
+                      onChange={(e) => setSupplierQuoteFxToEur(e.target.value)}
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">Moneda final de pago</span>
+                    <input
+                      value={settlementCurrency}
+                      onChange={(e) => setSettlementCurrency(e.target.value.toUpperCase())}
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">Tipo de pago previsto</span>
+                    <select
+                      value={plannedPaymentMethod}
+                      onChange={(e) => setPlannedPaymentMethod(e.target.value)}
+                      className="h-11 w-full rounded-xl border border-[#D4D9E4] bg-white px-4 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    >
+                      <option value="Transferencia">Transferencia</option>
+                      <option value="Tarjeta">Tarjeta</option>
+                      <option value="PayPal">PayPal</option>
+                      <option value="Wise">Wise</option>
+                      <option value="Otro">Otro</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-[14px] font-semibold text-[#141A39]">Envío del proveedor</div>
+                      <button
+                        type="button"
+                        className="rounded-full border border-[#D4D9E4] px-3 py-1.5 text-[12px] text-[#3147D4] disabled:opacity-50"
+                        onClick={() => void suggestExtraCostFx("shipping")}
+                        disabled={fxBusyAction === "shipping_fx"}
+                      >
+                        {fxBusyAction === "shipping_fx" ? "..." : "Sugerir EUR"}
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <input
+                        value={shippingCostOriginal}
+                        onChange={(e) => setShippingCostOriginal(e.target.value)}
+                        placeholder="Costo origen"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                      />
+                      <input
+                        value={shippingCurrency}
+                        onChange={(e) => setShippingCurrency(e.target.value.toUpperCase())}
+                        placeholder="Moneda"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] uppercase outline-none focus:border-[#3147D4]"
+                      />
+                      <input
+                        value={shippingFxToEur}
+                        onChange={(e) => setShippingFxToEur(e.target.value)}
+                        placeholder="FX a EUR"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                      />
+                    </div>
+                    <div className="mt-3 text-[12px] text-[#616984]">Se contabiliza aparte del producto y del box.</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-[14px] font-semibold text-[#141A39]">Comisiones y extras</div>
+                      <button
+                        type="button"
+                        className="rounded-full border border-[#D4D9E4] px-3 py-1.5 text-[12px] text-[#3147D4] disabled:opacity-50"
+                        onClick={() => void suggestExtraCostFx("commission")}
+                        disabled={fxBusyAction === "commission_fx"}
+                      >
+                        {fxBusyAction === "commission_fx" ? "..." : "Sugerir EUR"}
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <input
+                        value={commissionCostOriginal}
+                        onChange={(e) => setCommissionCostOriginal(e.target.value)}
+                        placeholder="Costo origen"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                      />
+                      <input
+                        value={commissionCurrency}
+                        onChange={(e) => setCommissionCurrency(e.target.value.toUpperCase())}
+                        placeholder="Moneda"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] uppercase outline-none focus:border-[#3147D4]"
+                      />
+                      <input
+                        value={commissionFxToEur}
+                        onChange={(e) => setCommissionFxToEur(e.target.value)}
+                        placeholder="FX a EUR"
+                        className="h-10 rounded-xl border border-[#D4D9E4] bg-white px-3 text-[13px] outline-none focus:border-[#3147D4]"
+                      />
+                    </div>
+                    <div className="mt-3 text-[12px] text-[#616984]">Úsalo para CPA, comisión del proveedor o ajustes externos.</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">Productos faltantes o cambios del proveedor</span>
+                    <textarea
+                      value={supplierMissingItems}
+                      onChange={(e) => setSupplierMissingItems(e.target.value)}
+                      rows={3}
+                      placeholder="AR2460 sin stock / box no disponible / cambio de color..."
+                      className="w-full rounded-2xl border border-[#D4D9E4] bg-white px-4 py-3 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-[13px] text-[#616984]">Notas de revisión</span>
+                    <textarea
+                      value={supplierNotes}
+                      onChange={(e) => setSupplierNotes(e.target.value)}
+                      rows={3}
+                      placeholder="Observaciones internas sobre la cotización, respuesta y negociación."
+                      className="w-full rounded-2xl border border-[#D4D9E4] bg-white px-4 py-3 text-[14px] text-[#141A39] outline-none focus:border-[#3147D4]"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Producto</div>
+                  <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatMoney(productSubtotalEur)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Box / SB</div>
+                  <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatMoney(boxSubtotalEur)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Envío</div>
+                  <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatMoney(shippingSubtotalEur)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[#E3E7F0] bg-white p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#8A91A8]">Comisiones</div>
+                  <div className="mt-2 text-[22px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatMoney(commissionSubtotalEur)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[#3147D4] bg-[#EEF2FF] p-4">
+                  <div className="text-[12px] uppercase tracking-[0.16em] text-[#5D678A]">Coste final</div>
+                  <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                    {formatMoney(finalCostEur)}
+                  </div>
+                  <p className="mt-2 text-[12px] text-[#616984]">Separado por producto, box, envío y comisión.</p>
+                </div>
+              </div>
+            </div>
+          </div>
           </div>
         ) : null}
 
         {isSupplierStage || isArrivalStage ? (
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Producto (EUR)</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(productSubtotalEur)}
+              </div>
+              <div className="mt-1 text-[12px] text-[#8A91A8]">{formatMoneyWithCurrency(productSubtotalEur, "EUR")}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Box + envío + comisión</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(boxSubtotalEur + shippingSubtotalEur + commissionSubtotalEur)}
+              </div>
+              <div className="mt-1 text-[12px] text-[#8A91A8]">Box {formatMoney(boxSubtotalEur)} · Envío {formatMoney(shippingSubtotalEur)} · Comisión {formatMoney(commissionSubtotalEur)}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Moneda proveedor</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {supplierQuoteCurrency}
+              </div>
+              <div className="mt-1 text-[12px] text-[#8A91A8]">FX sugerido: {supplierQuoteFxToEur || "-"}</div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Coste final (EUR)</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(finalCostEur)}
+              </div>
+              <div className="mt-1 text-[12px] text-[#8A91A8]">Base de pago: {settlementCurrency || "EUR"}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Costo PO (EUR)</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(purchase?.summary?.poCostEur)}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Logística 3PL</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(purchase?.summary?.logistics3plEur)}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Landed cost</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(purchase?.summary?.landedCostEur)}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Ingreso estimado</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(purchase?.summary?.estimatedRevenueEur)}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Profit estimado</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {formatMoney(purchase?.summary?.estimatedGrossProfitEur)}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white p-4 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="text-[13px] text-[#7A8196]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>Margen estimado</div>
+              <div className="mt-2 text-[24px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                {purchase?.summary?.estimatedMarginPct != null ? `${purchase.summary.estimatedMarginPct}%` : "-"}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isArrivalStage ? (
+          <>
             <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <h3 className="mb-3 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Detalle de recepción</h3>
+              <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                Aquí ves cada línea pendiente y registras la entrada real cuando el pedido ya llegó al almacén elegido.
+              </p>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="border-b border-[#D9DDE7] bg-[#F7F8FB]">
+                    <tr>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Item</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">EAN</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Moneda</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Costo unit.</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Total EUR</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pedido</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Recibido</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Pendiente</th>
+                      <th className="text-left px-3 py-3 text-[13px] text-[#5F6780]">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(purchase?.items || []).map((item) => {
+                      const pending = pendingByItem[item.id] || 0;
+                      return (
+                        <tr key={item.id} className="border-b border-[#EEF1F6] last:border-b-0">
+                          <td className="px-3 py-3 text-[#25304F]">{item.title}</td>
+                          <td className="px-3 py-3 text-[#626A82]">{item.ean || "-"}</td>
+                          <td className="px-3 py-3 text-[#25304F]">{item.currencyCode}</td>
+                          <td className="px-3 py-3 text-[#25304F]">{item.unitCostOriginal}</td>
+                          <td className="px-3 py-3 text-[#25304F]">{formatMoney(item.totalCostEur)}</td>
+                          <td className="px-3 py-3 text-[#25304F]">{item.quantityOrdered}</td>
+                          <td className="px-3 py-3 text-[#25304F]">{item.quantityReceived}</td>
+                          <td className="px-3 py-3">
+                            <span className="inline-flex rounded-full bg-[#F4EFFF] px-3 py-1 text-[12px] text-[#5F42D7]">
+                              {pending}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-2">
+                              <input
+                                className="h-10 w-20 rounded-full border border-[#D5DAE5] px-3 text-[14px] text-[#25304F] outline-none"
+                                value={qtyByItem[item.id] ?? ""}
+                                placeholder={String(pending)}
+                                onChange={(e) =>
+                                  setQtyByItem((prev) => ({
+                                    ...prev,
+                                    [item.id]: e.target.value,
+                                  }))
+                                }
+                              />
+                              <button
+                                className="h-10 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50"
+                                style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                                disabled={!receiveWarehouseId || pending <= 0 || busyAction === `line_${item.id}` || !item.productId}
+                                onClick={() => receiveLine(item.id)}
+                              >
+                                {busyAction === `line_${item.id}` ? "..." : "Recibir línea"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Incidencias</h3>
+                  <p className="mt-1 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
+                    Marca faltantes, rotos, dañados o diferencias y déjalos ligados a esta compra antes de cerrar como Completado.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="inline-flex rounded-full bg-[#FFF1EC] px-3 py-1 text-[12px] text-[#B4552D]">
+                    Abiertas: {openIncidents.length}
+                  </span>
+                  <span className="inline-flex rounded-full bg-[#EAF7EE] px-3 py-1 text-[12px] text-[#26804D]">
+                    Resueltas: {resolvedIncidents.length}
+                  </span>
+                </div>
+              </div>
+
+              {!canClosePurchase ? (
+                <div className="mb-4 rounded-2xl border border-dashed border-[#FFD3C2] bg-[#FFF7F2] px-4 py-3 text-[13px] text-[#8F4C2E]">
+                  {openIncidents.length > 0
+                    ? "No se puede cerrar como Completado mientras existan incidencias abiertas."
+                    : "Primero termina de recibir todas las líneas para poder cerrar la compra."}
+                </div>
+              ) : null}
+
+              <form className="mb-5 grid gap-3 md:grid-cols-[1.4fr_0.9fr_0.7fr_1.6fr_auto]" onSubmit={createPurchaseIncident}>
+                <select
+                  className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none"
+                  value={incidentItemId}
+                  onChange={(e) => setIncidentItemId(e.target.value)}
+                >
+                  {(purchase?.items || []).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none"
+                  value={incidentType}
+                  onChange={(e) => setIncidentType(e.target.value)}
+                >
+                  <option value="missing">Faltante</option>
+                  <option value="broken">Roto</option>
+                  <option value="damaged">Dañado</option>
+                  <option value="difference">Diferencia</option>
+                </select>
+                <input
+                  className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Cantidad"
+                  value={incidentQuantity}
+                  onChange={(e) => setIncidentQuantity(e.target.value)}
+                />
+                <input
+                  className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none"
+                  placeholder="Nota breve de la incidencia"
+                  value={incidentNote}
+                  onChange={(e) => setIncidentNote(e.target.value)}
+                />
+                <button
+                  type="submit"
+                  className="h-11 rounded-full bg-[#0B1230] px-5 text-[13px] text-white disabled:opacity-50"
+                  style={{ fontFamily: "var(--font-purchase-detail-heading)" }}
+                  disabled={busyAction === "incident_create"}
+                >
+                  {busyAction === "incident_create" ? "..." : "Registrar incidencia"}
+                </button>
+              </form>
+
+              <div className="space-y-3">
+                {purchaseIncidents.length === 0 ? (
+                  <div className="rounded-2xl bg-[#F7F8FB] px-4 py-4 text-[14px] text-[#6E768E]">
+                    Aún no hay incidencias registradas en esta compra.
+                  </div>
+                ) : (
+                  purchaseIncidents.map((incident) => (
+                    <div key={incident.id} className="rounded-2xl border border-[#E7EAF1] bg-[#FBFCFE] px-4 py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[15px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>
+                              {incident.title}
+                            </span>
+                            <span className="inline-flex rounded-full bg-[#EEF2FF] px-3 py-1 text-[12px] text-[#3147D4]">
+                              {incidentTypeLabel(incident.type)}
+                            </span>
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-[12px] ${
+                                incident.status === "resolved" ? "bg-[#EAF7EE] text-[#26804D]" : "bg-[#FFF1EC] text-[#B4552D]"
+                              }`}
+                            >
+                              {incident.status === "resolved" ? "Resuelta" : "Abierta"}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-[13px] text-[#616984]">
+                            Línea: {incident.purchaseOrderItem?.title || "Compra general"}
+                            {incident.purchaseOrderItem?.ean ? ` · EAN ${incident.purchaseOrderItem.ean}` : ""}
+                            {incident.quantity ? ` · Cantidad ${incident.quantity}` : ""}
+                          </div>
+                          {incident.note ? <div className="mt-1 text-[13px] text-[#25304F]">{incident.note}</div> : null}
+                        </div>
+
+                        {incident.status !== "resolved" ? (
+                          <button
+                            type="button"
+                            className="rounded-full border border-[#D4D9E4] bg-white px-4 py-2 text-[13px] text-[#25304F] hover:bg-[#F7F9FC] disabled:opacity-50"
+                            onClick={() => resolvePurchaseIncident(incident.id)}
+                            disabled={busyAction === `incident_${incident.id}`}
+                          >
+                            {busyAction === `incident_${incident.id}` ? "..." : "Marcar resuelta"}
+                          </button>
+                        ) : (
+                          <span className="text-[12px] text-[#6E768E]">
+                            Resuelta{incident.resolvedAt ? ` el ${formatDate(incident.resolvedAt)}` : ""}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {isSupplierStage || isArrivalStage ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div id="purchase-payment-section" className="rounded-2xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
               <h3 className="mb-1 text-[20px] text-[#141A39]" style={{ fontFamily: "var(--font-purchase-detail-heading)" }}>Pago de la compra</h3>
               <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
-                Aquí registramos cómo se pagó el pedido, en qué moneda y qué tipo de cambio usamos para llevarlo a EUR.
+                Aquí registramos cómo se pagó el pedido, en qué moneda real salió el dinero y qué tipo de cambio usamos para llevarlo a EUR.
               </p>
-              <form className="grid grid-cols-1 gap-2 md:grid-cols-5 mb-4" onSubmit={createPayment}>
+              <form className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-6" onSubmit={createPayment}>
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
-                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Moneda: EUR, USD, CNY..." value={paymentCurrency} onChange={(e) => setPaymentCurrency(e.target.value)} />
+                <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Tarjeta">Tarjeta</option>
+                  <option value="PayPal">PayPal</option>
+                  <option value="Wise">Wise</option>
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Otro">Otro</option>
+                </select>
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] uppercase outline-none" placeholder="Moneda pagada: EUR, USD, CNY..." value={paymentCurrency} onChange={(e) => setPaymentCurrency(e.target.value.toUpperCase())} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Importe original" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="FX a EUR" value={paymentFx} onChange={(e) => setPaymentFx(e.target.value)} />
                 <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "payment"}>
-                  {busyAction === "payment" ? "..." : "Agregar pago"}
+                  {busyAction === "payment" ? "..." : "Registrar pago"}
                 </button>
+                <input
+                  className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none md:col-span-6"
+                  placeholder="Nota de pago opcional: referencia bancaria, cuenta, observación..."
+                  value={paymentNote}
+                  onChange={(e) => setPaymentNote(e.target.value)}
+                />
               </form>
               <div className="space-y-2 text-[14px]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 {(purchase?.payments || []).length === 0 ? (
@@ -2905,7 +3958,13 @@ export default function PurchaseDetailPage() {
                 ) : (
                   purchase?.payments.map((p) => (
                     <div key={p.id} className="rounded-2xl bg-[#F7F8FB] p-4 text-[#25304F]">
-                      {formatDate(p.paidAt)} | {p.currencyCode} {p.amountOriginal} | EUR {p.amountEurFrozen}
+                      <div className="font-medium text-[#141A39]">
+                        {formatDate(p.paidAt)} | {p.paymentMethod || "Método no indicado"} | {formatMoneyWithCurrency(p.amountOriginal, p.settlementCurrency || p.currencyCode)}
+                      </div>
+                      <div className="mt-1 text-[13px] text-[#616984]">
+                        EUR congelado: {formatMoney(p.amountEurFrozen)} | FX {formatEditableNumber(Number(p.fxToEur || 1), 6)}
+                        {p.note ? ` | ${p.note}` : ""}
+                      </div>
                     </div>
                   ))
                 )}
@@ -2917,14 +3976,16 @@ export default function PurchaseDetailPage() {
               <p className="mb-4 text-[13px] text-[#616984]" style={{ fontFamily: "var(--font-purchase-detail-body)" }}>
                 Este bloque nos sirve para guardar el embarque, el proveedor logístico y los tramos hasta que la compra llegue al almacén.
               </p>
-              <form className="grid grid-cols-1 gap-2 md:grid-cols-3 mb-3" onSubmit={createShipment}>
+              <form className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-5" onSubmit={createShipment}>
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Referencia 3PL / tracking base" value={shipmentRef} onChange={(e) => setShipmentRef(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Proveedor logístico" value={shipmentProvider} onChange={(e) => setShipmentProvider(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={shipmentLoggedDate} onChange={(e) => setShipmentLoggedDate(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={shipmentEtaDate} onChange={(e) => setShipmentEtaDate(e.target.value)} />
                 <button className="h-11 rounded-full bg-[#0B1230] px-4 text-[13px] text-white disabled:opacity-50" style={{ fontFamily: "var(--font-purchase-detail-heading)" }} type="submit" disabled={busyAction === "shipment"}>
                   {busyAction === "shipment" ? "..." : "Crear embarque"}
                 </button>
               </form>
-              <form className="grid grid-cols-1 gap-2 md:grid-cols-4 xl:grid-cols-8 mb-3" onSubmit={createLeg}>
+              <form className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4 xl:grid-cols-6" onSubmit={createLeg}>
                 <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={selectedShipmentId} onChange={(e) => setSelectedShipmentId(e.target.value)}>
                   <option value="">Embarque</option>
                   {(purchase?.shipments3pl || []).map((s) => (
@@ -2935,9 +3996,13 @@ export default function PurchaseDetailPage() {
                 </select>
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Origen" value={legOrigin} onChange={(e) => setLegOrigin(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Destino" value={legDestination} onChange={(e) => setLegDestination(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Tracking code" value={legTrackingCode} onChange={(e) => setLegTrackingCode(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Tracking URL" value={legTrackingUrl} onChange={(e) => setLegTrackingUrl(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Coste" value={legCost} onChange={(e) => setLegCost(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="Moneda" value={legCurrency} onChange={(e) => setLegCurrency(e.target.value)} />
                 <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" placeholder="FX" value={legFx} onChange={(e) => setLegFx(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={legDepartedAt} onChange={(e) => setLegDepartedAt(e.target.value)} />
+                <input className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" type="date" value={legDeliveredAt} onChange={(e) => setLegDeliveredAt(e.target.value)} />
                 <select className="h-11 rounded-full border border-[#D5DAE5] px-4 text-[14px] text-[#25304F] outline-none" value={legStatus} onChange={(e) => setLegStatus(e.target.value)}>
                   <option value="planned">planned</option>
                   <option value="in_transit">in_transit</option>
@@ -2957,7 +4022,10 @@ export default function PurchaseDetailPage() {
                       <div className="font-medium text-[#141A39]">{s.referenceCode} ({s.providerName})</div>
                       {s.legs.map((leg) => (
                         <div key={leg.id} className="mt-2 text-[#4F5568]">
-                          Tramo {leg.legOrder}: {leg.originLabel} → {leg.destinationLabel} ({STATUS_LABELS[leg.status] || leg.status}) {leg.costEurFrozen ?? "-"} EUR
+                          <div>Tramo {leg.legOrder}: {leg.originLabel} → {leg.destinationLabel} ({STATUS_LABELS[leg.status] || leg.status}) {leg.costEurFrozen ?? "-"} EUR</div>
+                          <div className="text-[12px] text-[#6E768E]">
+                            Tracking: {leg.trackingCode || s.referenceCode || "-"} · Salida: {formatDate(leg.departedAt)} · Llegada: {formatDate(leg.deliveredAt)}
+                          </div>
                         </div>
                       ))}
                     </div>

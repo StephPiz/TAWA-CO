@@ -146,6 +146,18 @@ enum PurchaseOrderStatus {
   incident
 }
 
+enum PurchaseIncidentType {
+  missing
+  broken
+  damaged
+  difference
+}
+
+enum PurchaseIncidentStatus {
+  open
+  resolved
+}
+
 enum ThreePlLegStatus {
   planned
   in_transit
@@ -777,6 +789,7 @@ model PurchaseOrder {
   supplier     Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   createdBy    User?                  @relation("PurchaseOrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   items        PurchaseOrderItem[]
+  incidents    PurchaseOrderIncident[]
   payments     PurchaseOrderPayment[]
   shipments3pl ThreePlShipment[]
 
@@ -805,10 +818,34 @@ model PurchaseOrderItem {
   store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   product       Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  incidents     PurchaseOrderIncident[]
 
   @@index([storeId, purchaseOrderId])
   @@index([storeId, productId])
   @@map("purchase_order_items")
+}
+
+model PurchaseOrderIncident {
+  id                  String                 @id @default(cuid())
+  storeId             String
+  purchaseOrderId     String
+  purchaseOrderItemId String?
+  type                PurchaseIncidentType
+  status              PurchaseIncidentStatus @default(open)
+  title               String
+  note                String?
+  quantity            Int?
+  createdByUserId     String?
+  resolvedAt          DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  purchaseOrder     PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, purchaseOrderId, status])
+  @@index([storeId, purchaseOrderItemId])
+  @@map("purchase_order_incidents")
 }
 
 model PurchaseOrderPayment {
