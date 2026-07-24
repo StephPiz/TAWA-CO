@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "predev": "prisma generate",
     "dev": "node src/server.js",
+    "postinstall": "prisma generate",
     "test": "node --test"
   },
   "keywords": [],
